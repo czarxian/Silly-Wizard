@@ -1,0 +1,43 @@
+{
+  "$GMObject":"",
+  "%Name":"Obj_button_plus_pnt",
+  "eventList":[
+    {"$GMEvent":"v1","%Name":"","collisionObjectId":null,"eventNum":0,"eventType":0,"isDnD":false,"name":"","resourceType":"GMEvent","resourceVersion":"2.0",},
+  ],
+  "managed":true,
+  "name":"Obj_button_plus_pnt",
+  "overriddenProperties":[
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"Obj_button_pnt","path":"objects/Obj_button_pnt/Obj_button_pnt.yy",},"propertyId":{"name":"button_text","path":"objects/Obj_button_pnt/Obj_button_pnt.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"",},
+  ],
+  "parent":{
+    "name":"Buttons",
+    "path":"folders/Objects/UI elements/Buttons.yy",
+  },
+  "parentObjectId":{
+    "name":"Obj_button_pnt",
+    "path":"objects/Obj_button_pnt/Obj_button_pnt.yy",
+  },
+  "persistent":false,
+  "physicsAngularDamping":0.1,
+  "physicsDensity":0.5,
+  "physicsFriction":0.2,
+  "physicsGroup":1,
+  "physicsKinematic":false,
+  "physicsLinearDamping":0.1,
+  "physicsObject":false,
+  "physicsRestitution":0.1,
+  "physicsSensor":false,
+  "physicsShape":1,
+  "physicsShapePoints":[],
+  "physicsStartAwake":true,
+  "properties":[],
+  "resourceType":"GMObject",
+  "resourceVersion":"2.0",
+  "solid":false,
+  "spriteId":{
+    "name":"spr_button_plus",
+    "path":"sprites/spr_button_plus/spr_button_plus.yy",
+  },
+  "spriteMaskId":null,
+  "visible":true,
+}
