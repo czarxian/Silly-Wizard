@@ -1,23 +1,28 @@
-function draw_panel() {
-    var x_cursor = x + padding;
-    var y_cursor = y + padding;
+/// draw_panel()
+var _cursor_x = x + padding;
+var _cursor_y = y + padding;
 
-    for (var i = 0; i < array_length(children); i++) {
-        var child = children[i];
-        if (!instance_exists(child)) continue;
+for (var i = 0; i < array_length(children); i++) {
+    var child = children[i];
 
-        // Position child relative to panel
-        child.x = x_cursor;
-        child.y = y_cursor;
+    if (!instance_exists(child)) continue;
 
-        // Draw child with label
-        ui_draw_element(child, child.label, c_white);
+    // Apply origin offsets so visual + click area match
+    var spr_xoff = sprite_get_xoffset(child.sprite_index);
+    var spr_yoff = sprite_get_yoffset(child.sprite_index);
 
-        // Advance cursor
-        if (layout_type == "vertical") {
-            y_cursor += child.button_height + spacing;
-        } else if (layout_type == "horizontal") {
-            x_cursor += child.button_width + spacing;
-        }
+    child.x = _cursor_x + spr_xoff;
+    child.y = _cursor_y + spr_yoff;
+
+    // Draw the child
+    with (child) {
+        draw_self();
+    }
+
+    // Advance cursor based on layout direction
+    if (layout_dir == UI_LAYOUT_VERTICAL) {
+        _cursor_y += child.button_height + spacing;
+    } else { // horizontal
+        _cursor_x += child.button_width + spacing;
     }
 }
