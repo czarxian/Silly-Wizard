@@ -12,6 +12,7 @@ panel = new UIFlexPanel(
     noone, 400
 );
 
+// ✅ Assign background sprite and auto‑size to match it
 panel.sprite_index = spr_Main_Menu;
 ui_auto_size_to_sprite(panel);
 
