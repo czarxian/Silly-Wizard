@@ -1,9 +1,9 @@
 {
   "$GMScript":"v1",
-  "%Name":"Metronome_scripts",
+  "%Name":"UIButton",
   "isCompatibility":false,
   "isDnD":false,
-  "name":"Metronome_scripts",
+  "name":"UIButton",
   "parent":{
     "name":"Scripts",
     "path":"folders/Scripts.yy",

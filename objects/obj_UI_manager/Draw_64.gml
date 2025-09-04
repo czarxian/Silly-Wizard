@@ -1,37 +1,17 @@
-// Debug: show number of panels
-show_debug_message("UI Manager Draw GUI running; panels = " + string(array_length(global.panel_list)));
+//UI Manager Draw GUI Event
 
-// Ensure surface exists at GUI size
-if (ui_surface == -1 || surface_get_width(ui_surface) != display_get_gui_width()) {
-    if (surface_exists(ui_surface)) surface_free(ui_surface);
-    ui_surface = surface_create(display_get_gui_width(), display_get_gui_height());
-    ui_surface_needs_redraw = true;
-}
+// Draw GUI
+//for (var i = 0; i < array_length(global.ui_elements); i++) {
+//    global.ui_elements[i].Draw();
+//}
 
-// Only redraw when needed
-if (ui_surface_needs_redraw) {
-    surface_set_target(ui_surface);
-    draw_clear_alpha(c_black, 0);
+//debug
+show_debug_message("UI Manager sees " + string(array_length(global.ui_elements)) + " elements.");
+//end debug
 
-    // Let each panel draw itself
-    for (var i = 0; i < array_length(global.panel_list); i++) {
-        var panel = global.panel_list[i];
-        if (instance_exists(panel)) {
-            with (panel) {
-                if (function_exists(draw_panel)) {
-                    draw_panel();
-                } else {
-                    draw_self();
-                }
-            }
-        }
-    }
 
-    surface_reset_target();
-    ui_surface_needs_redraw = false;
-}
-
-// Present UI surface
-if (surface_exists(ui_surface)) {
-    draw_surface(ui_surface, 0, 0);
+for (var i = 0; i < array_length(global.ui_elements); i++) {
+    var e = global.ui_elements[i];
+    show_debug_message("Drawing: " + string(i) + " - " + string(typeof( e)));
+    e.Draw();
 }

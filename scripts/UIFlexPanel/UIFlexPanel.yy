@@ -1,9 +1,9 @@
 {
   "$GMScript":"v1",
-  "%Name":"MIDI_scripts",
+  "%Name":"UIFlexPanel",
   "isCompatibility":false,
   "isDnD":false,
-  "name":"MIDI_scripts",
+  "name":"UIFlexPanel",
   "parent":{
     "name":"Scripts",
     "path":"folders/Scripts.yy",

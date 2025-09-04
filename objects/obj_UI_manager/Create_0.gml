@@ -1,8 +1,7 @@
-// Ensure global panel list exists
-if (!variable_global_exists("panel_list")) {
-    global.panel_list = [];
+//UI_Manager create event 
+if (!variable_global_exists("ui_elements")) {
+    global.ui_elements = [];
 }
+global.ui_mouse_x = 0;
+global.ui_mouse_y = 0;
 
-// UI surface setup
-ui_surface = -1;
-ui_surface_needs_redraw = true;
