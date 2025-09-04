@@ -1,23 +1,24 @@
-//obj_flex_button
-//Step Event
+var was_hovered = hovered;
+var was_selected = selected;
 
+// Hitbox
 var _x1 = x - sprite_get_xoffset(sprite_index);
 var _y1 = y - sprite_get_yoffset(sprite_index);
-var _x2 = _x1 + button_width;
-var _y2 = _y1 + button_height;
+var _x2 = _x1 + width;
+var _y2 = _y1 + height;
 
+// Hover detection
 hovered = point_in_rectangle(mx, my, _x1, _y1, _x2, _y2);
 
-if (hovered) image_index = 1; else image_index = 0;
-
-
+// Click detection
 if (hovered && mouse_check_button_pressed(mb_left)) {
-    clicked = true;
-    if (is_callable(button_script)) {
-        script_execute(button_script);
-    }
+    if (is_callable(action)) action();
+    selected = true; // or toggle if needed
 } else {
-    clicked = false;
+    selected = false;
 }
 
-
+// Trigger redraw if state changed
+if (hovered != was_hovered || selected != was_selected) {
+    ui_surface_needs_redraw = true;
+}

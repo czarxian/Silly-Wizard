@@ -8,9 +8,6 @@ function truncate(input_string, length, suffix_string){
 	else return(input_string);
 }
 
-
-/// ui_auto_size_to_sprite(inst)
-/// Sets inst.width/height to match its sprite
 function ui_auto_size_to_sprite(inst) {
     if (sprite_exists(inst.sprite_index)) {
         inst.width  = sprite_get_width(inst.sprite_index);
