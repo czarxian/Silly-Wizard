@@ -16,14 +16,24 @@ function ui_auto_size_to_sprite(inst) {
 }
 
 
+//function ui_add_child(parent_inst, child_inst) {
+//   if (instance_exists(parent_inst) && instance_exists(child_inst)) {
+//        if (!is_array(parent_inst.children)) {
+//            parent_inst.children = [];
+//        }
+//        array_push(parent_inst.children, child_inst);
+//    }
+//}
+
 function ui_add_child(parent_inst, child_inst) {
     if (instance_exists(parent_inst) && instance_exists(child_inst)) {
-        if (!is_array(parent_inst.children)) {
+        if (!variable_instance_exists(parent_inst, "children") || !is_array(parent_inst.children)) {
             parent_inst.children = [];
         }
         array_push(parent_inst.children, child_inst);
     }
 }
+
 
 function get_panel_sprite(style) {
     switch (style) {

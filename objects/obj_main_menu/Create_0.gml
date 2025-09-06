@@ -1,13 +1,12 @@
 /// obj_main_menu — Create Event
 /// Creates a centered main menu panel with sprite background and clickable buttons
 
-// Ensure global UI list exists
-if (!variable_global_exists("ui_elements")) {
-    global.ui_elements = [];
-}
 
 // --- Create the main menu panel ---
-panel = instance_create_layer(640, 360, "GUI", obj_flex_panel, {
+//panel = instance_create_layer(640, 360, "GUI", obj_flex_panel, {
+//    panel_style: "main_menu"
+//});
+panel = instance_create_layer(display_get_gui_width() / 2, display_get_gui_height() / 2, "GUI", obj_flex_panel, {
     panel_style: "main_menu"
 });
 

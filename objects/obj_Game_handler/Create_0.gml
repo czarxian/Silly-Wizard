@@ -1,6 +1,10 @@
 /// @description Insert description here
 // You can write your code in this editor
 
+//Global UI variables	
+    global.ui_elements = [];
+
+
 //Game options
 	global.gamespeed=120;
 	game_set_speed(global.gamespeed, gamespeed_fps);
@@ -12,6 +16,10 @@
 
 //Global ID References
 	global.ID_game_handler = id;
+	
+
+
+//Global UI variables	
 	global.metronome=noone;
 	global.tune=noone;
 

@@ -12,5 +12,16 @@ action = function() {
     show_debug_message("Clicked: " + label);
 };
 
-sprite_index = get_button_sprite(style_id); // Optional style registry
+
+// Sizing and style
+sprite_index = get_button_sprite(style_id);
+ui_auto_size_to_sprite(id);
+
+// Layering
+z_index = 1; // draw above panels
+
+// Register
+show_debug_message("Registering UI element: " + string(id));
 array_push(global.ui_elements, id);
+show_debug_message("ui_elements after push: " + typeof(global.ui_elements));
+
