@@ -7,15 +7,24 @@ if (!variable_global_exists("ui_elements")) {
 }
 
 // --- Create the main menu panel ---
-panel = instance_create_layer(640, 360, "Instances", obj_flex_panel);
+panel = instance_create_layer(640, 360, "GUI", obj_flex_panel, {
+    panel_style: "main_menu"
+});
+
+// --- Register the panel with the UI Manager ---
+array_push(global.ui_elements, panel);
+
+
 panel.layout_type = "vertical";
 panel.align_x     = 0.5;
 panel.align_y     = 0.5;
 panel.padding     = 32;
 panel.spacing     = 24;
 
+
+
 // Assign background sprite and auto-size to match it
-panel.sprite_index = spr_Main_Menu;
+panel.panel_style = "main_menu";
 ui_auto_size_to_sprite(panel);
 
 // --- Helper to add a button to this panel ---
@@ -46,8 +55,9 @@ add_menu_button("Exit", function() {
     game_end();
 });
 
-// --- Register the panel with the UI Manager ---
-array_push(global.ui_elements, panel);
+// --- stack the buttons vertically
+layout_vertical(panel);
+
 
 // Force initial redraw so the UI appears immediately
 ui_surface_needs_redraw = true;

@@ -3,8 +3,11 @@ height = 200;
 padding = 8;
 spacing = 4;
 
-panel_role = "menu";
-background_sprite = spr_window_with_title;
+if (!variable_instance_exists(id, "panel_style")) {
+    panel_style = "default";
+}
+background_sprite = get_panel_sprite(panel_style);
+
 
 clickable = false;
 hovered = false;

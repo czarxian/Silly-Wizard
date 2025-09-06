@@ -1,3 +1,6 @@
+if (global.ui_manager_draws) exit;
+
+
 draw_sprite(sprite_index, 0, x, y);
 
 if (hovered) {

@@ -25,6 +25,15 @@ function ui_add_child(parent_inst, child_inst) {
     }
 }
 
+function get_panel_sprite(style) {
+    switch (style) {
+        case "main_menu": return spr_Main_Menu;
+        case "modal":     return spr_window_with_title;
+        default:          return spr_window_with_title;
+    }
+}
+
+
 function get_button_sprite(style_id) {
     switch (style_id) {
         case "menu":     return spr_button_main_menu;
