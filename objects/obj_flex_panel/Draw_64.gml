@@ -1,5 +1,6 @@
-/// @desc Draw panel with optional sprite (preserve aspect ratio), then children
+/// @desc Draw panel background (optional) and children
 
+// Draw background sprite if set
 if (sprite_index != -1) {
     var sw = sprite_width;
     var sh = sprite_height;
@@ -13,8 +14,7 @@ if (sprite_index != -1) {
 }
 
 // Draw children
-var len = array_length(children);
-for (var i = 0; i < len; i++) {
+for (var i = 0; i < array_length(children); i++) {
     var child = children[i];
     if (instance_exists(child)) {
         with (child) event_perform(ev_draw, ev_draw_gui);

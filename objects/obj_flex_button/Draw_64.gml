@@ -1,5 +1,4 @@
-/// @desc Draw button with sprite frames for normal/hover/selected (preserve aspect ratio)
-
+/// @desc Draw button sprite with aspect ratio preserved, plus label
 var frame = 0;
 if (hovered) frame = 1;
 if (selected) frame = 2;
@@ -19,8 +18,12 @@ if (sprite_index != -1) {
     draw_rectangle(x, y, x + width, y + height, false);
 }
 
-// Label text
+// Draw label text centered
 draw_set_halign(fa_center);
 draw_set_valign(fa_middle);
-draw_set_color(c_black);
+draw_set_color(c_white);
 draw_text(x + width * 0.5, y + height * 0.5, label);
+
+// Reset alignment
+draw_set_halign(fa_left);
+draw_set_valign(fa_top);

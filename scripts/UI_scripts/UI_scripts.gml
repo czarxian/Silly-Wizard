@@ -14,3 +14,14 @@ function ui_auto_size_to_sprite(inst) {
         inst.height = sprite_get_height(inst.sprite_index);
     }
 }
+
+
+function ui_add_child(parent_inst, child_inst) {
+    if (instance_exists(parent_inst) && instance_exists(child_inst)) {
+        if (!is_array(parent_inst.children)) {
+            parent_inst.children = [];
+        }
+        array_push(parent_inst.children, child_inst);
+    }
+}
+
