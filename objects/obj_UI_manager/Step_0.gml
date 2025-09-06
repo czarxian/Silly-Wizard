@@ -23,8 +23,8 @@ for (var i = 0; i < array_length(global.ui_elements); i++) {
 
         // Handle click
         if (is_hovered && mouse_check_button_pressed(mb_left)) {
-            if (is_callable(inst.callback)) {
-                inst.callback(); // Execute bound action
+            if (is_callable(inst.action)) {
+                inst.action(); // Execute bound action
             }
         }
     }

@@ -6,7 +6,7 @@ hovered = false;
 style_id = "menu"; // or "settings", "round", etc.
 label = "Click Me";
 
-callback = function() {
+action = function() {
     show_debug_message("Clicked: " + label);
 };
 

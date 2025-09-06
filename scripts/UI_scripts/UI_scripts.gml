@@ -36,3 +36,13 @@ function get_button_sprite(style_id) {
         default:         return spr_button_main_menu;
     }
 }
+
+function layout_vertical(panel) {
+    var y_offset = panel.y + panel.padding;
+    for (var i = 0; i < array_length(panel.children); i++) {
+        var child = panel.children[i];
+        child.x = panel.x + panel.padding;
+        child.y = y_offset;
+        y_offset += child.height + panel.spacing;
+    }
+}
