@@ -1,5 +1,3 @@
-/// obj_flex_button Draw Event
-
 draw_sprite(sprite_index, 0, x, y);
 
 if (hovered) {

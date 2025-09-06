@@ -8,18 +8,12 @@
   ],
   "managed":true,
   "name":"obj_settings_window",
-  "overriddenProperties":[
-    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"big_window_pnt","path":"objects/big_window_pnt/big_window_pnt.yy",},"propertyId":{"name":"window_title_text","path":"objects/big_window_pnt/big_window_pnt.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"\"Settings\"",},
-    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"big_window_pnt","path":"objects/big_window_pnt/big_window_pnt.yy",},"propertyId":{"name":"has_right_button","path":"objects/big_window_pnt/big_window_pnt.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"True",},
-  ],
+  "overriddenProperties":[],
   "parent":{
     "name":"settings",
     "path":"folders/Objects/Main menu/settings.yy",
   },
-  "parentObjectId":{
-    "name":"big_window_pnt",
-    "path":"objects/big_window_pnt/big_window_pnt.yy",
-  },
+  "parentObjectId":null,
   "persistent":false,
   "physicsAngularDamping":0.1,
   "physicsDensity":0.5,

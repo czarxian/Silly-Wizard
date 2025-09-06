@@ -1,15 +1,13 @@
-/// obj_flex_panel Create Event
-
 width  = 300;
 height = 200;
 padding = 8;
 spacing = 4;
 
-panel_role = "menu"; // or "settings", "modal"
-background_sprite = spr_panel_bg;
+panel_role = "menu";
+background_sprite = spr_window_with_title;
 
-clickable = false; // Panels don’t receive direct input
+clickable = false;
 hovered = false;
 
-// Register with UI manager for draw batching
+children = [];
 array_push(global.ui_elements, id);

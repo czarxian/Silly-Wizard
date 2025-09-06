@@ -25,3 +25,14 @@ function ui_add_child(parent_inst, child_inst) {
     }
 }
 
+function get_button_sprite(style_id) {
+    switch (style_id) {
+        case "menu":     return spr_button_main_menu;
+        case "settings": return spr_button_settings;
+        case "round":    return spr_button_round;
+        case "plus":     return spr_button_plus;
+        case "minus":    return spr_button_minus;
+        case "long":     return spr_button_long;
+        default:         return spr_button_main_menu;
+    }
+}
