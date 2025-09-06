@@ -4,6 +4,7 @@
 global.ui_mouse_x = device_mouse_x_to_gui(0);
 global.ui_mouse_y = device_mouse_y_to_gui(0);
 
+
 // Loop through all registered UI elements
 for (var i = 0; i < array_length(global.ui_elements); i++) {
     var inst = global.ui_elements[i];

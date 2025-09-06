@@ -25,5 +25,5 @@ show_debug_message("Registering UI element: " + string(id));
 array_push(global.ui_elements, id);
 show_debug_message("Panel sprite: " + string(background_sprite));
 show_debug_message("ui_elements after push: " + typeof(global.ui_elements));
-
+show_debug_message("Panel registered: " + string(id));
 

@@ -1,9 +1,15 @@
 /// @description Insert description here
 // You can write your code in this editor
 
-//Global UI variables	
-    global.ui_elements = [];
 
+// Initialize UI registry
+	global.ui_elements = [];
+
+// Spawn the UI manager
+	instance_create_layer(0, 0, "Instances", obj_UI_manager);
+
+// Spawn the main menu
+    instance_create_layer(0, 0, "Instances", obj_main_menu);
 
 //Game options
 	global.gamespeed=120;
