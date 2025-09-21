@@ -1,4 +1,5 @@
-if (keyboard_check(vk_escape))	{
+
+if (keyboard_check_released(vk_escape))	{
 	paused = !paused;
 	update_pause();
 }

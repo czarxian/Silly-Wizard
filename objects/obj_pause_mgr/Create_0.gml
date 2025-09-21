@@ -1,5 +1,5 @@
 //code to handle the UI Layer "main_menu_layer"
-paused = false;
+paused = true;
 layer_name = "main_menu_layer";
 layer_id = layer_get_id("main_menu_layer");
 
