@@ -3,7 +3,7 @@
 	function scr_init_button(){
 	button_label  = "Button";
 	button_action = noone;
-	sprite_index  = spr_btn_mainmenu;
+	sprite_index  = spr_btn_main_menu;
 	image_index   = 0;
 	image_speed   = 0;
 	}

@@ -7,11 +7,17 @@
   "inheritLayers":false,
   "instanceCreationOrder":[
     {"name":"inst_268BB301","path":"rooms/Room_main_menu/Room_main_menu.yy",},
+    {"name":"inst_2F5FA142","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"inst_38E03C4C","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"inst_732D5D88","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"inst_3509753D","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"inst_541424F8","path":"rooms/Room_main_menu/Room_main_menu.yy",},
   ],
   "isDnd":false,
   "layers":[
     {"$GMRInstanceLayer":"","%Name":"Instances","depth":0,"effectEnabled":true,"effectType":null,"gridX":32,"gridY":32,"hierarchyFrozen":false,"inheritLayerDepth":false,"inheritLayerSettings":false,"inheritSubLayers":true,"inheritVisibility":true,"instances":[
         {"$GMRInstance":"v2","%Name":"inst_268BB301","colour":4294967295,"frozen":false,"hasCreationCode":false,"ignore":false,"imageIndex":0,"imageSpeed":1.0,"inheritCode":false,"inheritedItemId":null,"inheritItemSettings":false,"isDnd":false,"name":"inst_268BB301","objectId":{"name":"obj_ui_controller","path":"objects/obj_ui_controller/obj_ui_controller.yy",},"properties":[],"resourceType":"GMRInstance","resourceVersion":"2.0","rotation":0.0,"scaleX":1.0,"scaleY":1.0,"x":64.0,"y":0.0,},
+        {"$GMRInstance":"v2","%Name":"inst_541424F8","colour":4294967295,"frozen":false,"hasCreationCode":false,"ignore":false,"imageIndex":0,"imageSpeed":1.0,"inheritCode":false,"inheritedItemId":null,"inheritItemSettings":false,"isDnd":false,"name":"inst_541424F8","objectId":{"name":"obj_pause_mgr","path":"objects/obj_pause_mgr/obj_pause_mgr.yy",},"properties":[],"resourceType":"GMRInstance","resourceVersion":"2.0","rotation":0.0,"scaleX":-3.0,"scaleY":3.0,"x":96.0,"y":32.0,},
       ],"layers":[],"name":"Instances","properties":[],"resourceType":"GMRInstanceLayer","resourceVersion":"2.0","userdefinedDepth":false,"visible":true,},
     {"$GMRBackgroundLayer":"","%Name":"Background","animationFPS":30.0,"animationSpeedType":0,"colour":4293322470,"depth":100,"effectEnabled":true,"effectType":null,"gridX":32,"gridY":32,"hierarchyFrozen":false,"hspeed":0.0,"htiled":false,"inheritLayerDepth":false,"inheritLayerSettings":false,"inheritSubLayers":true,"inheritVisibility":true,"layers":[],"name":"Background","properties":[],"resourceType":"GMRBackgroundLayer","resourceVersion":"2.0","spriteId":{"name":"spr_backgnd_grey_swirl","path":"sprites/spr_backgnd_grey_swirl/spr_backgnd_grey_swirl.yy",},"stretch":false,"userdefinedAnimFPS":false,"userdefinedDepth":false,"visible":true,"vspeed":0.0,"vtiled":false,"x":0,"y":0,},
   ],

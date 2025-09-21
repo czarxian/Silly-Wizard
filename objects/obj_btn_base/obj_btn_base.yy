@@ -13,8 +13,8 @@
   "name":"obj_btn_base",
   "overriddenProperties":[],
   "parent":{
-    "name":"Objects",
-    "path":"folders/Objects.yy",
+    "name":"buttons",
+    "path":"folders/Objects/buttons.yy",
   },
   "parentObjectId":null,
   "persistent":false,
@@ -30,11 +30,16 @@
   "physicsShape":1,
   "physicsShapePoints":[],
   "physicsStartAwake":true,
-  "properties":[],
+  "properties":[
+    {"$GMObjectProperty":"v1","%Name":"button_id","filters":[],"listItems":[],"multiselect":false,"name":"button_id","rangeEnabled":false,"rangeMax":10.0,"rangeMin":0.0,"resourceType":"GMObjectProperty","resourceVersion":"2.0","value":"0","varType":1,},
+  ],
   "resourceType":"GMObject",
   "resourceVersion":"2.0",
   "solid":false,
-  "spriteId":null,
+  "spriteId":{
+    "name":"spr_btn_main_menu",
+    "path":"sprites/spr_btn_main_menu/spr_btn_main_menu.yy",
+  },
   "spriteMaskId":null,
   "visible":true,
 }

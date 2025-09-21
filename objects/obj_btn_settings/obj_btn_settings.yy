@@ -8,8 +8,8 @@
   "name":"obj_btn_settings",
   "overriddenProperties":[],
   "parent":{
-    "name":"Objects",
-    "path":"folders/Objects.yy",
+    "name":"buttons",
+    "path":"folders/Objects/buttons.yy",
   },
   "parentObjectId":{
     "name":"obj_btn_base",
@@ -32,7 +32,10 @@
   "resourceType":"GMObject",
   "resourceVersion":"2.0",
   "solid":false,
-  "spriteId":null,
+  "spriteId":{
+    "name":"spr_btn_main_menu",
+    "path":"sprites/spr_btn_main_menu/spr_btn_main_menu.yy",
+  },
   "spriteMaskId":null,
   "visible":true,
 }
