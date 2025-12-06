@@ -1,35 +1,42 @@
-// obj_ui_controller - Create Event
-show_debug_message("Create: UI controller active");
+// Obj_ui_controller Create Event
 
+// Initialize layer names only once
+if (!variable_global_exists("ui_layer_names")) {
+    global.ui_layer_names = [];
+    global.ui_layer_names[0] = "main_menu_layer";
+    global.ui_layer_names[1] = "settings_window_layer";
+    global.ui_layer_names[2] = "tune_window_layer";
+    global.ui_layer_names[3] = "gameinfo_window_layer";
+}
 
-// Create Event
-//alarm[0] = 10;
+// Initialize ui_assets only once
+if (!variable_global_exists("ui_assets")) {
+    global.ui_assets = [];
+    for (var i = 0; i < array_length(global.ui_layer_names); i++) {
+        global.ui_assets[i] = [];
+    }
+}
 
+// Initialize numbering only once
+if (!variable_global_exists("next_ui_number")) {
+    global.next_ui_number = 0;
+}
 
-//// Get the layer ID
-//var layer_id = layer_ui_get_id("main_menu_layer");
-//if (layer_id == noone) {
-//    show_debug_message("main_menu_layer not found!");
-//    exit;
-//}
-////list all nodes (to debug)
-//var nodes = flexlayer_get_all_nodes(layer_id);
-//for (var i = 0; i < array_length(nodes); i++) {
-//    show_debug_message("Node found: " + nodes[i]);
-//}
-//
-//// Use flexlayer_get_node to get the node inside that layer
-//var panel = flexlayer_get_node(layer_id, "fp_main_menu");
-//
-//if (panel == undefined) {
-//    show_debug_message("⚠ Node not found: fp_main_menu in main_menu_layer");
-//} else {
-//    show_debug_message("✅ Node found: fp_main_menu in main_menu_layer");
-//
-//    // Assign and configure
-//    fp_main_menu = panel;
-//    fp_main_menu.x = room_width * 0.25;
-//    fp_main_menu.y = 0;
-//    fp_main_menu.width = room_width * 0.75;
-//    fp_main_menu.height = room_height;
-//}
+// Initialize fields list only once
+if (!variable_global_exists("ui_fields")) {
+    global.ui_fields = [];
+}
+//Tune variables
+	global.tune_selection = -1;
+	global.tune_library = array_create(5);
+	global.tune_library[0]="Tune Not Set";
+	global.tune_library[1]="Tune 1";
+	global.tune_library[2]="Tune 2";
+	global.tune_library[3]="Tune 3";
+	global.tune_library[4]="Tune 4";
+	global.tune_library[5]="It's Sheffield Wednesday and I'm in Love";
+	global.tune_library[6]="Not set";
+
+//global.tune_library = ["Tune A", "Tune B", "Tune C", "Tune D", "Tune E", "Tune F","Tune G"];
+global.tune_page = 0;
+global.tunes_per_page = 6;
