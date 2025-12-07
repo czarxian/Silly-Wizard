@@ -12,6 +12,7 @@
   "name":"obj_btn_check",
   "overriddenProperties":[
     {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_btn_base","path":"objects/obj_btn_base/obj_btn_base.yy",},"propertyId":{"name":"button_target","path":"objects/obj_btn_base/obj_btn_base.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"obj_field",},
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resource":{"name":"spr_button_check","path":"sprites/spr_button_check/spr_button_check.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_button_check",},
   ],
   "parent":{
     "name":"UI",

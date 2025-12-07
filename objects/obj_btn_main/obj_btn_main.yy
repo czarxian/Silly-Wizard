@@ -1,6 +1,6 @@
 {
   "$GMObject":"",
-  "%Name":"obj_btn_base",
+  "%Name":"obj_btn_main",
   "eventList":[
     {"$GMEvent":"v1","%Name":"","collisionObjectId":null,"eventNum":0,"eventType":0,"isDnD":false,"name":"","resourceType":"GMEvent","resourceVersion":"2.0",},
     {"$GMEvent":"v1","%Name":"","collisionObjectId":null,"eventNum":10,"eventType":6,"isDnD":false,"name":"","resourceType":"GMEvent","resourceVersion":"2.0",},
@@ -10,18 +10,18 @@
     {"$GMEvent":"v1","%Name":"","collisionObjectId":null,"eventNum":0,"eventType":8,"isDnD":false,"name":"","resourceType":"GMEvent","resourceVersion":"2.0",},
   ],
   "managed":true,
-  "name":"obj_btn_base",
+  "name":"obj_btn_main",
   "overriddenProperties":[
     {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_type","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"button",},
-    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"noone",},
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resource":{"name":"spr_btn_main_menu","path":"sprites/spr_btn_main_menu/spr_btn_main_menu.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_btn_main_menu",},
   ],
   "parent":{
     "name":"UI",
     "path":"folders/Objects/UI.yy",
   },
   "parentObjectId":{
-    "name":"obj_UI_parent",
-    "path":"objects/obj_UI_parent/obj_UI_parent.yy",
+    "name":"obj_btn_base",
+    "path":"objects/obj_btn_base/obj_btn_base.yy",
   },
   "persistent":false,
   "physicsAngularDamping":0.1,

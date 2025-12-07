@@ -11,7 +11,9 @@
   ],
   "managed":true,
   "name":"obj_btn_label",
-  "overriddenProperties":[],
+  "overriddenProperties":[
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resource":{"name":"spr_btn_main_menu","path":"sprites/spr_btn_main_menu/spr_btn_main_menu.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_btn_main_menu",},
+  ],
   "parent":{
     "name":"UI",
     "path":"folders/Objects/UI.yy",

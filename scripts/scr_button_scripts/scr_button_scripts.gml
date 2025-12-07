@@ -14,7 +14,8 @@
 			case 7: show_debug_message("settings MIDI IN change");  scr_settings_MIDI_In_change(); break;	//exit
 			case 8: show_debug_message("settings MIDI OUT change");  scr_settings_MIDI_Out_change(); break;	//exit
 			case 9: show_debug_message("settings OK"); scr_settings_OK(); break;		//exit
-			case 10: show_debug_message("Play room play"); build_play_log(tune_data, 0, startup_data); break;		//exit
+			case 10: show_debug_message("tune OK"); scr_tune_OK(); break;				//exit
+			case 11: show_debug_message("Play room play"); build_play_log(tune_data, 0, startup_data); break;		//exit
 			default: show_debug_message("switch default"); scr_script_not_set(); break;
 		}
 	}
@@ -223,7 +224,14 @@
 	}	
 	
 	//CASE 10
+	function scr_tune_OK()	{
+	//Set the choices that were made in the settings window. 
+		show_debug_message("I clicked " + string(button_ID));
+		layer_set_visible(self.button_label, 0); // Toggle visibility
+	}	
 	
+	
+	//CASE 11
 
 
 

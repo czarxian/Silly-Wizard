@@ -1,12 +1,14 @@
 {
   "$GMObject":"",
-  "%Name":"obj_btn_field",
+  "%Name":"obj_btn_fieldR",
   "eventList":[
     {"$GMEvent":"v1","%Name":"","collisionObjectId":null,"eventNum":0,"eventType":0,"isDnD":false,"name":"","resourceType":"GMEvent","resourceVersion":"2.0",},
   ],
   "managed":true,
-  "name":"obj_btn_field",
-  "overriddenProperties":[],
+  "name":"obj_btn_fieldR",
+  "overriddenProperties":[
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resource":{"name":"spr_arrow_right","path":"sprites/spr_arrow_right/spr_arrow_right.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_arrow_right",},
+  ],
   "parent":{
     "name":"UI",
     "path":"folders/Objects/UI.yy",
