@@ -15,7 +15,7 @@
 			case 8: show_debug_message("settings MIDI OUT change");  scr_settings_MIDI_Out_change(); break;	//exit
 			case 9: show_debug_message("settings OK"); scr_settings_OK(); break;		//exit
 			case 10: show_debug_message("tune OK"); scr_tune_OK(); break;				//exit
-			case 11: show_debug_message("Play room play"); build_play_log(tune_data, 0, startup_data); break;		//exit
+			case 11: show_debug_message("Play room play"); start_play(); break;		//exit
 			default: show_debug_message("switch default"); scr_script_not_set(); break;
 		}
 	}
@@ -45,7 +45,7 @@
 		room_goto(Room_play);
 		scr_open_window(0);
 		scr_open_window(3);
-		MIDI_start_manual_check_messages();
+
 	}
 
 	//CASE 2 Clicked Checkbox
@@ -232,6 +232,19 @@
 	
 	
 	//CASE 11
+	function start_play() {
+		//do the things at start
+		midi_output_device_open_all();
+		midi_input_device_open_all();
+		MIDI_start_manual_check_messages();
+		show_debug_message("manual MIDI started");
+		show_debug_message("input = " + string(global.midi_input_device));
+		
+		// Start playback at the first part, first event
+		time_source_start(global.tune_timer);
+		global.tune_start_time = current_time;
+		show_debug_message(string(current_time - global.tune_start_time));
+	}
 
 
 

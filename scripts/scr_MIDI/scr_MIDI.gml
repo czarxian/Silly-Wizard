@@ -135,18 +135,13 @@ function MIDI_process_messages()
 	//	else if (byte1>=NoteOffEvent && byte1<NoteOnEvent) {
 	//		global.MIDI_log[_last_MIDI_on_event][MIDI_log_note_off] = time;
 	//		global.MIDI_log[_last_MIDI_on_event][MIDI_log_length] = global.MIDI_log[_last_MIDI_on_event][MIDI_log_note_off]-global.MIDI_log[_last_MIDI_on_event][MIDI_log_time];
-
 //```
-
 //		//		show_debug_message( string(global.MIDI_log[_last_MIDI_on_event][MIDI_log_note_off]));
 //	}
-
 //```
 		//  Having parsed the input, do something with it!
 		midi_output_message_send_short(_MIDI_output_device,byte1,byte2,byte3);  //Sends the MIDI Message to the MIDI Output Device
-
 //```
-
 //			show_debug_message("Send to" + string(_MIDI_output_device) + "Note: " + string(byte2note) );
 //			show_debug_message(string(time) + "  " + string(byte1) + "  " + string(byte2) + "  " + string(byte3));
 //			global.MIDI_log[_MIDI_event_number][MIDI_log_time]=time;
