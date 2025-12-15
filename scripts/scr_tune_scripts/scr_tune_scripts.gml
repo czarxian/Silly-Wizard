@@ -1,46 +1,105 @@
-
-
 /// @desc Processes scheduled tune events and resets timesource for next batch
 function script_tune_callback() {
-	var event_time = tune_events[current_index].time;
-	
-	// Process all events at this timestamp
-	while (current_index < array_length(tune_events)
-	    && tune_events[current_index].time == event_time) {
-	    
-	    var ev = tune_events[current_index];
-	    
-	    // MIDI playback only for now
-	    if (ev.type == ev_midi) {
-	        var status = NoteOnEvent + ev.channel;
-	        midi_output_message_send_short(global.midi_output, status, ev.note, ev.velocity);
-	    }
-	
-	    current_index++;
-	}
-	
-	// Schedule next batch
-	if (global.current_index < array_length(global.tune_events)) {
-    var next_time = global.tune_events[global.current_index].time;
-    var delta = next_time - current_time; // using system clock approach
+    
+    // Safety check
+    if (global.current_index >= array_length(global.tune_events)) {
+        show_debug_message("Callback fired but no more events to process.");
+        return;
+    }
 
-    // Recreate/reset the timesource with the new period
-    global.tune_timer = time_source_create(
-        time_source_game,
-        delta / 1000,                // convert ms to seconds
-        time_source_units_seconds,
-        script_tune_callback,
-        [],
-        1,
-        time_source_expire_after
-    );
+    var event_time = global.tune_events[global.current_index].time;
+    show_debug_message("Callback fired. Current index = " + string(global.current_index) 
+        + ", event_time = " + string(event_time) 
+        + ", current_time = " + string(current_time));
+
+    // Process all events at this timestamp
+    while (global.current_index < array_length(global.tune_events)
+        && global.tune_events[global.current_index].time == event_time) {
+        
+        var ev = global.tune_events[global.current_index];
+        show_debug_message("Processing event at index " + string(global.current_index)
+            + ": type=" + string(ev.type)
+            + ", channel=" + string(ev.channel)
+            + ", note=" + string(ev.note)
+            + ", velocity=" + string(ev.velocity));
+
+        // MIDI playback only for now
+        if (ev.type == ev_midi) {
+            var status = NoteOnEvent + ev.channel;
+            midi_output_message_send_short(global.midi_output_device, status, ev.note, ev.velocity);
+            show_debug_message("Sent MIDI: status=" + string(status)
+                + ", note=" + string(ev.note)
+                + ", velocity=" + string(ev.velocity));
+        }
+
+        global.current_index++;
+    }
+
+// Schedule next batch
+if (global.current_index < array_length(global.tune_events)) {
+    var next_time = global.tune_events[global.current_index].time;
+    var delta = next_time - event_time; // relative to tune timeline
+    show_debug_message("Scheduling next event. Next_time=" + string(next_time)
+        + ", event_time=" + string(event_time)
+        + ", delta=" + string(delta) + " ms");
+
+
+	time_source_reconfigure(
+	    global.tune_timer,           // existing timesource to update
+	    delta / 1000,                // new period (seconds)
+	    time_source_units_seconds,   // units
+	    script_tune_callback,        // callback script
+	    [],                          // optional args
+	    1,                           // repetitions
+	    time_source_expire_after     // expiry type
+	);
+	} else {
+	    show_debug_message("All events processed. No further scheduling.");
+	}
 }
-	
-	
-	
-	
-	
-}
+
+/// @desc Processes scheduled tune events and resets timesource for next batch
+//function script_tune_callback() {
+//	
+//	var event_time = global.tune_events[global.current_index].time;
+//	
+//	// Process all events at this timestamp
+//	while (global.current_index < array_length(global.tune_events)
+//	    && global.tune_events[global.current_index].time == event_time) {
+//	    
+//	    var ev = global.tune_events[global.current_index];
+//	    
+//	    // MIDI playback only for now
+//	    if (ev.type == ev_midi) {
+//	        var status = NoteOnEvent + ev.channel;
+//	        midi_output_message_send_short(global.midi_output_device, status, ev.note, ev.velocity);
+//	    }
+//	
+//	    global.current_index++;
+//	}
+//	
+//	// Schedule next batch
+//	if (global.current_index < array_length(global.tune_events)) {
+//    var next_time = global.tune_events[global.current_index].time;
+//    var delta = next_time - current_time; // using system clock approach
+//
+//    // Recreate/reset the timesource with the new period
+//    global.tune_timer = time_source_create(
+//        time_source_game,
+//        delta / 1000,                // convert ms to seconds
+//        time_source_units_seconds,
+//        script_tune_callback,
+//        [],
+//        1,
+//        time_source_expire_after
+//    );
+//}
+//	
+//	
+//	
+//	
+//	
+//}
 
 
 //function script_tune_callback() {
