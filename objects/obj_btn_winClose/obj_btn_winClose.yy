@@ -8,7 +8,7 @@
   "name":"obj_btn_winClose",
   "overriddenProperties":[
     {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_btn_base","path":"objects/obj_btn_base/obj_btn_base.yy",},"propertyId":{"name":"button_script_index","path":"objects/obj_btn_base/obj_btn_base.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"3",},
-    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_window_close",},
+    {"$GMOverriddenProperty":"v1","%Name":"","name":"","objectId":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"propertyId":{"name":"ui_sprite","path":"objects/obj_UI_parent/obj_UI_parent.yy",},"resource":{"name":"spr_window_close","path":"sprites/spr_window_close/spr_window_close.yy",},"resourceType":"GMOverriddenProperty","resourceVersion":"2.0","value":"spr_window_close",},
   ],
   "parent":{
     "name":"UI",

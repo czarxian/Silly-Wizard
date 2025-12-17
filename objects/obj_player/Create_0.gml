@@ -26,14 +26,23 @@
 	};
 
 global.tune_events = [
-    { time: 0,    type: ev_midi, channel: 0, note: 60, velocity: 100 },
-    { time: 500,  type: ev_midi, channel: 0, note: 64, velocity: 100 },
-    { time: 1000, type: ev_midi, channel: 0, note: 67, velocity: 100 }
+    { time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+    { time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+	{ time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+    { time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+	{ time: 500, type: ev_midi, channel: 0, note: 67, velocity: 100 },
+    { time: 500, type: ev_midi, channel: 0, note: 67, velocity: 100 },
+	{ time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+    { time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+	{ time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+    { time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 }	
 ];
-global.current_index = 0;
+
+//global.current_index = 0;
+global.tune_index = 0;
 
 // Calculate delay until the first event
-	var first_time = global.tune_events[global.current_index].time;
+	var first_time = global.tune_events[global.tune_index].time;
 	var delta = first_time - current_time; // system clock approach
 
 // Create the timesource with dynamic period
@@ -46,7 +55,6 @@ global.current_index = 0;
 	    1,                         // fire once
 	    time_source_expire_after   // expire after firing
 	);
-
 
 //reference holder
 global.ID_player=id;

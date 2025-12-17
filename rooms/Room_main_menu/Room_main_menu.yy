@@ -39,6 +39,9 @@
     {"name":"obj_gameinfo_ok_button","path":"roomui/RoomUI/RoomUI.yy",},
     {"name":"inst_68A793DD","path":"rooms/Room_main_menu/Room_main_menu.yy",},
     {"name":"inst_158A973C","path":"rooms/Room_main_menu/Room_main_menu.yy",},
+    {"name":"inst_34C49F17","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"inst_2DEF5A7D","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"obj_currentnote_field_1","path":"roomui/RoomUI/RoomUI.yy",},
   ],
   "isDnd":false,
   "layers":[

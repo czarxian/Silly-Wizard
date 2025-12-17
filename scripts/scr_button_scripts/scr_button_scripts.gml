@@ -45,6 +45,7 @@
 		room_goto(Room_play);
 		scr_open_window(0);
 		scr_open_window(3);
+		scr_open_window(4, true);
 
 	}
 
@@ -127,20 +128,23 @@
 			}
 		}
 	}
-	
-	//CASE 3 Open Window
+
+
+    //CASE 3 Open Window
 	//Open Settings and Tune window from main menu, close them from windows close button
-	function scr_open_window(layer_num){
+	function scr_open_window(layer_num, vis = undefined) {
 		var layer_name = GetLayerNameFromIndex(layer_num);
 		var layer_id = layer_get_id(layer_name);
 		var current_visibility = layer_get_visible(layer_id); // Get the current visibility
+		if (is_undefined(vis)) vis = false;		
 		
-		for (var i = 1; i < array_length(global.ui_assets); i++) {
-				var cur_layer_name = GetLayerNameFromIndex(i);
-				var cur_layer_id = layer_get_id(cur_layer_name);
-				layer_set_visible(cur_layer_id, false);
+		if (vis == false) {
+			for (var i = 1; i < array_length(global.ui_assets); i++) {
+					var cur_layer_name = GetLayerNameFromIndex(i);
+					var cur_layer_id = layer_get_id(cur_layer_name);
+					layer_set_visible(cur_layer_id, false);
+			}
 		}
-		
 		layer_set_visible(layer_id, !current_visibility); // Toggle visibility
 	
     // Refresh and update fields for the target window
@@ -229,7 +233,6 @@
 		show_debug_message("I clicked " + string(button_ID));
 		layer_set_visible(self.button_label, 0); // Toggle visibility
 	}	
-	
 	
 	//CASE 11
 	function start_play() {
