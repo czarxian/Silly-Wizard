@@ -4,6 +4,7 @@
 
 global.tune = [];
 
+
 global.tune[1] = [
     { time: 250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
     { time: 300, type: ev_midi, channel: 0, note: 60, velocity: 100 },
@@ -162,3 +163,16 @@ global.tune[5] = [
 //    { time: 7000, type: ev_midi, channel: 9, note: 36, velocity: 125 },
 //    { time: 7500, type: ev_midi, channel: 9, note: 38, velocity: 110 }
 ];
+
+tune.metronome = {
+    enabled: true,
+    bpm: 72,
+    beats_per_bar: 4,
+    subdivision: "eighth",   // "quarter", "dotcut", "cutdot", etc.
+    accent_pattern: [1],     // or [1,3]
+    accent_note: 80,
+    normal_note: 75,
+    click_duration: 0.05
+};
+
+
