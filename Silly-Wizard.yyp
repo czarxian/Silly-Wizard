@@ -61,6 +61,7 @@
     {"id":{"name":"RoomUI","path":"roomui/RoomUI/RoomUI.yy",},},
     {"id":{"name":"scr_button_scripts","path":"scripts/scr_button_scripts/scr_button_scripts.yy",},},
     {"id":{"name":"scr_MIDI","path":"scripts/scr_MIDI/scr_MIDI.yy",},},
+    {"id":{"name":"scr_tune_library","path":"scripts/scr_tune_library/scr_tune_library.yy",},},
     {"id":{"name":"scr_tune_scripts","path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},},
     {"id":{"name":"scr_UI_scripts","path":"scripts/scr_UI_scripts/scr_UI_scripts.yy",},},
     {"id":{"name":"spr_arrow_left","path":"sprites/spr_arrow_left/spr_arrow_left.yy",},},

@@ -32,6 +32,7 @@
     {"name":"Room_play","order":1,"path":"rooms/Room_play/Room_play.yy",},
     {"name":"RoomUI","order":13,"path":"roomui/RoomUI/RoomUI.yy",},
     {"name":"scr_MIDI","order":1,"path":"scripts/scr_MIDI/scr_MIDI.yy",},
+    {"name":"scr_tune_library","order":4,"path":"scripts/scr_tune_library/scr_tune_library.yy",},
     {"name":"scr_tune_scripts","order":3,"path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},
     {"name":"scr_UI_scripts","order":2,"path":"scripts/scr_UI_scripts/scr_UI_scripts.yy",},
     {"name":"spr_arrow_left","order":12,"path":"sprites/spr_arrow_left/spr_arrow_left.yy",},

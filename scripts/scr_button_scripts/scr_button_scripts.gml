@@ -227,26 +227,32 @@
 		layer_set_visible(self.button_label, 0); // Toggle visibility
 	}	
 	
-	//CASE 10
+	//CASE 10  THis OK button in the tune window locks in the selected 
 	function scr_tune_OK()	{
 	//Set the choices that were made in the settings window. 
 		show_debug_message("I clicked " + string(button_ID));
-		layer_set_visible(self.button_label, 0); // Toggle visibility
+		show_debug_message("Tune selected: " + string(global.tune_selection));
+		scr_open_window(self.ui_layer_num,true);
+		//global.tune_events = global.tune[global.tune_selection] //tune_selection is changed by the tune checkboxes...
+		//global.tune_index = 0;
+		//layer_set_visible(self.button_label, 0); // Toggle visibility closing the window
 	}	
 	
 	//CASE 11
 	function start_play() {
-		//do the things at start
 		midi_output_device_open_all();
 		midi_input_device_open_all();
 		MIDI_start_manual_check_messages();
 		show_debug_message("manual MIDI started");
 		show_debug_message("input = " + string(global.midi_input_device));
-		
+		show_debug_message("tune start " + string(global.tune_selection));
+		tune_start(global.tune[global.tune_selection]);
+
+		//
 		// Start playback at the first part, first event
-		time_source_start(global.tune_timer);
-		global.tune_start_time = current_time;
-		show_debug_message(string(current_time - global.tune_start_time));
+		//time_source_start(global.tune_timer);
+		//global.tune_start_time = current_time;
+		//show_debug_message(string(current_time - global.tune_start_time));
 	}
 
 

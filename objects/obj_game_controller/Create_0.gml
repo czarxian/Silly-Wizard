@@ -1,9 +1,9 @@
 //Create Globals
+	scr_tune_library();
 
 //Global ID References
 	global.ID_game_handler = id;
 	global.metronome=noone;
-	global.tune=noone;
 
 //Game State
 	global.game_state="menu";
@@ -13,8 +13,6 @@
 	global.midi_input_devices[0] = "not selected";
 	global.midi_input_device=0;
 	global.midi_input_device_name="not selected";
-	//global.chanter_number=0;
-	//global.chanter_name="not selected";
 	global.midi_input_channel=0;
 
   //MIDI Output 

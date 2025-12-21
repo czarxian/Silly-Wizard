@@ -1,124 +1,200 @@
-/// @desc Processes scheduled tune events and resets timesource for next batch
-/// @desc Processes scheduled tune events and resets timesource for next batch
 
+
+/// @function tune_start(tune_events)
+/// @param tune_events  The array of events to play
+
+function tune_start(_tune_events) {
+    global.tune_events = _tune_events;
+    global.tune_index  = 0;
+
+    // First event delay is simply its timestamp
+    var delta_ms = global.tune_events[0].time;
+	show_debug_message("delta_ms " + string(delta_ms)); //For testing only
+    global.tune_timer = time_source_create(
+        time_source_game,
+        delta_ms / 1000,
+		time_source_units_seconds,
+        script_tune_callback,
+        [],
+        1,
+        time_source_expire_after
+    );
+	time_source_start(global.tune_timer);
+    global.tune_start_real = current_time;
+}
 
 function script_tune_callback() {
-	//Track 
-    //var actual_time = get_timer()/1000; //in microseconds
-    var actual_time = current_time - global.tune_start_time; //in milliseconds
-//	show_debug_message("Event " + string(global.tune_index) + " fired.");
-//	show_debug_message("Actual Time: " + string(actual_time) + " ms.");
-//	show_debug_message(string(current_time - global.tune_start_time));
-    show_debug_message("Callback fired. Current index = " + string(global.tune_index) 
-        + ", event_time = " + string(global.tune_events[global.tune_index].time) 
-        + ", current_time = " + string(actual_time));	
 
-	// Handle the fired event
-	
-	//Write to the event log
-		//Future function
-	
-	//Play MIDI note
-        if (global.tune_events[global.tune_index].type == ev_midi) {
-            var status = NoteOnEvent + global.tune_events[global.tune_index].channel;
-            midi_output_message_send_short(global.midi_output_device, status, global.tune_events[global.tune_index].note, global.tune_events[global.tune_index].velocity);
-            show_debug_message("Sent MIDI: status=" + string(status)
-                + ", note=" + string(global.tune_events[global.tune_index].note)
-                + ", velocity=" + string(global.tune_events[global.tune_index].velocity));
-        }
-    
+    var ev = global.tune_events[global.tune_index];
+
+    // Debugging: compare real time vs expected tune time
+    var real_elapsed = current_time - global.tune_start_real;
+    var expected_elapsed = ev.time;
+    show_debug_message("Event " + string(global.tune_index)
+        + " expected=" + string(expected_elapsed)
+        + " real=" + string(real_elapsed));
+
+    // PLAY EVENT
+    if (ev.type == ev_midi) {
+        var status = NoteOnEvent + ev.channel;
+        midi_output_message_send_short(global.midi_output_device, status, ev.note, ev.velocity);
+    }
+
 	//Write to the beam drawing array
+		//Future function
+
+	//Write to the EVENT LOG
 		//Future function
 	
 	//Write to the Current_Note window
 	obj_currentnote_field_1.field_contents = string(global.tune_events[global.tune_index].note);
-	
-	// Advance
+
+    // Advance index
     global.tune_index++;
 
-    // If more events, reconfigure and restart
-    if (global.tune_index < array_length(global.tune_events)) {
-        var next_ms   = global.tune_events[global.tune_index].time;
-        var next_secs = next_ms / 1000;
-
-        time_source_reconfigure(
-            global.tune_timer,
-            next_secs,
-            time_source_units_seconds,
-            script_tune_callback,
-            [],
-            1,
-            time_source_expire_after
-        );
-        time_source_start(global.tune_timer);
-
-	//Else end the tune	
-    } else {
-        // Optional: stop or leave as-is
+    // If no more events, stop
+    if (global.tune_index >= array_length(global.tune_events)) {
         time_source_stop(global.tune_timer);
         show_debug_message("Tune finished.");
-    }
-}
-
-
-function script_tune_callback_alt() {
-    
-    // See if the current event index is > the number of events.
-    if (global.current_index >= array_length(global.tune_events)) {
-        show_debug_message("Callback fired but no more events to process.");
         return;
     }
-	
-	//This part may not be working.It is showing the time of the current event. 
-    var event_time = global.tune_events[global.tune_index].time;
-    show_debug_message("Callback fired. Current index = " + string(global.current_index) 
-        + ", event_time = " + string(event_time) 
-        + ", current_time = " + string(current_time-global.tune_start_time));
 
- //   // Process all events at or before this timestamp
- //   while (global.tune_index < array_length(global.tune_events)
- //       && global.tune_events[global.tune_index].time <= event_time) {
-        
-        var ev = global.tune_events[global.current_index];
-        show_debug_message("Processing event at index " + string(global.tune_index)
-            + ": type=" + string(ev.type)
-            + ", channel=" + string(ev.channel)
-            + ", note=" + string(ev.note)
-            + ", velocity=" + string(ev.velocity));
+    // Compute RELATIVE delta
+    var next_time  = global.tune_events[global.tune_index].time;
+    var prev_time  = ev.time;
+    var delta_ms   = next_time - prev_time;
 
-        // MIDI playback only for now
-        if (ev.type == ev_midi) {
-            var status = NoteOnEvent + ev.channel;
-            midi_output_message_send_short(global.midi_output_device, status, ev.note, ev.velocity);
-            show_debug_message("Sent MIDI: status=" + string(status)
-                + ", note=" + string(ev.note)
-                + ", velocity=" + string(ev.velocity));
-        }
-        global.current_index++;
-    
+    time_source_reconfigure(
+        global.tune_timer,
+        delta_ms / 1000,
+        time_source_units_seconds,
+        script_tune_callback,
+        [],
+        1,
+        time_source_expire_after
+    );
 
-    // Schedule next batch
-    if (global.current_index < array_length(global.tune_events)) {
-        var next_time = global.tune_events[global.current_index].time;
-        var delta = next_time - event_time; // relative gap
-        show_debug_message("Scheduling next event. Next_time=" + string(next_time)
-            + ", event_time=" + string(event_time)
-            + ", delta=" + string(delta) + " ms");
-
-        // Reconfigure existing timesource instead of recreating
-        time_source_reconfigure(
-            global.tune_timer,           // existing timesource
-            delta / 1000,                // new period in seconds
-            time_source_units_seconds,   // units
-            script_tune_callback,        // callback
-            [],                          // args
-            1,                           // repetitions
-            time_source_expire_after     // expiry
-        );
-    } else {
-        show_debug_message("All events processed. No further scheduling.");
-    }
+    time_source_start(global.tune_timer);
 }
+
+
+//function script_tune_callback() {
+//	//Track 
+//    //var actual_time = get_timer()/1000; //in microseconds
+//    var actual_time = current_time - global.tune_start_time; //in milliseconds
+////	show_debug_message("Event " + string(global.tune_index) + " fired.");
+////	show_debug_message("Actual Time: " + string(actual_time) + " ms.");
+////	show_debug_message(string(current_time - global.tune_start_time));
+//    show_debug_message("Callback fired. Current index = " + string(global.tune_index) 
+//        + ", event_time = " + string(global.tune_events[global.tune_index].time) 
+//        + ", current_time = " + string(actual_time));	
+//
+//	// Handle the fired event
+//	
+//	//Write to the event log
+//		//Future function
+//	
+//	//Play MIDI note
+//        if (global.tune_events[global.tune_index].type == ev_midi) {
+//            var status = NoteOnEvent + global.tune_events[global.tune_index].channel;
+//            midi_output_message_send_short(global.midi_output_device, status, global.tune_events[global.tune_index].note, global.tune_events[global.tune_index].velocity);
+//            show_debug_message("Sent MIDI: status=" + string(status)
+//                + ", note=" + string(global.tune_events[global.tune_index].note)
+//                + ", velocity=" + string(global.tune_events[global.tune_index].velocity));
+//        }
+//    
+//	//Write to the beam drawing array
+//		//Future function
+//	
+//	//Write to the Current_Note window
+//	obj_currentnote_field_1.field_contents = string(global.tune_events[global.tune_index].note);
+//	
+//	// Advance
+//    global.tune_index++;
+//
+//    // If more events, reconfigure and restart
+//    if (global.tune_index < array_length(global.tune_events)) {
+//        var next_ms   = global.tune_events[global.tune_index].time;
+//        var next_secs = next_ms / 1000;
+//
+//        time_source_reconfigure(
+//            global.tune_timer,
+//            next_secs,
+//            time_source_units_seconds,
+//            script_tune_callback,
+//            [],
+//            1,
+//            time_source_expire_after
+//        );
+//        time_source_start(global.tune_timer);
+//
+//	//Else end the tune	
+//    } else {
+//        // Optional: stop or leave as-is
+//        time_source_stop(global.tune_timer);
+//        show_debug_message("Tune finished.");
+//    }
+//}
+//
+//
+//function script_tune_callback_alt() {
+//    
+//    // See if the current event index is > the number of events.
+//    if (global.current_index >= array_length(global.tune_events)) {
+//        show_debug_message("Callback fired but no more events to process.");
+//        return;
+//    }
+//	
+//	//This part may not be working.It is showing the time of the current event. 
+//    var event_time = global.tune_events[global.tune_index].time;
+//    show_debug_message("Callback fired. Current index = " + string(global.current_index) 
+//        + ", event_time = " + string(event_time) 
+//        + ", current_time = " + string(current_time-global.tune_start_time));
+//
+// //   // Process all events at or before this timestamp
+// //   while (global.tune_index < array_length(global.tune_events)
+// //       && global.tune_events[global.tune_index].time <= event_time) {
+//        
+//        var ev = global.tune_events[global.current_index];
+//        show_debug_message("Processing event at index " + string(global.tune_index)
+//            + ": type=" + string(ev.type)
+//            + ", channel=" + string(ev.channel)
+//            + ", note=" + string(ev.note)
+//            + ", velocity=" + string(ev.velocity));
+//
+//        // MIDI playback only for now
+//        if (ev.type == ev_midi) {
+//            var status = NoteOnEvent + ev.channel;
+//            midi_output_message_send_short(global.midi_output_device, status, ev.note, ev.velocity);
+//            show_debug_message("Sent MIDI: status=" + string(status)
+//                + ", note=" + string(ev.note)
+//                + ", velocity=" + string(ev.velocity));
+//        }
+//        global.current_index++;
+//    
+//
+//    // Schedule next batch
+//    if (global.current_index < array_length(global.tune_events)) {
+//        var next_time = global.tune_events[global.current_index].time;
+//        var delta = next_time - event_time; // relative gap
+//        show_debug_message("Scheduling next event. Next_time=" + string(next_time)
+//            + ", event_time=" + string(event_time)
+//            + ", delta=" + string(delta) + " ms");
+//
+//        // Reconfigure existing timesource instead of recreating
+//        time_source_reconfigure(
+//            global.tune_timer,           // existing timesource
+//            delta / 1000,                // new period in seconds
+//            time_source_units_seconds,   // units
+//            script_tune_callback,        // callback
+//            [],                          // args
+//            1,                           // repetitions
+//            time_source_expire_after     // expiry
+//        );
+//    } else {
+//        show_debug_message("All events processed. No further scheduling.");
+//    }
+//}
 
 
 ///AI suggested tune
