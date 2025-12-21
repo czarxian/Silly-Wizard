@@ -5,7 +5,8 @@
 global.tune = [];
 
 
-global.tune[1] = [
+global.tune[1] =  {
+    events: [
     { time: 250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
     { time: 300, type: ev_midi, channel: 0, note: 60, velocity: 100 },
 	{ time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
@@ -16,9 +17,24 @@ global.tune[1] = [
     { time: 3500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
 	{ time: 4500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
     { time: 5500, type: ev_midi, channel: 0, note: 60, velocity: 100 }	
-];
+],     
+	metronome: {
+        enabled: true,
+        bpm: 120,
+        beats_per_bar: 4,
+        subdivision: "eighth",
+        accent_pattern: [1],
+        accent_note: 80,
+        normal_note: 75,
+        click_duration: 0.05,
+		channel: 9,
+		velocity: 100
 
-global.tune[2] = [
+    }
+};
+
+global.tune[2] =  {
+    events: [
     { time: 250, type: ev_midi, channel: 0, note: 55, velocity: 90 },
     { time: 250, type: ev_midi, channel: 0, note: 57, velocity: 90 },
 	{ time: 500, type: ev_midi, channel: 0, note: 59, velocity: 90 },	
@@ -32,22 +48,54 @@ global.tune[2] = [
 	{ time: 250, type: ev_midi, channel: 0, note: 57, velocity: 90 },
 	{ time: 250, type: ev_midi, channel: 0, note: 55, velocity: 20 },
 	{ time: 125, type: ev_midi, channel: 0, note: 59, velocity: 90 }
-];
+	],     
+	metronome: {
+        enabled: true,
+        bpm: 120,
+        beats_per_bar: 4,
+        subdivision: "eighth",
+        accent_pattern: [1],
+        accent_note: 80,
+        normal_note: 75,
+        click_duration: 0.05,
+		channel: 9,
+		velocity: 100
 
-global.tune[3] = [
-    { time: 250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-    { time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-	{ time: 750, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-    { time: 1000, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-	{ time: 1250, type: ev_midi, channel: 0, note: 67, velocity: 100 },
-    { time: 1500, type: ev_midi, channel: 0, note: 67, velocity: 100 },
-	{ time: 1750, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-    { time: 2000, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-	{ time: 2250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-    { time: 2500, type: ev_midi, channel: 0, note: 60, velocity: 100 }	
-];
+    }
+};
 
-global.tune[4] = [
+global.tune[3] = {
+    events: [
+        { time: 250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+        { time: 500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+        { time: 750, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+        { time: 1000, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+        { time: 1250, type: ev_midi, channel: 0, note: 67, velocity: 100 },
+        { time: 1500, type: ev_midi, channel: 0, note: 67, velocity: 100 },
+        { time: 1750, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+        { time: 2000, type: ev_midi, channel: 0, note: 64, velocity: 100 },
+        { time: 2250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
+        { time: 2500, type: ev_midi, channel: 0, note: 60, velocity: 100 }
+    ],
+
+    metronome: {
+        enabled: true,
+        bpm: 240,
+        beats_per_bar: 4,
+        subdivision: "eighth",
+        accent_pattern: [1],
+        accent_note: 80,
+        normal_note: 75,
+        click_duration: 0.05,
+		channel: 9,
+		velocity: 100
+
+    }
+};
+
+
+global.tune[4] =  {
+    events: [
     // ---- BAR 1 ----
     { time: 0,    type: ev_midi, channel: 9, note: 42, velocity: 100 }, // HH beat 1
     { time: 0,    type: ev_midi, channel: 9, note: 36, velocity: 110 }, // Kick
@@ -99,9 +147,25 @@ global.tune[4] = [
 
     { time: 7500, type: ev_midi, channel: 9, note: 42, velocity: 100 },
     { time: 7500, type: ev_midi, channel: 9, note: 38, velocity: 110 }
-];
+],
+metronome: {
+        enabled: true,
+        bpm: 120,
+        beats_per_bar: 4,
+        subdivision: "eighth",
+        accent_pattern: [1],
+        accent_note: 80,
+        normal_note: 75,
+        click_duration: 0.05,
+		channel: 9,
+		velocity: 100
 
-global.tune[5] = [
+    }
+}
+;
+
+global.tune[5] =  {
+    events: [
     // ---- BAR 1 ----
     // Hi-hats every 250ms
     { time: 0,    type: ev_midi, channel: 9, note: 42, velocity: 90 },	    
@@ -157,22 +221,22 @@ global.tune[5] = [
     { time: 7250, type: ev_midi, channel: 9, note: 42, velocity: 90 },
     { time: 7500, type: ev_midi, channel: 9, note: 42, velocity: 90 },
     { time: 7750, type: ev_midi, channel: 9, note: 42, velocity: 90 },
+	],
+	metronome: {
+        enabled: true,
+        bpm: 120,
+        beats_per_bar: 4,
+        subdivision: "eighth",
+        accent_pattern: [1],
+        accent_note: 80,
+        normal_note: 75,
+        click_duration: 0.05,
+		channel: 9,
+		velocity: 100
 
-//    { time: 6000, type: ev_midi, channel: 9, note: 36, velocity: 100 },
-//    { time: 6500, type: ev_midi, channel: 9, note: 38, velocity: 110 },
-//    { time: 7000, type: ev_midi, channel: 9, note: 36, velocity: 125 },
-//    { time: 7500, type: ev_midi, channel: 9, note: 38, velocity: 110 }
-];
+		}
+	};
+	
 
-tune.metronome = {
-    enabled: true,
-    bpm: 72,
-    beats_per_bar: 4,
-    subdivision: "eighth",   // "quarter", "dotcut", "cutdot", etc.
-    accent_pattern: [1],     // or [1,3]
-    accent_note: 80,
-    normal_note: 75,
-    click_duration: 0.05
-};
 
 

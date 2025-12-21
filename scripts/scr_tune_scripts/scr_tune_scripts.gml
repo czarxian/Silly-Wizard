@@ -80,20 +80,23 @@ function script_tune_callback() {
 //////Metronome//////
 function tune_generate_metronome(_tune)
 {
-    if (!_tune.metronome.enabled) return [];
+    if (!is_undefined(_tune.metronome) && !_tune.metronome.enabled) {
+        return [];
+    }
+
+    if (is_undefined(_tune.metronome)) {
+        return [];
+    }
 
     var settings = _tune.metronome;
     var events = [];
 
-    var bpm = settings.bpm;
+    var bpm          = settings.bpm;
     var beats_per_bar = settings.beats_per_bar;
-    var seconds_per_beat = 60 / bpm;
+    var ms_per_beat  = 60000 / bpm; // ms, not seconds
 
-    // Build one bar pattern
-    var bar_pattern = tune_metronome_build_pattern(seconds_per_beat, settings.subdivision);
-
-    // Determine tune length
-    var tune_length = tune_get_total_seconds(_tune);
+    var bar_pattern = tune_metronome_build_pattern(ms_per_beat, settings.subdivision);
+    var tune_length = tune_get_total_ms(_tune);
 
     var t = 0;
     while (t < tune_length)
@@ -103,21 +106,25 @@ function tune_generate_metronome(_tune)
             var p = bar_pattern[i];
             var click_time = t + p.time;
 
-            var click_note = (p.accent)
-                ? settings.accent_note
-                : settings.normal_note;
+            var note = p.accent ? settings.accent_note : settings.normal_note;
 
-            array_push(events, { time: click_time, midi: click_note, on: true });
-            array_push(events, { time: click_time + settings.click_duration, midi: click_note, on: false });
+            array_push(events, {
+                time:     click_time,
+                type:     ev_midi,
+                channel:  settings.channel,
+                note:     note,
+                velocity: settings.velocity
+            });
         }
 
-        t += beats_per_bar * seconds_per_beat;
+        t += beats_per_bar * ms_per_beat;
     }
 
     return events;
 }
 
-function tune_metronome_build_pattern(_spb, _subdivision)
+
+function tune_metronome_build_pattern(_mpb, _subdivision)
 {
     var pattern = [];
 
@@ -129,24 +136,29 @@ function tune_metronome_build_pattern(_spb, _subdivision)
 
         case "eighth":
             array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _spb * 0.5, accent: false });
+            array_push(pattern, { time: _mpb * 0.5, accent: false });
             break;
 
         case "dotcut":
             array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _spb * 0.666, accent: false });
+            array_push(pattern, { time: _mpb * 0.666, accent: false });
             break;
 
         case "cutdot":
             array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _spb * 0.333, accent: false });
+            array_push(pattern, { time: _mpb * 0.333, accent: false });
+            break;
+
+        default:
+            array_push(pattern, { time: 0, accent: true });
             break;
     }
 
     return pattern;
 }
 
-function tune_get_total_seconds(_tune)
+
+function tune_get_total_ms(_tune)
 {
     var events = _tune.events;
     var last_time = 0;
@@ -158,4 +170,29 @@ function tune_get_total_seconds(_tune)
     }
 
     return last_time;
+}
+
+
+function tune_build_events(_tune)
+{
+    // Base events (manual)
+    var base = _tune.events;
+    var met  = tune_generate_metronome(_tune);
+
+    // Merge arrays
+    var total = array_length(base) + array_length(met);
+    var merged = array_create(total);
+
+    var i = 0;
+    for (var j = 0; j < array_length(base); j++) {
+        merged[i++] = base[j];
+    }
+    for (var j = 0; j < array_length(met); j++) {
+        merged[i++] = met[j];
+    }
+
+    // Sort by time
+    array_sort(merged, function(a, b) { return a.time - b.time; });
+
+    return merged;
 }

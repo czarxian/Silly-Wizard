@@ -246,13 +246,12 @@
 		show_debug_message("manual MIDI started");
 		show_debug_message("input = " + string(global.midi_input_device));
 		show_debug_message("tune start " + string(global.tune_selection));
-		tune_start(global.tune[global.tune_selection]);
+		//tune_start(global.tune[global.tune_selection]);
+		
+		var tune = global.tune[global.tune_selection];
+		var final_events = tune_build_events(tune);
+		tune_start(final_events);
 
-		//
-		// Start playback at the first part, first event
-		//time_source_start(global.tune_timer);
-		//global.tune_start_time = current_time;
-		//show_debug_message(string(current_time - global.tune_start_time));
 	}
 
 
