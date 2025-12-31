@@ -28,6 +28,7 @@
     {"name":"obj_field_base","order":2,"path":"objects/obj_field_base/obj_field_base.yy",},
     {"name":"obj_game_controller","order":4,"path":"objects/obj_game_controller/obj_game_controller.yy",},
     {"name":"obj_player","order":5,"path":"objects/obj_player/obj_player.yy",},
+    {"name":"obj_tune","order":6,"path":"objects/obj_tune/obj_tune.yy",},
     {"name":"obj_UI_parent","order":5,"path":"objects/obj_UI_parent/obj_UI_parent.yy",},
     {"name":"Room_play","order":1,"path":"rooms/Room_play/Room_play.yy",},
     {"name":"RoomUI","order":13,"path":"roomui/RoomUI/RoomUI.yy",},

@@ -4,32 +4,101 @@
 
 global.tune = [];
 
-
-global.tune[1] =  {
+global.tune[1] = {
     events: [
-    { time: 250, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-    { time: 300, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-	{ time: 500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-    { time: 750, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-	{ time: 1000, type: ev_midi, channel: 0, note: 67, velocity: 100 },
-    { time: 1500, type: ev_midi, channel: 0, note: 67, velocity: 100 },
-	{ time: 2500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-    { time: 3500, type: ev_midi, channel: 0, note: 64, velocity: 100 },
-	{ time: 4500, type: ev_midi, channel: 0, note: 60, velocity: 100 },
-    { time: 5500, type: ev_midi, channel: 0, note: 60, velocity: 100 }	
-],     
-	metronome: {
+        // 1
+        { time: 0,    type: ev_midi, channel: 0, note: 64, velocity: 100 },   // e
+
+        // 2
+        //{ time: 500,  type: ev_structure, value: "bar" },
+
+        // 3
+        //{ time: 500,  type: ev_embellish, value: "{g}" },
+
+        // 4
+        { time: 500,  type: ev_midi, channel: 0, note: 57, velocity: 100 },   // A (high A)
+
+        // 5
+        //{ time: 1500, type: ev_embellish, value: "{GdGe}" },
+
+        // 6
+        { time: 1500, type: ev_midi, channel: 0, note: 57, velocity: 100 },   // A
+
+        // 7
+        { time: 2250, type: ev_midi, channel: 0, note: 59, velocity: 100 },   // B
+
+        // 8
+        //{ time: 2500, type: ev_embellish, value: "{gcd}" },
+
+        // 9
+        { time: 2500, type: ev_midi, channel: 0, note: 61, velocity: 100 },   // c
+
+        // 10
+        //{ time: 3000, type: ev_embellish, value: "{e}" },
+
+        // 11
+        { time: 3000, type: ev_midi, channel: 0, note: 57, velocity: 100 },   // A
+
+        // 12
+        //{ time: 3500, type: ev_embellish, value: "{gcd}" },
+
+        // 13
+        { time: 3500, type: ev_midi, channel: 0, note: 61, velocity: 100 },   // c
+
+        // 14
+        { time: 4000, type: ev_midi, channel: 0, note: 64, velocity: 100 },   // e
+
+        // 15
+        //{ time: 4500, type: ev_structure, value: "bar" },
+
+        // 16
+        //{ time: 4500, type: ev_embellish, value: "{ag}" },
+
+        // 17
+        { time: 4500, type: ev_midi, channel: 0, note: 69, velocity: 100 },   // a (high A)
+
+        // 18
+        //{ time: 5500, type: ev_embellish, value: "g" },
+
+        // 19
+        { time: 5500, type: ev_midi, channel: 0, note: 69, velocity: 100 },   // a
+
+        // 20
+        //{ time: 6500, type: ev_embellish, value: "{GdG}" },
+
+        // 21
+        { time: 6500, type: ev_midi, channel: 0, note: 69, velocity: 100 },   // a
+
+        // 22
+        { time: 7000, type: ev_midi, channel: 0, note: 64, velocity: 100 },   // e
+
+        // 23
+        //{ time: 7500, type: ev_embellish, value: "{gcd}" },
+
+        // 24
+        { time: 7500, type: ev_midi, channel: 0, note: 61, velocity: 100 },   // c
+
+        // 25
+        //{ time: 8000, type: ev_embellish, value: "e" },
+
+        // 26
+        { time: 8000, type: ev_midi, channel: 0, note: 57, velocity: 100 },   // a
+
+        // 27
+        //{ time: 8500, type: ev_structure, value: "bar" }
+    ],
+
+    metronome: {
         enabled: true,
-        bpm: 120,
+        bpm: 60,
         beats_per_bar: 4,
-        subdivision: "eighth",
+        subdivision: "quarter",
         accent_pattern: [1],
         accent_note: 80,
         normal_note: 75,
         click_duration: 0.05,
-		channel: 9,
-		velocity: 100
-
+        channel: 9,
+        velocity: 100
     }
 };
 

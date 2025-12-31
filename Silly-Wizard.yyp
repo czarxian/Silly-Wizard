@@ -54,6 +54,7 @@
     {"id":{"name":"obj_field_base","path":"objects/obj_field_base/obj_field_base.yy",},},
     {"id":{"name":"obj_game_controller","path":"objects/obj_game_controller/obj_game_controller.yy",},},
     {"id":{"name":"obj_player","path":"objects/obj_player/obj_player.yy",},},
+    {"id":{"name":"obj_tune","path":"objects/obj_tune/obj_tune.yy",},},
     {"id":{"name":"obj_ui_controller","path":"objects/obj_ui_controller/obj_ui_controller.yy",},},
     {"id":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},},
     {"id":{"name":"Room_main_menu","path":"rooms/Room_main_menu/Room_main_menu.yy",},},
