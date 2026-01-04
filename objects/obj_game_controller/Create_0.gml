@@ -1,9 +1,12 @@
 //Create Globals
-	scr_tune_library();
+	old_scr_tune_library();
 
 //Global ID References
 	global.ID_game_handler = id;
 	global.metronome=noone;
+	global.ID_player=noone;
+	global.tune_picker=noone;
+	global.tune=noone;
 
 //Game State
 	global.game_state="menu";

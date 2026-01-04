@@ -31,7 +31,7 @@ if (!variable_global_exists("ui_fields")) {
 	global.tune_selection = -1;
 	global.tune_library = array_create(5);
 	global.tune_library[0]="Tune Not Set";
-	global.tune_library[1]="Tune 1";
+	global.tune_library[1]="ScotlandTheBrave.csv";
 	global.tune_library[2]="Tune 2";
 	global.tune_library[3]="Tune 3";
 	global.tune_library[4]="Tune 4";

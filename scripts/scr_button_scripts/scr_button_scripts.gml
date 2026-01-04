@@ -232,10 +232,27 @@
 	//Set the choices that were made in the settings window. 
 		show_debug_message("I clicked " + string(button_ID));
 		show_debug_message("Tune selected: " + string(global.tune_selection));
-		scr_open_window(self.ui_layer_num,true);
-		//global.tune_events = global.tune[global.tune_selection] //tune_selection is changed by the tune checkboxes...
-		//global.tune_index = 0;
-		//layer_set_visible(self.button_label, 0); // Toggle visibility closing the window
+		
+		
+		var picker = instance_find(obj_tune_picker, 0);
+
+		if (picker != noone && picker.selected_index >= 0) {
+		    var filename = "tunes/" + picker.library.tunes[picker.selected_index].filename;
+		    if (scr_tune_load_json(filename)) {
+		// Proceed
+		    }
+		}
+				
+		// tune_selection_ok_button pressed
+		//var tune_file = "ScotlandTheBrave.json"; // temporary hard-coded path
+		//
+		//if (scr_tune_load_json(tune_file))	{
+		//	show_debug_message("Tune Loaded !!!");
+		//	layer_set_visible(self.button_label, 0); // Toggle window visibility
+		//}	else	{
+		//    show_debug_message("Failed to load tune.");
+		//}
+		
 	}	
 	
 	//CASE 11
