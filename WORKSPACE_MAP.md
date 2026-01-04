@@ -27,6 +27,86 @@ I am using GameMakers UI Layers and flex panels for much of the UI. I am using G
   - `extensions/` — third-party integrations (e.g., `GiavappsMIDI`)
 
 ---
+**Core controller objects (high‑level architecture)**
+These objects form the backbone of runtime behavior. They coordinate tune loading, playback, UI state, and MIDI I/O.
+`obj_tune` — Tune data container (model)
+- Created in Room_play (or globally if needed).
+- Registers itself as global.tune in Create event.
+- Holds:
+- events[] — canonical event list loaded from JSON
+- tune_metadata — optional metadata struct
+- event_count, is_loaded, filename
+- Does not handle playback logic; it is a pure data model.
+`obj_player` — Playback engine (controller)
+- Reads from global.tune.events.
+- Maintains playback state:
+- current time
+- next event index
+- tempo / metronome settings
+- MIDI channel assignments
+- Calls script_tune_callback() to send MIDI messages.
+- Responsible for:
+- advancing through events
+- triggering note_on / note_off
+- updating UI elements (score, piano roll, etc.)
+`obj_UI_parent` — Base class for UI elements
+- Provides shared behavior for:
+- mouse interaction
+- focus
+- enabling/disabling
+- layout helpers
+- All UI components inherit from this.
+`obj_btn_ (buttons)` — UI interaction controllers
+- Each button instance calls into scr_button_scripts.
+- Buttons do not contain logic; they dispatch actions.
+`obj_field_base` — Text/label/field controller
+- Used for displaying tune names, settings values, etc.
+- Works with flex panels for layout.
+`obj_tune_row` — Tune selection row controller
+- Contains:
+- a radio button
+- a text field
+- Stores:
+- tune_filename
+- tune_title
+- Used by the tune picker window.
+
+**UI architecture (UI layers + flex panels)**
+`UI Layers`
+GameMaker’s UI layers are used as “windows” or “panels” that can be shown/hidden:
+- main_menu_layer
+- settings_window_layer
+- tune_window_layer
+- (future) metronome_window_layer, parts_window_layer, etc.
+Each layer contains:
+- background/window sprites
+- flex panels
+- UI objects (buttons, fields, rows)
+Visibility is controlled by button scripts.
+`Flex Panels`
+Flex panels are the layout engine. They:
+- auto‑position children
+- support vertical/horizontal stacking
+- allow dynamic resizing
+- make it easy to add/remove rows later (e.g., scrolling tune list)
+Each flex panel is an object instance with:
+- a list of child UI objects
+- layout rules (direction, spacing, padding)
+- optional scroll behavior (future)
+`UI Script Flow`
+All UI actions route through:
+scripts/scr_button_scripts/
+
+This script:
+- identifies which button was pressed
+- performs the appropriate action
+- toggles UI layers
+- calls tune loader scripts
+- updates global settings
+This keeps UI logic centralized and prevents duplication.
+
+---
+
 
 ## Tune subsystem (primary focus) 🔧
 - **Datafiles:** `datafiles/tunes/` contains tune JSON and CSV files (e.g., `ScotlandTheBrave.json`).
