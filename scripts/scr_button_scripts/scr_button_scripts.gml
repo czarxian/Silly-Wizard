@@ -63,7 +63,10 @@
 			self.image_index=3;
 			show_debug_message("input: " + string(target_name));
 			variable_global_set(target_name, self.button_click_value);
-			if (array_length(global.tune_library)>global.tune_selection)	{
+			// Also notify the picker instance of the selection
+			var picker = instance_find(obj_tune_picker, 0);
+			if (picker != noone) picker.selected_index = self.button_click_value;
+			if (array_length(global.tune_library)>global.tune_selection) {
 				show_debug_message("Should set the gameinfo tune");
 				obj_gameinfo_win_title.field_contents = string(global.tune_library[global.tune_selection]);
 			} else { show_debug_message("Should set the gameinfo tune"); }

@@ -33,6 +33,7 @@
   "IncludedFiles":[
     {"$GMIncludedFile":"","%Name":"ScotlandTheBrave.csv","CopyToMask":-1,"filePath":"datafiles/tunes","name":"ScotlandTheBrave.csv","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"ScotlandTheBrave.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"ScotlandTheBrave.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"tune_library.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"tune_library.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
   ],
   "isEcma":false,
   "LibraryEmitters":[],
