@@ -1,174 +1,174 @@
 # WORKSPACE_MAP.md
 
-**Purpose:** Create a short, navigable map of the project to help new contributors (or me) understand architecture, responsibilities and where to look for functionality.
+**Purpose:** Short, navigable map of the project to help contributors understand the current architecture and where to look for functionality.
 
 ---
 
-## Project overview ✅
+## Project overview (current state)
 
-- **Project goals:** This project is a GameMaker project. It will process bagpipe tunes while a player provides MIDI input to play along with the tunes. The tunes will be loaded from JSON files, merged with multiple parts (harmonies, drums, and backing tracks). The play will create log which will be used to assess the performance. The events will trigger MIDI output (for audio), a visual music score, bars in the style of a piano roll for gameplay, and an event log to allow analysis. The ultimate thing that will be played will combine a tune, multiple parts (drums, harmonies), a metronome with configurable click patterns, a lead in, a leading drum roll and possibly others.
+- **What it does today:** The game loads tune data (JSON/CSV) and plays scheduled MIDI events. Playback events are sent via Giavapps MIDI. The UI uses GameMaker layers and a set of UI objects (buttons, fields) to control playback and settings.
 
-Tunes will come from ABC. I have an Excel sheet which imports the ABC, allows human editing, and creates a JSON. The structure is event driven. Each note is an event, embellishments are events. Some structural things are events. These will be used to create a MIDI style event roster that would include Note_on and Note_off, etc.    
+- **Current workflow:** The game starts in `Room_main_menu` with `main_menu_layer` visible. From there:
+  - **Play** navigates to `Room_play` and starts playback.
+  - **Settings** lets the user pick MIDI input/output devices (via `scr_button_scripts` and `scr_MIDI` helpers).
+  - **Tune** opens the tune picker; visible rows are populated from `global.tune_library` and the selection is stored in `global.tune_selection`. Pressing the tune OK button triggers `scr_tune_load_json()` and the build → start playback flow.
 
-I am using GameMakers UI Layers and flex panels for much of the UI. I am using Giavapps Midi 2 for the MIDI processing. This will work with a MIDI chanter such as the Blair Digital Chanter. I am new to programming and building this one component at a time.   
-
-- **Project workflow:** The game starts in Room_main_menu, with the main_menu_layer visible. Buttons open settings (by making setting_window_layer visible), tune selection (making tune_window_layer visible), Exit the Game, or go to the Room_play. 
- - Settings currently allows choosing a MIDI in and MIDI out. It will be expanded. 
- - Tune currently has a fixed number of rows, each with a radio button and field. The field global.tune_library poplates the fields and the selection is saved as a number in global.tune_selection. 
- 
- This is a placeholder for a system which loads tune metadata and lets the user select a tune, scrollng or tabbing through the window. Selecting OK should load the tune into the tune object. 
-
-- **Project root files:** `Silly-Wizard.yyp`, `Silly-Wizard.resource_order` (GameMaker project and loading order)
+- **Project root files:** `Silly-Wizard.yyp`, `Silly-Wizard.resource_order`
 - **Major folders:**
   - `scripts/` — game logic scripts (UI, tune loading, midi, etc.)
   - `objects/` — GameMaker objects with events and instance scripts
-  - `roomui/` — UI layouts and layers (the in-game windows)
-  - `datafiles/` — external content (e.g., `tunes/` JSON/CSV files)
-  - `extensions/` — third-party integrations (e.g., `GiavappsMIDI`)
-
----
-**Core controller objects (high‑level architecture)**
-These objects form the backbone of runtime behavior. They coordinate tune loading, playback, UI state, and MIDI I/O.
-`obj_tune` — Tune data container (model)
-- Created in Room_play (or globally if needed).
-- Registers itself as global.tune in Create event.
-- Holds:
-- events[] — canonical event list loaded from JSON
-- tune_metadata — optional metadata struct
-- event_count, is_loaded, filename
-- Does not handle playback logic; it is a pure data model.
-`obj_player` — Playback engine (controller)
-- Reads from global.tune.events.
-- Maintains playback state:
-- current time
-- next event index
-- tempo / metronome settings
-- MIDI channel assignments
-- Calls script_tune_callback() to send MIDI messages.
-- Responsible for:
-- advancing through events
-- triggering note_on / note_off
-- updating UI elements (score, piano roll, etc.)
-`obj_UI_parent` — Base class for UI elements
-- Provides shared behavior for:
-- mouse interaction
-- focus
-- enabling/disabling
-- layout helpers
-- All UI components inherit from this.
-`obj_btn_ (buttons)` — UI interaction controllers
-- Each button instance calls into scr_button_scripts.
-- Buttons do not contain logic; they dispatch actions.
-`obj_field_base` — Text/label/field controller
-- Used for displaying tune names, settings values, etc.
-- Works with flex panels for layout.
-`obj_tune_row` — Tune selection row controller
-- Contains:
-- a radio button
-- a text field
-- Stores:
-- tune_filename
-- tune_title
-- Used by the tune picker window.
-
-**UI architecture (UI layers + flex panels)**
-`UI Layers`
-GameMaker’s UI layers are used as “windows” or “panels” that can be shown/hidden:
-- main_menu_layer
-- settings_window_layer
-- tune_window_layer
-- (future) metronome_window_layer, parts_window_layer, etc.
-Each layer contains:
-- background/window sprites
-- flex panels
-- UI objects (buttons, fields, rows)
-Visibility is controlled by button scripts.
-`Flex Panels`
-Flex panels are the layout engine. They:
-- auto‑position children
-- support vertical/horizontal stacking
-- allow dynamic resizing
-- make it easy to add/remove rows later (e.g., scrolling tune list)
-Each flex panel is an object instance with:
-- a list of child UI objects
-- layout rules (direction, spacing, padding)
-- optional scroll behavior (future)
-`UI Script Flow`
-All UI actions route through:
-scripts/scr_button_scripts/
-
-This script:
-- identifies which button was pressed
-- performs the appropriate action
-- toggles UI layers
-- calls tune loader scripts
-- updates global settings
-This keeps UI logic centralized and prevents duplication.
+  - `roomui/` — UI layouts and layers (in-game windows)
+  - `datafiles/` — external content (`tunes/` JSON/CSV files)
+  - `extensions/` — third-party integrations (`GiavappsMIDI`)
 
 ---
 
+## Key scripts (current responsibilities)
 
-## Tune subsystem (primary focus) 🔧
-- **Datafiles:** `datafiles/tunes/` contains tune JSON and CSV files (e.g., `ScotlandTheBrave.json`).
-- **Library loader:** `scripts/scr_tune_library/scr_load_tune_library()` loads `tunes/tune_library.json` and exposes `global.tune_library`.
-- **Tune loader:** `scripts/scr_tune_load/scr_tune_load_json(_filename)` reads a JSON tune file, validates fields (`tune` and `events`), and populates `obj_tune` instance fields (`tune_metadata`, `events`, `is_loaded`, etc.).
-- **Playback & events:** `scripts/scr_tune_scripts/` contains `tune_build_events`, `tune_generate_metronome`, `tune_start` and the time-source callback `script_tune_callback` which sends MIDI via `midi_output_message_send_short`.
-- **UI integration:** `roomui/RoomUI/` contains `tune_window_layer` and instances like `obj_tune_row`, `obj_tune_checkbox_*`, `obj_tune_ok_button` and `obj_button_tune`.
-- **UI scripts:** `scripts/scr_button_scripts/scr_tune_OK()` wires the picker -> `scr_tune_load_json()` -> `tune_build_events()` -> `tune_start()` flow.
-- **Object state:** `objects/obj_tune/Create_0.gml` initializes `global.tune` and storage fields used by the loader and playback.
-
----
-
-## Play array / preprocessing ▶️
-- **Purpose:** Convert canonical JSON (`tune` + `events`), metadata, and user preferences into a runtime-efficient 2D "play array" used directly by playback and UI systems. This preprocess step expands ornaments, applies tempo/part/metronome selections, applies user timing preferences (gracenote/embellishment timing, swing/humanize), precalculates durations and note-off events, and sorts/indexes events for very fast iteration during playback and rendering.
-
-- **Inputs:** `tune` metadata, `events[]` from the JSON, metronome options, selected parts, and user preferences (grace note timing, embellishment timing, humanize offsets, swing settings).
-
-- **Processing steps (high level):**
-  - Expand embellishments/ornaments into discrete events and map `start_time_ms` → `time` (ms) if necessary.
-  - Apply tempo adjustments, compute real-time timestamps, and generate metronome events based on metronome settings.
-  - Merge events from all parts and generated metronome events into a single working array.
-  - Pre-calculate note-off events, durations, and any display-related values (bar/beat indices, piano-roll columns).
-  - Apply user preferences (e.g., gracenote offsets, embellishment alignment, swing/humanize jitter).
-  - Sort final events by `time` and build a 2D indexing structure (e.g., tracks × time-slices or time-indexed buckets) optimized for the playback loop.
-
-- **Output / schema suggestion:** either return a structured array from a script (e.g., `scr_build_play_array(_tune, _options)`) or store as `global.play_array`. Each play-event struct should include:
-  - `time` (ms), `type` (numeric), `channel`, `note`, `velocity`, `duration_ms`, `source_part`, `is_embellishment`, `orig_event_id`, plus any precomputed UI values.
-  - Top-level structure: array of tracks or a compact time-sorted array with optional indices for quick seeking.
-
-- **Implementation location:** suggested new script(s) under `scripts/scr_tune_preprocess/` (e.g., `scr_build_play_array`, `scr_validate_tune`, `scr_expand_ornaments`). Also integrate validation into `scr_tune_load_json` so the tune is normalized on load.
-
-- **Tests & QA:** include a `Room_tune_test` that exercises different combinations (metronome on/off, multiple parts, embellishments, tempo changes) and compares expected vs. computed timings.
-
-- **Why this matters:** Preprocessing into a play array ensures playback and UI loops execute with minimal per-frame computation, improving reliability and enabling future features such as precise scoring and real-time analysis.
+- **`scripts/scr_button_scripts/`** — UI button dispatcher and handlers (window toggles, settings changes, tune OK, start play).
+- **`scripts/scr_MIDI/`** — MIDI device scanning/opening and message utilities; processes input messages and provides helper functions for playback.
+- **`scripts/scr_tune_library/`** — Loads `tunes/tune_library.json` and populates tune picker rows.
+- **`scripts/scr_tune_load/`** — Loads and validates tune JSON files into the `obj_tune` instance.
+- **`scripts/scr_tune_scripts/`** — Merges tune events and metronome events, starts playback using a `time_source`, and implements the playback callback that sends MIDI.
+- **`scripts/scr_UI_scripts/`** — UI layer helpers (`GetLayerNameFromIndex`, `scr_update_fields`, `scr_ui_refresh`).
 
 ---
 
-## MIDI & extensions ⚙️
-- Extension: `extensions/GiavappsMIDI/` provides MIDI utilities used by playback scripts.
-- Global MIDI device variable: `global.midi_output_device` used by `script_tune_callback`.
+## Core controller objects (current state)
+
+- **`obj_game_controller`**
+  - Location: `objects/obj_game_controller/Create_0.gml`
+  - Role: Initializes global IDs and MIDI/game defaults (calls `old_scr_tune_library()` on create). Holds `global.*` vars used across the app.
+
+- **`obj_player`**
+  - Location: `objects/obj_player/Create_0.gml`
+  - Role: Tracks live player input state (note on/off arrays, current note) used by UI and logging.
+
+- **`obj_tune`**
+  - Location: `objects/obj_tune/Create_0.gml`
+  - Role: Data model instance for the currently loaded tune (`tune_metadata`, `events[]`, `event_count`, `filename`, `is_loaded`). Populated by `scr_tune_load_json()`.
+
+- **`obj_tune_picker`**
+  - Location: `objects/obj_tune_picker/Create_0.gml`
+  - Role: Tune picker UI controller; maintains `selected_index` and references the library used to populate rows.
+
+- **`obj_ui_controller`**
+  - Location: `objects/obj_ui_controller/Create_0.gml`
+  - Role: Registers UI layers, assets and fields (`global.ui_layer_names`, `global.ui_assets`, `global.ui_fields`) and holds basic tune library defaults used by the UI.
+
+> Short notes about ongoing improvements are tracked in `PROJECT_PLAN.md` (stable documentation and design proposals live there).
 
 ---
 
-## Other systems to note 🔎
-- **UI components:** `objects/obj_btn_*`, `objects/obj_field_base`, `objects/obj_UI_parent` - used for windows, labels, and interactivity.
-- **Main rooms:** `rooms/Room_main_menu` and `rooms/Room_play` hold primary game flow and room-specific instances.
+## UI architecture (current state)
+
+- **UI Layers:** `main_menu_layer`, `settings_window_layer`, `tune_window_layer` (each layer contains backgrounds, flex panels and instances such as buttons and fields).
+- **Flex panels:** Used for layout and row stacking in tune window and other panels.
+- **UI Script Flow:** `scripts/scr_button_scripts/` centralizes button actions and toggles windows; it calls `scr_ui_refresh()` / `scr_update_fields()` as needed.
 
 ---
 
-## Open questions & actionable TODOs ❓
-1. **Missing `tune_library.json`:** `scripts/scr_tune_library` expects `tunes/tune_library.json`, but `datafiles/tunes/` currently contains only `ScotlandTheBrave.json` and `ScotlandTheBrave.csv`.
-   - Action: add `tunes/tune_library.json` or add a generator script that builds it from `datafiles/tunes/` or the CSVs.
+## UI system details (how it works)
 
-2. **Add an example `tune_library.json` and docs for adding tunes:** include a minimal example and a short doc snippet describing required fields (`filename`, `title`, metadata convention).
+This section documents the concrete runtime UI architecture and how UI instances are configured and wired together.
 
-3. **Tests for tune loader/playback:** add unit/integration tests (or a manual test scene) for `scr_tune_load_json`, `tune_build_events`, `tune_start` and metronome generation.
+### Base UI objects
+- `obj_UI_parent` — Base class for all UI instances.
+  - Registers every instance in `global.ui_assets` during Create (stores pairs `[ui_num, id]` indexed by layer number). This allows `scr_ui_refresh()` to repair or re-link instances if IDs change.
+  - Stores `ui_name`, `ui_layer`, `ui_layer_num`, `ui_group`, `ui_num` and common visual properties (`ui_sprite`, `ui_sprite_frame`).
+- `obj_btn_base` — Button base object (inherits `obj_UI_parent`).
+  - Key properties: `button_ID`, `button_label`, `button_target`, `button_click_value`, `button_script_index`.
+  - Mouse click calls `scr_handle_button_click(self.button_script_index)` (see `scripts/scr_button_scripts/`) so the button's `button_script_index` drives which action runs. `button_target` and `button_click_value` are used by handlers (e.g., `scr_checkbox_click`, `scr_open_window`, or settings handlers).
+- `obj_field_base` — Field / text label (inherits `obj_UI_parent`).
+  - Key properties: `field_ID`, `field_target`, `field_value`, `field_contents`.
+  - `scr_update_fields(_layer)` reads `field_target` (string name or array) and updates `field_contents` from `field_value`.
 
-4. **MIDI device preferences & initialization:** the project uses `global.midi_output_device` (set via UI). Confirm desired persistence (save to settings file) and add a small doc describing how to select/scan output devices (`scripts/scr_MIDI/*`).
+### Registration & refresh
+- Instances are placed manually in the Room UI (`roomui/RoomUI/RoomUI.yy`). The Create event of `obj_UI_parent` registers each instance into `global.ui_assets[layer_num]` as `[ui_num, id]`.
+- `scr_ui_refresh(layer)` inspects `global.ui_assets[layer]` and if an ID is missing, it finds a matching `obj_UI_parent` with the same `ui_num` and re-links the pair.
 
-5. **Playback reliability:** consider edge-case handling (empty tune, missing events, malformed timestamp) and add defensive checks where appropriate (e.g., `tune_start` asserts non-empty event list).
+### Buttons & interactions
+- Buttons are fully configured in the Room UI editor by overriding properties on instances (see `RoomUI.yy` for examples). Typical configuration sets `button_script_index` and `button_click_value` (and sometimes `button_target`).
+- `scr_handle_button_click(index)` maps indices to high-level actions (open window, start play, save settings, etc.). Handlers use `self` (the button instance) to read `button_target` / `button_click_value` where needed.
+- Checkboxes are `obj_btn_check` + `scr_checkbox_click()` which sets global state (e.g., `global.tune_selection`) and unchecks other boxes as needed using `scr_uncheck_all()`.
 
-6. **Documentation depth:** confirm whether you want (a) this high-level map only, (b) per-file summaries (I can auto-generate), or (c) in-code docblocks/README per subsystem.
+### Fields & dynamic text
+- Fields use `field_target` to reference either a global array (like `tune_library`) or a global variable name (string). `scr_update_fields()` pulls the value and fills `field_contents` to change the visible label.
+- Fields also have `field_script_index` to allow scripted actions when interacted with.
+
+### Tune picker specifics (tune_window_layer)
+- The tune window contains six manual rows `fp_tune_row_1..fp_tune_row_6`. Each row contains:
+  - `obj_btn_check` instances (radio/checkbox) with `button_script_index` set to the checkbox handler and `button_click_value` equal to the row index (used to set `global.tune_selection`).
+  - `obj_field_base` instances with `field_target` set to `tune_library` and `field_value` set to the index; `scr_tune_picker_populate()` (in `scr_tune_library/`) updates the visible rows and associated text when a library is loaded.
+- The `obj_tune_ok_button` calls `scr_handle_button_click` with its `button_script_index` (mapped to `scr_tune_OK`) which loads the selected tune and initiates build→start playback flow.
+
+### Per-layer summaries (current content)
+Below are the actual UI layers and the important instances placed on each (based on `roomui/RoomUI/RoomUI.yy`). All instances are manually placed in the Room UI editor and configured by overriding object properties there.
+
+- `settings_window_layer` — Settings window
+  - Title: `fp_Title_text` (text "Settings").
+  - Close: `obj_settings_win_close_button` (instance of `obj_btn_winClose`, often with `button_ID = 3`).
+  - MIDI In row: `setting_Lbutton_1` (left arrow `obj_btn_fieldL`), `setting_field_1` (`obj_field_base`) — field for MIDI IN device.
+  - MIDI Out row: `setting_Lbutton_2`/`setting_Rbutton_2`, `setting_field_2` (`obj_field_base`) — field for MIDI OUT device.
+  - OK: `obj_setting_ok_button` (`obj_btn_main`) — typically configured to run the settings OK handler (`scr_settings_OK`).
+
+- `tune_window_layer` — Tune picker window
+  - Title: `fp_Title_text` (text "Tune Library").
+  - Close: `obj_tune_win_close_button` (`obj_btn_winClose`).
+  - Tune rows (1..6): each row has a checkbox and a field:
+    - `obj_tune_checkbox_1..obj_tune_checkbox_6` (instances of `obj_btn_check`) — configured with `button_script_index = 2` (checkbox handler), `button_target = global.tune_selection`, and `button_click_value = row index`.
+    - `obj_tune_field_1..obj_tune_field_6` (instances of `obj_field_base`) — set with `field_target = tune_library` and `field_value = row index`; populated at runtime by `scr_tune_picker_populate()`.
+  - OK: `obj_tune_ok_button` (`obj_btn_main`) — typically configured to `scr_tune_OK()` (loads the selected tune).
+
+- `gameinfo_window_layer` — Informational window
+  - Title field: `obj_gameinfo_win_title` (`obj_field_base`) — shows selected tune or status (default: "No tune selected").
+  - Back / OK buttons: `obj_gameinfo_back_button`, `obj_gameinfo_ok_button` (`obj_btn_main`) with appropriate `button_script_index` values for navigation.
+
+- `current_note_layer` — Current note display
+  - `obj_currentnote_field_1` (`obj_field_base`) — updated at runtime by `script_tune_callback()` to show the currently played note.
+
+- `main_menu_layer` — Main menu
+  - Buttons: `obj_button_play` (`obj_btn_main`, `button_script_index = 1`), `obj_button_settings` (`obj_btn_main`, `button_script_index = 3`, `button_target = settings_window_layer`), `obj_button_tune` (`obj_btn_main`, `button_script_index = 3`, `button_target = tune_window_layer`), plus exit/back buttons.
+
+> Note: For all UI instances the important configuration is done in the Room UI editor via overridden properties (e.g., `button_script_index`, `button_target`, `field_target`, `field_value`). `obj_UI_parent` registers each instance into `global.ui_assets` so scripts can refresh or re-link instances at runtime.
+
+
+---
+
+If you'd like, I can also:
+- Add a short example for how to configure a new UI instance (a checklist with the minimal overridden properties to set in `RoomUI`), or
+- Generate a per-object 
+---
+
+## Tune subsystem (current state)
+
+- **Datafiles:** `datafiles/tunes/` (e.g., `ScotlandTheBrave.json`, `ScotlandTheBrave.csv`).
+- **Library loader:** `scr_load_tune_library()` reads a tune library JSON (if present) and returns its parsed structure.
+- **Tune loader:** `scr_tune_load_json(_filename)` parses and validates tune JSON and stores it in the `obj_tune` instance.
+- **Playback:** `tune_build_events()` and `tune_start()` prepare and schedule events; `script_tune_callback()` sends MIDI events at runtime.
+- **UI integration:** `roomui/RoomUI/` provides the tune window and rows used by the picker; `scr_tune_picker_populate()` populates UI rows from the library.
+
+---
+
+## Playback preprocessing (note)
+- A playback preprocessing / "play array" design exists in `PROJECT_PLAN.md`. That file contains design notes and implementation suggestions for normalizing and optimizing event lists for runtime use.
+
+---
+
+## MIDI & extensions
+- `extensions/GiavappsMIDI/` provides MIDI utilities used by playback and input code.
+- MIDI device selection is exposed through the settings UI and tracked in global variables (e.g., `global.midi_input_device`, `global.midi_output_device`).
+
+---
+
+## Other systems
+- UI components live under `objects/obj_btn_*`, `objects/obj_field_base`, `objects/obj_UI_parent`.
+- Main rooms: `rooms/Room_main_menu`, `rooms/Room_play`.
+
+---
+
+## Known issues (current)
+- `tunes/tune_library.json` is expected by `scr_tune_library` but is not present in `datafiles/tunes/` (only `ScotlandTheBrave.json`/`.csv` found).
 
 ---
 

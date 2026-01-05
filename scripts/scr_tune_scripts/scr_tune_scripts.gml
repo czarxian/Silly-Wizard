@@ -1,4 +1,7 @@
 
+// scr_tune_scripts — Playback & event preprocessing
+// Purpose: Build runtime event lists (merge tune + metronome), start playback and provide the time-source callback that sends MIDI.
+// Key functions: tune_build_events, tune_generate_metronome, tune_start, script_tune_callback
 
 /// @function tune_start(tune_events)
 /// @param tune_events  The array of events to play

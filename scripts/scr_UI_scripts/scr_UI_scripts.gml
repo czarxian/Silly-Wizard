@@ -1,3 +1,7 @@
+// scr_UI_scripts — UI layer utilities & field sync
+// Purpose: Helpers for mapping layer names/indices, refreshing UI assets, and updating fields from global arrays.
+// Key functions: GetLayerNameFromIndex, GetLayerIndexFromName, scr_update_fields, scr_ui_refresh
+
 /// @desc UI Layer Utilities
 //test//
 /// @function GetLayerNameFromIndex(_index)

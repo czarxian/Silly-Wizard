@@ -1,5 +1,10 @@
 
 
+// scr_button_scripts — UI button dispatcher
+// Purpose: Routes button presses to actions (open windows, change settings, start play, confirm tune) and coordinates UI → logic flows.
+// Key functions: scr_handle_button_click, scr_open_window, scr_settings_OK, scr_tune_OK, start_play
+// Related objects: obj_tune_picker, obj_ui_controller, obj_game_controller
+
 //Main menu buttons
 	//Button handler
 	function scr_handle_button_click(button_ID){

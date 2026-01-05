@@ -1,3 +1,8 @@
+// scr_tune_library — Tune library loader & picker helper
+// Purpose: Loads `tunes/tune_library.json` and populates UI rows for the tune picker.
+// Key functions: scr_load_tune_library, scr_tune_picker_populate
+// Related objects: obj_tune_picker, obj_tune_row, obj_ui_controller
+
 // Script assets have changed for v2.3.0 see
 // https://help.yoyogames.com/hc/en-us/articles/360005277377 for more information
 function scr_load_tune_library()

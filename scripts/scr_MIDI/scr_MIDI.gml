@@ -1,3 +1,11 @@
+// scr_MIDI — MIDI device & message utilities
+// Purpose: Low-level MIDI I/O, device scanning/opening and input processing used by playback and player input.
+// Key responsibilities:
+//  - Device scanning/opening (MIDI_scan_input_devices, MIDI_scan_output_devices)
+//  - Process incoming MIDI (MIDI_process_messages) and send messages for playback (midi_output_message_send_short)
+//  - Helper functions (MIDI_send_off, MIDI_check_errors)
+// Related scripts/objects: scr_tune_scripts (playback), obj_player (input)
+
 // Script assets have changed for v2.3.0 see
 // https://help.yoyogames.com/hc/en-us/articles/360005277377 for more information
 

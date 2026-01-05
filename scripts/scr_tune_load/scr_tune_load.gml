@@ -1,3 +1,5 @@
+// scr_tune_load — Tune JSON loader
+// Purpose: Read and validate tune JSON files and populate the `obj_tune` instance with `tune_metadata` and `events`.
 /// @function scr_tune_load_json(_filename)
 /// @description Loads a tune JSON file and stores it in obj_tune.
 // Test edit from VS Code

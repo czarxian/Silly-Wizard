@@ -1,3 +1,10 @@
+// obj_player — Player input / runtime state
+// Purpose: Tracks live player input and visual mapping for currently playing notes.
+// Key responsibilities:
+//  - Registers global.ID_player
+//  - Maintains NoteOnVar[], NotePlaying and NoteLoc[] used by UI and scoring systems
+// Related scripts: scripts/scr_MIDI/ (input), scripts/scr_tune_scripts/ (playback comparison)
+
 // obj_player Create Event
 
 global.ID_player = id;

@@ -1,3 +1,10 @@
+// obj_ui_controller — UI registry & layer manager
+// Purpose: Central registry for UI layers, assets and field synchronization.
+// Key responsibilities:
+//  - Initializes global.ui_layer_names, global.ui_assets, global.ui_fields and numbering
+//  - Stores tune selection defaults (global.tune_library, global.tune_selection, pagination)
+// Related scripts: scripts/scr_UI_scripts/ (GetLayerNameFromIndex, scr_update_fields, scr_ui_refresh), scripts/scr_button_scripts/
+
 // Obj_ui_controller Create Event
 
 // Initialize layer names only once
