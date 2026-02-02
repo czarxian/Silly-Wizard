@@ -1,4 +1,3 @@
-MIDI_scan_output_devices();
-field_value = 0;
-field_contents = midi_output_device_name(field_value);
-field_max_value = midi_output_device_count()-1;
+// Initialize metronome volume field (0-127)
+field_value = global.metronome_volume;
+field_contents = string(global.metronome_volume);
