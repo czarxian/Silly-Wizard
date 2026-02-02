@@ -176,19 +176,15 @@ name
 
 embellishment
 
-anchor
-
-embellishment
-
-duration
-
-embellishment
-
-pattern
-
-embellishment
-
 positions
+
+embellishment
+
+alt_anchor
+
+embellishment
+
+alt_timing
 
 timing
 
@@ -224,11 +220,11 @@ Each event becomes a JSON object with the following structure:
   "adjusted": <number>,
   "total_units": <number>,
 
-  "emb_name": "{g}" or "",
-  "emb_anchor": "",
-  "emb_duration": <number>,
-  "emb_pattern": "",
-  "emb_positions": "",
+  "emb_preceding": "A" or "",
+  "emb_literal": "{gBd}" or "",
+  "emb_target": "B" or "",
+  "emb_alt_anchor": <number> or "",
+  "emb_alt_timing": <number> or "",
 
   "start_time_ms": <number>,
   "end_time_ms": <number>,
@@ -289,16 +285,53 @@ All numeric fields correctly default to 0.
 
 All string fields correctly default to "".
 
+Optional override fields (`emb_alt_anchor`, `emb_alt_timing`) default to "" (empty = use library).
+
 The schema is stable and ready for Q2 development.
 
-6. Next Steps
+6. Per-Instance Embellishment Overrides
+
+GameMaker applies embellishment overrides with this precedence:
+
+1. **Instance-level override** — if `emb_alt_anchor` or `emb_alt_timing` is non-empty, use that value
+2. **Embellishment Library default** — fall back to the canonical library entry
+
+Example events:
+```
+{
+  "emb_literal": "{gCd}",
+  "emb_target": "C",
+  "emb_alt_anchor": "",
+  "emb_alt_timing": ""
+}
+// Uses library default for both anchor and timing
+
+{
+  "emb_literal": "{GdGe}",
+  "emb_target": "G",
+  "emb_alt_anchor": 1,
+  "emb_alt_timing": ""
+}
+// Overrides anchor to 1; timing from library
+
+{
+  "emb_literal": "{gBd}",
+  "emb_target": "B",
+  "emb_alt_anchor": "",
+  "emb_alt_timing": 1.2
+}
+// Overrides timing multiplier to 1.2x; anchor from library
+```
+
+7. Next Steps
 
 Build the GML JSON loader
 
 Build the event timeline processor
 
-Build the ornament expander
+Build the ornament expander (with override support)
 
 Build the playback engine
 
 This page now serves as the authoritative reference for your tune data model.
+```

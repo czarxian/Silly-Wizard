@@ -33,14 +33,14 @@
   "properties":[
     {"$GMObjectProperty":"v2","%Name":"field_ref","filters":[
         "GMObject",
-      ],"listItems":[],"multiselect":false,"name":"field_ref","rangeEnabled":false,"rangeMax":10.0,"rangeMin":0.0,"resourceType":"GMObjectProperty","resourceVersion":"2.0","value":"0","varType":0,},
+      ],"listItems":[],"multiselect":false,"name":"field_ref","rangeEnabled":false,"rangeMax":10.0,"rangeMin":0.0,"resourceType":"GMObjectProperty","resourceVersion":"2.0","value":"0","varType":4,},
   ],
   "resourceType":"GMObject",
   "resourceVersion":"2.0",
   "solid":false,
   "spriteId":{
-    "name":"spr_field_item",
-    "path":"sprites/spr_field_item/spr_field_item.yy",
+    "name":"spr_arrow_right",
+    "path":"sprites/spr_arrow_right/spr_arrow_right.yy",
   },
   "spriteMaskId":null,
   "visible":true,

@@ -7,10 +7,15 @@
 // Related scripts: scripts/scr_tune_load/, scripts/scr_tune_scripts/
 
 	global.tune=id;
+	persistent = true;
 	
-/// obj_tune Create
-	tune_metadata = {};
-	events = [];
-	event_count = 0;
-	is_loaded = false;
-	filename = "";
+	/// obj_tune Create
+	// Store all data in a struct for better persistence across room transitions
+	tune_data = {
+		tune_metadata: {},
+		events: [],
+		performance: {},
+		event_count: 0,
+		is_loaded: false,
+		filename: ""
+	};

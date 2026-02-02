@@ -23,14 +23,79 @@
 
 ---
 
+---
+
+## Important Architectural Constraints
+
+⚠️ **No GameMaker data structures (ds_maps, ds_lists, ds_grids, etc.)**
+- Use **structs** for key-value lookup and complex data
+- Use **arrays** for sequences and lists
+- Avoid all `ds_*` functions — they introduce unnecessary memory management overhead and complexity
+- This keeps code simpler, more predictable, and easier to debug
+
+---
+
 ## Key scripts (current responsibilities)
 
 - **`scripts/scr_button_scripts/`** — UI button dispatcher and handlers (window toggles, settings changes, tune OK, start play).
 - **`scripts/scr_MIDI/`** — MIDI device scanning/opening and message utilities; processes input messages and provides helper functions for playback.
 - **`scripts/scr_tune_library/`** — Loads `tunes/tune_library.json` and populates tune picker rows.
 - **`scripts/scr_tune_load/`** — Loads and validates tune JSON files into the `obj_tune` instance.
-- **`scripts/scr_tune_scripts/`** — Merges tune events and metronome events, starts playback using a `time_source`, and implements the playback callback that sends MIDI.
+- **`scripts/scr_tune_scripts/`** — Merges tune events and metronome events, starts playback using a `time_source`, and implements the playback callback `script_tune_callback()` that sends MIDI and logs events.
+- **`scripts/scr_event_log/`** — Event history logging system. Tracks all playback events (timing, note, source) for analysis. Exports to CSV for performance debugging and player feedback.
 - **`scripts/scr_UI_scripts/`** — UI layer helpers (`GetLayerNameFromIndex`, `scr_update_fields`, `scr_ui_refresh`).
+
+---
+
+## Playback Callback Flow (Detailed)
+
+This describes how a tune is triggered and how events flow through the system:
+
+### 1. **User Action → Button Press**
+- User clicks "Play" button in tune picker or main menu
+- Button handler calls function from `scr_button_scripts.gml`
+
+### 2. **Tune Selection & Loading**
+- Button handler → `scr_tune_load_json()` (from `scr_tune_load.gml`)
+- Loads tune JSON file and validates structure
+- Populates `obj_tune.tune_data` with `tune_metadata`, `performance`, and `events[]`
+
+### 3. **Preprocessing**
+- `scr_preprocess_tune()` (from `scr_preprocess_tune.gml`)
+- Converts tune JSON events into a playable MIDI event array
+- Each event includes: `time_ms`, `type` ("note_on"/"note_off"), `note` (MIDI), `velocity`, `channel`
+- Handles embellishment expansion, gracenote timing, and unit-to-millisecond conversion
+
+### 4. **Playback Start**
+- `tune_start()` (from `scr_tune_scripts.gml`)
+- Creates a `time_source` that fires at millisecond intervals
+- Iterates through the preprocessed playable events array
+- **Callback function:** `script_tune_callback()` fires whenever an event's `time_ms` is reached
+
+### 5. **Event Playback & Logging**
+- `script_tune_callback()` executes:
+  1. Sends MIDI note via `midi_output_message_send_short()` (Giavapps MIDI)
+  2. Updates display: `obj_currentnote_field_1.note_text = letter` 
+  3. **Logs event to history:** `event_history_add()` (from `scr_event_log.gml`)
+  
+### 6. **Event History Storage**
+- `event_history_add()` logs the event with:
+  - Timing data: `expected_time_ms`, `actual_time_ms`, `delta_ms`
+  - Beat context: `measure`, `beat`, `beat_fraction` (0 for now, populated when metronome added)
+  - Event data: `event_type`, `source` ("game"), `note_midi`, `note_letter`, etc.
+  - Context: `tune_name`, `is_embellishment`, etc.
+  
+### 7. **Analysis & Export**
+- After playback ends, user can export history:
+  - `event_history_export_csv("tune_name")` 
+  - Generates `datafiles/event_history_tune_name.csv`
+  - Columns include timing, beat, MIDI notes, and quality metrics
+  - Import into Excel for analysis
+
+### 8. **Future: Player Input & Metronome**
+- When player MIDI input added: events logged with `source: "player"`, actual timing from input device
+- When metronome added: events logged with `source: "metronome"`, beat/measure context calculated
+- CSV export will allow comparison: game vs player vs expected timing
 
 ---
 
@@ -100,6 +165,8 @@ This section documents the concrete runtime UI architecture and how UI instances
 - The tune window contains six manual rows `fp_tune_row_1..fp_tune_row_6`. Each row contains:
   - `obj_btn_check` instances (radio/checkbox) with `button_script_index` set to the checkbox handler and `button_click_value` equal to the row index (used to set `global.tune_selection`).
   - `obj_field_base` instances with `field_target` set to `tune_library` and `field_value` set to the index; `scr_tune_picker_populate()` (in `scr_tune_library/`) updates the visible rows and associated text when a library is loaded.
+
+  Note: The population routine **pairs** each field and checkbox **preferentially by explicit editor-assigned IDs** (use `field_ID` on fields and `button_ID` on checkboxes — e.g., 1..10). If those are not set it falls back to `ui_num` (the runtime registration number), and as a last resort it pairs by on-screen order (sorted by Y). This lets you safely add rows (7–10) and control their mapping via the `field_ID`/`button_ID` properties.
 - The `obj_tune_ok_button` calls `scr_handle_button_click` with its `button_script_index` (mapped to `scr_tune_OK`) which loads the selected tune and initiates build→start playback flow.
 
 ### Per-layer summaries (current content)
@@ -142,11 +209,56 @@ If you'd like, I can also:
 
 ## Tune subsystem (current state)
 
-- **Datafiles:** `datafiles/tunes/` (e.g., `ScotlandTheBrave.json`, `ScotlandTheBrave.csv`).
-- **Library loader:** `scr_load_tune_library()` reads a tune library JSON (if present) and returns its parsed structure.
-- **Tune loader:** `scr_tune_load_json(_filename)` parses and validates tune JSON and stores it in the `obj_tune` instance.
-- **Playback:** `tune_build_events()` and `tune_start()` prepare and schedule events; `script_tune_callback()` sends MIDI events at runtime.
-- **UI integration:** `roomui/RoomUI/` provides the tune window and rows used by the picker; `scr_tune_picker_populate()` populates UI rows from the library.
+### File Organization
+- **Source:** `datafiles/tunes/` contains tune JSON files (e.g., `Jig_of_Slurs.json`, `Scotland_the_Brave.json`).
+- **Runtime:** Files must be marked as **Included Files** in the GameMaker project so they're copied to the runtime directory (`tunes/` at game runtime, not `datafiles/tunes/`).
+
+### Library Building & Loading
+- **Build process:** `scr_build_tune_library(_folder)` scans a folder recursively for `*.json` files (excluding `tune_library.json` itself), parses tune metadata, and writes an index file `tune_library.json` containing all discovered tunes.
+  - Called automatically from `obj_game_controller` Create event on startup.
+  - Also callable manually via button case 12 (regenerate button in settings panel) for debugging/testing.
+  - Handles multiple tune JSON formats: flat structure (`{"tune": {...}}`) or array-only (`[...]`).
+  - Skips empty files and logs warnings for invalid JSON (uses try-catch for robustness).
+  
+- **Library loading:** `scr_tune_picker_populate()` reads the generated `tune_library.json` index and populates the UI rows with tune titles, composers, and rhythms for the picker.
+
+### Tune JSON Format
+Each tune file should have a flat structure with `"tune"` at the root:
+```json
+{
+  "tune": {
+    "title": "Scotland the Brave",
+    "composer": "trad.",
+    "rhythm": "March",
+    "reference number": "1",
+    ...metadata fields...
+  },
+  "metronome": { ... },
+  "performance": { ... },
+  "info": { ... },
+  "events": [ ... ]
+}
+```
+The nested `"metadata"` wrapper structure is **not supported** and will cause the tune to be skipped.
+
+### Tune Loader
+- `scr_tune_load_json(_filename)` parses a tune JSON file and populates the `obj_tune` instance with metadata, events, and state flags.
+
+### Playback
+- `tune_build_events()` prepares events for scheduling.
+- `tune_start()` initiates playback using a GameMaker `time_source`.
+- `script_tune_callback()` is the playback callback that sends MIDI events at runtime.
+
+### UI Integration
+- `roomui/RoomUI/` provides the tune picker window with up to 10 rows.
+- `scr_tune_picker_populate()` populates the UI rows from `global.tune_library`.
+
+### Debugging
+- Use the **Regenerate Tune Library button** (button case 12, placed in settings panel) to manually trigger library rebuild and see debug output like:
+  ```
+  scr_build_tune_library: wrote tunes/tune_library.json (2 tunes)
+  ```
+  This helps isolate timing and scope of the build process without restarting the game.
 
 ---
 
@@ -168,7 +280,7 @@ If you'd like, I can also:
 ---
 
 ## Known issues (current)
-- `tunes/tune_library.json` is expected by `scr_tune_library` but is not present in `datafiles/tunes/` (only `ScotlandTheBrave.json`/`.csv` found).
+- **Path resolution:** At runtime, GameMaker uses a temp directory as the working directory (e.g., `C:\Users\...\GMS2TEMP\Silly-Wizard_*_VM\tunes\`). Tune files must be included as **Included Files** and the scanner must point to the correct runtime path (`tunes/`, not `datafiles/tunes/`).
 
 ---
 

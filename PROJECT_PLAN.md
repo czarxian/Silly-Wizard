@@ -48,6 +48,8 @@ Core Systems
 • 	Tune ingestion pipeline (ABC → Excel → JSON)
 • 	Tune loader + metadata manager
 • 	Preprocessing engine (play array builder)
+
+⚠️ **Important architectural constraint:** Do NOT use ds_maps, ds_lists, or other GameMaker data structures. Use arrays and structs only. This keeps the code simpler, avoids memory management complexity, and makes the code more predictable.
 • 	Playback engine (time‑source driven)
 • 	MIDI input manager
 • 	MIDI output manager

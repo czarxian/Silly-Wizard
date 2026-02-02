@@ -25,6 +25,53 @@
 	    return -1;
 	}
 	
+	/// @function scr_hide_window(_target, _inst)
+	// @desc Safely hide a UI layer based on a button's label, a layer name, or a layer index. Returns true if a layer was hidden.
+	function scr_hide_window(_target, _inst) {
+	    var hid = false;
+	
+	    // Direct string target (likely a layer name)
+	    if (!is_undefined(_target) && is_string(_target)) {
+	        var lid = layer_get_id(_target);
+	        if (lid != -1) {
+	            layer_set_visible(lid, false);
+	            return true;
+	        }
+	        // Try mapping via our layer name array
+	        var idx = GetLayerIndexFromName(_target);
+	        if (idx >= 0) {
+	            var lname = GetLayerNameFromIndex(idx);
+	            var lid2 = layer_get_id(lname);
+	            if (lid2 != -1) {
+	                layer_set_visible(lid2, false);
+	                return true;
+	            }
+	        }
+	    }
+	
+	    // Numeric target (layer index)
+	    if (!is_undefined(_target) && (is_real(_target) || is_integer(_target))) {
+	        var lname2 = GetLayerNameFromIndex(_target);
+	        var lid3 = layer_get_id(lname2);
+	        if (lid3 != -1) {
+	            layer_set_visible(lid3, false);
+	            return true;
+	        }
+	    }
+	
+	    // Fallback to the instance's ui_layer_num if provided
+	    if (!is_undefined(_inst) && variable_instance_exists(_inst, "ui_layer_num")) {
+	        var lname3 = GetLayerNameFromIndex(_inst.ui_layer_num);
+	        var lid4 = layer_get_id(lname3);
+	        if (lid4 != -1) {
+	            layer_set_visible(lid4, false);
+	            return true;
+	        }
+	    }
+	
+	    return false;
+	}
+	
 		function scr_update_fields(_ui_layer_num) {
 	    var assets = global.ui_assets[_ui_layer_num];
 	

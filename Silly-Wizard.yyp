@@ -2,7 +2,7 @@
   "$GMProject":"v1",
   "%Name":"Silly-Wizard",
   "AudioGroups":[
-    {"$GMAudioGroup":"","%Name":"audiogroup_default","name":"audiogroup_default","resourceType":"GMAudioGroup","resourceVersion":"2.0","targets":-1,},
+    {"$GMAudioGroup":"v1","%Name":"audiogroup_default","exportDir":"","name":"audiogroup_default","resourceType":"GMAudioGroup","resourceVersion":"2.0","targets":-1,},
   ],
   "configs":{
     "children":[],
@@ -31,14 +31,15 @@
     {"link":"io.gamemaker.sdfshaders-1.0.0","name":"io.gamemaker.sdfshaders-1.0.0","path":"io.gamemaker.sdfshaders-1.0.0.yyp",},
   ],
   "IncludedFiles":[
-    {"$GMIncludedFile":"","%Name":"ScotlandTheBrave.csv","CopyToMask":-1,"filePath":"datafiles/tunes","name":"ScotlandTheBrave.csv","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"ScotlandTheBrave.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"ScotlandTheBrave.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"tune_library.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"tune_library.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"embellishments.json","CopyToMask":-1,"filePath":"datafiles","name":"embellishments.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"Runtime data folder.lnk","CopyToMask":-1,"filePath":"datafiles","name":"Runtime data folder.lnk","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"Calibrate.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"Calibrate.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"Scotland_The_Brave.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"Scotland_The_Brave.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
   ],
   "isEcma":false,
   "LibraryEmitters":[],
   "MetaData":{
-    "IDEVersion":"2024.14.2.213",
+    "IDEVersion":"2024.14.3.217",
   },
   "name":"Silly-Wizard",
   "resources":[
@@ -65,7 +66,11 @@
     {"id":{"name":"RoomUI","path":"roomui/RoomUI/RoomUI.yy",},},
     {"id":{"name":"old_scr_tune_library","path":"scripts/old_scr_tune_library/old_scr_tune_library.yy",},},
     {"id":{"name":"scr_button_scripts","path":"scripts/scr_button_scripts/scr_button_scripts.yy",},},
+    {"id":{"name":"scr_embellishments","path":"scripts/scr_embellishments/scr_embellishments.yy",},},
+    {"id":{"name":"scr_event_log","path":"scripts/scr_event_log/scr_event_log.yy",},},
+    {"id":{"name":"scr_metronome","path":"scripts/scr_metronome/scr_metronome.yy",},},
     {"id":{"name":"scr_MIDI","path":"scripts/scr_MIDI/scr_MIDI.yy",},},
+    {"id":{"name":"scr_preprocess_tune","path":"scripts/scr_preprocess_tune/scr_preprocess_tune.yy",},},
     {"id":{"name":"scr_tune_library","path":"scripts/scr_tune_library/scr_tune_library.yy",},},
     {"id":{"name":"scr_tune_load","path":"scripts/scr_tune_load/scr_tune_load.yy",},},
     {"id":{"name":"scr_tune_scripts","path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},},
