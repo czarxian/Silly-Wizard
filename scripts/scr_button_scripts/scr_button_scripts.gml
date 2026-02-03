@@ -265,6 +265,19 @@
 		// If we just opened the tune window, populate the picker
 		if (new_visibility && layer_name == "tune_window_layer") {
 			scr_tune_picker_populate();
+			
+			// Refresh metronome pattern list for current tune/mode
+			var tune = global.tune;
+			var time_sig = "4/4";
+			if (instance_exists(tune) && tune.tune_data.is_loaded) {
+				var meta = tune.tune_data.tune_metadata;
+				time_sig = string(meta.meter ?? "4/4");
+			}
+			metronome_update_pattern_list(time_sig);
+			if (instance_exists(metro_field_2) && array_length(global.metronome_pattern_options) > 0) {
+				metro_field_2.field_value = global.metronome_pattern_selection;
+				metro_field_2.field_contents = global.metronome_pattern_options[global.metronome_pattern_selection];
+			}
 		}
 		
 		// If we opened settings window, update metronome pattern list based on current tune
@@ -359,6 +372,7 @@
 	//CASE 14 - Metronome Mode (None/Click/Drums)
 	function scr_metronome_mode_change() {
 		var field = self.field_ref;
+		
 		var array_len = array_length(global.metronome_mode_options);
 		
 		// Cycle through modes
@@ -372,12 +386,38 @@
 		global.METRONOME_CONFIG.enabled = (global.metronome_mode > 0);
 		global.METRONOME_CONFIG.mode = global.metronome_mode_options[field.field_value];
 		
+		// Refresh pattern list based on current tune
+		var time_sig = "4/4";
+		var tune = global.tune;
+		if (instance_exists(tune) && tune.tune_data.is_loaded) {
+			var meta = tune.tune_data.tune_metadata;
+			time_sig = string(meta.meter ?? "4/4");
+		}
+		metronome_update_pattern_list(time_sig);
+		if (instance_exists(metro_field_2) && array_length(global.metronome_pattern_options) > 0) {
+			metro_field_2.field_value = global.metronome_pattern_selection;
+			metro_field_2.field_contents = global.metronome_pattern_options[global.metronome_pattern_selection];
+		}
+		
+		// Persist to current set item
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.metronome_mode = global.metronome_mode;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		
 		show_debug_message("Metronome mode: " + field.field_contents);
 	}
 	
 	//CASE 15 - Metronome Pattern
 	function scr_metronome_pattern_change() {
 		var field = self.field_ref;
+		
 		var array_len = array_length(global.metronome_pattern_options);
 		
 		if (array_len == 0) {
@@ -391,6 +431,18 @@
 		
 		// Update global selection
 		global.metronome_pattern_selection = field.field_value;
+		
+		// Persist to current set item
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.metronome_pattern = global.metronome_pattern_selection;
+					global.current_set[idx] = item;
+				}
+			}
+		}
 		
 		show_debug_message("Metronome pattern: " + field.field_contents);
 	}
@@ -414,25 +466,73 @@
 		global.METRONOME_CONFIG.velocity_emphasis = new_volume;
 		global.METRONOME_CONFIG.velocity_normal = floor(new_volume * 0.7); // Normal beats at 70% of emphasis
 		
+		// Persist to current set item
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.metronome_volume = global.metronome_volume;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		
 		show_debug_message("Metronome volume: " + string(new_volume));
 	}
 
 	//CASE 17 - Tune BPM
 	function scr_tune_bpm_change() {
 		var field = self.field_ref;
+		
 		var new_val = field.field_value + self.button_click_value;
 		new_val = clamp(new_val, field.field_min_value, field.field_max_value);
 		field.field_value = new_val;
 		field.field_contents = string(new_val);
+		
+		// Update global BPM
+		global.current_bpm = new_val;
+		
+		// Persist to current set item
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.bpm = global.current_bpm;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		
+		show_debug_message("BPM: " + string(new_val));
 	}
 
 	//CASE 18 - Tune Count-In
 	function scr_tune_countin_change() {
 		var field = self.field_ref;
+		
 		var new_val = field.field_value + self.button_click_value;
 		new_val = clamp(new_val, 0, 2);
 		field.field_value = new_val;
 		field.field_contents = string(new_val);
+		
+		// Update global count-in
+		global.count_in_measures = new_val;
+		
+		// Persist to current set item
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.count_in_measures = global.count_in_measures;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		
+		show_debug_message("Count-in measures: " + string(new_val));
 	}
 
 	//CASE 9
@@ -480,19 +580,29 @@
 		            var item = create_set_item(tryfile);
 		            
 		            // Find and capture tune-specific settings by ui_name
-		            with(obj_field_base) {
-		                if (ui_name == "tune_BPM_field") item.bpm = field_value;
-		                if (ui_name == "tune_countin_field") item.count_in_measures = field_value;
-		            }
+				    with(obj_field_base) {
+				        if (ui_name == "tune_BPM_field") item.bpm = field_value;
+				        if (ui_name == "tune_countin_field") item.count_in_measures = field_value;
+				        if (ui_name == "metro_field_3") item.bpm = field_value;
+				        if (ui_name == "metro_field_4") item.count_in_measures = field_value;
+				    }
 		            
 		            with(obj_field_base) {
 		                if (ui_name == "metro_field_1") item.metronome_mode = field_value;
 		                if (ui_name == "metro_field_2") item.metronome_pattern = field_value;
 		                if (ui_name == "metro_field_5") item.metronome_volume = field_value;
 		            }
-		            global.current_set = [item];
-		            global.current_set_item_index = 0;
-		            show_debug_message("Created set item: " + tryfile + 
+				    global.current_set = [item];
+				    global.current_set_item_index = 0;
+		    
+				    // Sync set item values to globals for UI display
+				    global.current_bpm = item.bpm ?? 120;
+				    global.metronome_mode = item.metronome_mode;
+				    global.metronome_pattern_selection = item.metronome_pattern;
+				    global.metronome_volume = item.metronome_volume;
+				    global.count_in_measures = item.count_in_measures;
+		    
+				    show_debug_message("Created set item: " + tryfile + 
 		                " | BPM=" + string(item.bpm) + 
 		                " | Count-in=" + string(item.count_in_measures) + 
 		                " | Metronome=" + global.metronome_mode_options[item.metronome_mode]);
