@@ -1,0 +1,752 @@
+'=============================================================================
+' MODULE: modTuneExport
+' PURPOSE: Export current tune sheet to performance folder as metadata file
+' WORKBOOK: Silly Wizard Work.xlsm (Master Tune Workbook)
+' NOTE: Tune title is in cell C3 (column C, row 3)
+'=============================================================================
+Option Explicit
+
+'-----------------------------------------------------------------------------
+' MAIN EXPORT FUNCTION - Run from any tune sheet
+'-----------------------------------------------------------------------------
+Public Sub ExportCurrentTuneMetadata()
+    Dim ws As Worksheet
+    Dim tuneName As String
+    Dim tuneTitle As String
+    Dim targetFolder As String
+    Dim targetFile As String
+    Dim newWb As Workbook
+    Dim PERFORMANCE_ROOT As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' *** CONFIGURATION - UPDATE THIS PATH FOR YOUR SYSTEM ***
+    PERFORMANCE_ROOT = "C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\performances"
+    
+    Set ws = ActiveSheet
+    
+    ' Get tune title from C3 (CORRECTED from D3)
+    tuneTitle = ""
+    On Error Resume Next
+    tuneTitle = Trim(CStr(ws.Range("C3").Value))
+    On Error GoTo ErrorHandler
+    
+    If tuneTitle = "" Then
+        MsgBox "No tune title found in cell C3." & vbCrLf & vbCrLf & _
+            "Please ensure you're on a tune sheet with the title in C3.", _
+            vbExclamation, "Export Error"
+        Exit Sub
+    End If
+    
+    ' Clean tune name for filename (remove special characters)
+    tuneName = CleanFileName(tuneTitle)
+    
+    If tuneName = "" Then
+        MsgBox "Could not create valid filename from title: " & tuneTitle, _
+            vbExclamation, "Export Error"
+        Exit Sub
+    End If
+    
+    ' Build target path
+    targetFolder = PERFORMANCE_ROOT
+    If Right(targetFolder, 1) <> "\" Then
+        targetFolder = targetFolder & "\"
+    End If
+    targetFolder = targetFolder & tuneName
+    
+    targetFile = targetFolder & "\" & tuneName & "_metadata.xlsx"
+    
+    ' Create folder if it doesn't exist
+    On Error Resume Next
+    If Dir(targetFolder, vbDirectory) = "" Then
+        MkDir targetFolder
+        If Err.Number <> 0 Then
+            MsgBox "Could not create folder:" & vbCrLf & targetFolder & vbCrLf & vbCrLf & _
+                "Error: " & Err.Description, vbExclamation, "Folder Error"
+            Exit Sub
+        End If
+    End If
+    Err.Clear
+    On Error GoTo ErrorHandler
+    
+    ' Confirm with user
+    If MsgBox("Export tune metadata:" & vbCrLf & vbCrLf & _
+        "Tune: " & tuneTitle & vbCrLf & _
+        "File: " & tuneName & "_metadata.xlsx" & vbCrLf & _
+        "Folder: " & targetFolder & vbCrLf & vbCrLf & _
+        "Proceed?", vbQuestion + vbYesNo, "Export Tune Metadata") = vbNo Then
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.StatusBar = "Exporting " & tuneTitle & "..."
+    
+    ' Copy sheet to new workbook
+    ws.Copy
+    Set newWb = ActiveWorkbook
+    
+    ' Save as xlsx
+    Application.DisplayAlerts = False
+    newWb.SaveAs fileName:=targetFile, FileFormat:=xlOpenXMLWorkbook
+    newWb.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    
+    MsgBox "Tune metadata exported successfully!" & vbCrLf & vbCrLf & _
+        "File: " & targetFile, vbInformation, "Export Complete"
+    Exit Sub
+    
+ErrorHandler:
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "Error exporting tune:" & vbCrLf & _
+        "Error " & Err.Number & ": " & Err.Description & vbCrLf & vbCrLf & _
+        "Tune: " & tuneTitle & vbCrLf & _
+        "Target: " & targetFolder, vbCritical, "Export Error"
+End Sub
+
+'-----------------------------------------------------------------------------
+' EXPORT ALL TUNES (Batch Export)
+'-----------------------------------------------------------------------------
+Public Sub ExportAllTuneMetadata()
+    Dim ws As Worksheet
+    Dim tuneTitle As String
+    Dim tuneName As String
+    Dim targetFolder As String
+    Dim targetFile As String
+    Dim newWb As Workbook
+    Dim exportCount As Integer
+    Dim skipCount As Integer
+    Dim errorCount As Integer
+    Dim errorList As String
+    Dim PERFORMANCE_ROOT As String
+    
+    ' *** CONFIGURATION - UPDATE THIS PATH FOR YOUR SYSTEM ***
+    PERFORMANCE_ROOT = "C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\performances"
+    
+    If MsgBox("This will export ALL tune sheets to the performance folder." & vbCrLf & _
+        "Existing metadata files will be overwritten." & vbCrLf & vbCrLf & _
+        "Root folder: " & PERFORMANCE_ROOT & vbCrLf & vbCrLf & _
+        "Tune title read from cell C3 on each sheet." & vbCrLf & vbCrLf & _
+        "Continue?", vbQuestion + vbYesNo, "Export All Tunes") = vbNo Then
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    exportCount = 0
+    skipCount = 0
+    errorCount = 0
+    errorList = ""
+    
+    For Each ws In ThisWorkbook.Worksheets
+        tuneTitle = ""
+        On Error Resume Next
+        tuneTitle = Trim(CStr(ws.Range("C3").Value))  ' CORRECTED: C3 instead of D3
+        On Error GoTo 0
+        
+        If tuneTitle = "" Then
+            skipCount = skipCount + 1
+            GoTo NextSheet
+        End If
+        
+        tuneName = CleanFileName(tuneTitle)
+        If tuneName = "" Then
+            skipCount = skipCount + 1
+            GoTo NextSheet
+        End If
+        
+        ' Build paths
+        targetFolder = PERFORMANCE_ROOT
+        If Right(targetFolder, 1) <> "\" Then targetFolder = targetFolder & "\"
+        targetFolder = targetFolder & tuneName
+        targetFile = targetFolder & "\" & tuneName & "_metadata.xlsx"
+        
+        Application.StatusBar = "Exporting: " & tuneTitle
+        
+        On Error Resume Next
+        
+        ' Create folder
+        If Dir(targetFolder, vbDirectory) = "" Then
+            MkDir targetFolder
+        End If
+        
+        ' Export
+        ws.Copy
+        Set newWb = ActiveWorkbook
+        Application.DisplayAlerts = False
+        newWb.SaveAs fileName:=targetFile, FileFormat:=xlOpenXMLWorkbook
+        newWb.Close SaveChanges:=False
+        Application.DisplayAlerts = True
+        
+        If Err.Number = 0 Then
+            exportCount = exportCount + 1
+        Else
+            errorCount = errorCount + 1
+            errorList = errorList & vbCrLf & "- " & tuneTitle & ": " & Err.Description
+            Err.Clear
+        End If
+        
+        On Error GoTo 0
+        
+NextSheet:
+    Next ws
+    
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    
+    Dim resultMsg As String
+    resultMsg = "Batch export complete!" & vbCrLf & vbCrLf & _
+        "Exported: " & exportCount & " tunes" & vbCrLf & _
+        "Skipped: " & skipCount & " sheets (no title in C3)" & vbCrLf & _
+        "Errors: " & errorCount
+    
+    If errorList <> "" Then
+        resultMsg = resultMsg & vbCrLf & vbCrLf & "Error details:" & errorList
+    End If
+    
+    MsgBox resultMsg, vbInformation, "Export Complete"
+End Sub
+
+'-----------------------------------------------------------------------------
+' HELPER: Clean filename (remove invalid characters)
+'-----------------------------------------------------------------------------
+Private Function CleanFileName(rawName As String) As String
+    Dim result As String
+    Dim i As Integer
+    Dim invalidChars As String
+    
+    invalidChars = "\/:*?""<>|"
+    result = rawName
+    
+    ' Remove invalid filename characters
+    For i = 1 To Len(invalidChars)
+        result = Replace(result, Mid(invalidChars, i, 1), "")
+    Next i
+    
+    ' Remove spaces
+    result = Replace(result, " ", "")
+    
+    ' Remove "The" prefix if present (e.g., "The Simon Fraser..." -> "SimonFraser...")
+    If LCase(Left(result, 3)) = "the" Then
+        result = Mid(result, 4)
+    End If
+    
+    ' Trim any remaining whitespace
+    result = Trim(result)
+    
+    CleanFileName = result
+End Function
+
+'-----------------------------------------------------------------------------
+' UTILITY: Show current configuration
+'-----------------------------------------------------------------------------
+Public Sub ShowExportConfiguration()
+    Dim PERFORMANCE_ROOT As String
+    PERFORMANCE_ROOT = "C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\performances"
+    
+    MsgBox "Current Export Configuration:" & vbCrLf & vbCrLf & _
+        "Tune Title Cell: C3" & vbCrLf & vbCrLf & _
+        "Performance Root Folder:" & vbCrLf & _
+        PERFORMANCE_ROOT & vbCrLf & vbCrLf & _
+        "Files will be saved as:" & vbCrLf & _
+        "[Root]\[TuneName]\[TuneName]_metadata.xlsx" & vbCrLf & vbCrLf & _
+        "To change settings, edit the VBA module.", _
+        vbInformation, "Export Configuration"
+End Sub
+
+
+'------------------------------------------------------------------------------
+' CORE MELODY MATCHING
+' PURPOSE: Match player core melody notes to tune core melody notes using
+'          greedy lookahead algorithm. Creates anchor points for further analysis.
+' CALLED:  After RefreshAnalysis populates Melody Matching helper tables
+'------------------------------------------------------------------------------
+
+Public Sub BuildCoreMelodyMatching()
+    Dim wsMelody As Worksheet
+    Dim wsTunePerf As Worksheet
+    Dim wsPlayerPerf As Worksheet
+    Dim lookahead As Long
+    Dim durationThreshold As Double
+    Dim tuneData As Variant
+    Dim playerData As Variant
+    Dim outputRow As Long
+    Dim outputStartRow As Long
+    Dim measureCount As Long
+    Dim currentMeasure As Long
+    Dim ti As Long, pi As Long
+    Dim tuneStart As Long, tuneEnd As Long
+    Dim playerStart As Long, playerEnd As Long
+    Dim i As Long
+    Dim tuneDataStart As Long, tuneDataEnd As Long
+    Dim playerHeaderRow As Long
+    Dim playerDataStart As Long, playerDataEnd As Long
+    Dim dataStartRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' Get sheets
+    Set wsMelody = ThisWorkbook.Worksheets("Melody Matching")
+    Set wsTunePerf = ThisWorkbook.Worksheets("Tune Performance")
+    Set wsPlayerPerf = ThisWorkbook.Worksheets("Player Performance")
+    
+    ' Get configuration
+    durationThreshold = wsMelody.Range("B5").Value
+    lookahead = wsMelody.Range("B6").Value
+    If lookahead < 1 Then lookahead = 2
+    
+    ' Find the Tune Core Notes Detail table (data starts at row 10)
+    tuneDataStart = 10
+    
+    ' Find where Player Candidates Detail starts
+    playerHeaderRow = 0
+    For i = 1 To 500
+        If InStr(1, CStr(wsMelody.Cells(i, 1).Value), "PLAYER CANDIDATES DETAIL", vbTextCompare) > 0 Then
+            playerHeaderRow = i
+            Exit For
+        End If
+    Next i
+    
+    If playerHeaderRow = 0 Then
+        ' Player section not found - exit silently
+        Exit Sub
+    End If
+    
+    ' Find end of tune data
+    tuneDataEnd = playerHeaderRow - 3
+    For i = tuneDataStart To tuneDataEnd
+        If IsEmpty(wsMelody.Cells(i, 1).Value) Or wsMelody.Cells(i, 1).Value = "" Then
+            tuneDataEnd = i - 1
+            Exit For
+        End If
+    Next i
+    
+    If tuneDataEnd < tuneDataStart Then Exit Sub
+    
+    ' Read Tune Core Notes Detail into array
+    tuneData = wsMelody.Range("A" & tuneDataStart & ":G" & tuneDataEnd).Value
+    
+    ' Read Player Candidates Detail into array
+    playerDataStart = playerHeaderRow + 1
+    playerDataEnd = wsMelody.Cells(wsMelody.Rows.Count, "A").End(xlUp).row
+    
+    ' Find actual end of player data
+    For i = playerDataStart To playerDataEnd
+        If IsEmpty(wsMelody.Cells(i, 1).Value) Or wsMelody.Cells(i, 1).Value = "" Then
+            playerDataEnd = i - 1
+            Exit For
+        End If
+    Next i
+    
+    If playerDataEnd < playerDataStart Then Exit Sub
+    
+    playerData = wsMelody.Range("A" & playerDataStart & ":F" & playerDataEnd).Value
+    
+    ' Determine output location (below player data)
+    outputStartRow = playerDataEnd + 3
+    outputRow = outputStartRow
+    
+    ' Clear any existing matching output
+    Dim clearEnd As Long
+    clearEnd = wsMelody.Cells(wsMelody.Rows.Count, "A").End(xlUp).row
+    If clearEnd > outputStartRow Then
+        wsMelody.Range("A" & outputStartRow & ":I" & clearEnd).Clear
+    End If
+    
+    ' Write headers for matching detail table
+    With wsMelody
+        .Cells(outputRow, 1).Value = "CORE MELODY MATCHING DETAIL"
+        .Cells(outputRow, 1).Font.Bold = True
+        .Cells(outputRow, 1).Font.Size = 12
+        outputRow = outputRow + 1
+        
+        .Cells(outputRow, 1).Value = "Lookahead: " & lookahead & " | Duration Threshold: " & durationThreshold & "ms"
+        .Cells(outputRow, 1).Font.Italic = True
+        outputRow = outputRow + 2
+        
+        .Cells(outputRow, 1).Value = "Measure"
+        .Cells(outputRow, 2).Value = "Tune_Pos"
+        .Cells(outputRow, 3).Value = "Tune_Note"
+        .Cells(outputRow, 4).Value = "Tune_Event"
+        .Cells(outputRow, 5).Value = "Player_Pos"
+        .Cells(outputRow, 6).Value = "Player_Note"
+        .Cells(outputRow, 7).Value = "Player_Event"
+        .Cells(outputRow, 8).Value = "Match_Type"
+        .Range(.Cells(outputRow, 1), .Cells(outputRow, 8)).Font.Bold = True
+        .Range(.Cells(outputRow, 1), .Cells(outputRow, 8)).Interior.Color = RGB(200, 200, 200)
+    End With
+    outputRow = outputRow + 1
+    dataStartRow = outputRow
+    
+    ' Get max measure number
+    measureCount = 0
+    For i = 1 To UBound(tuneData, 1)
+        If tuneData(i, 2) > measureCount Then measureCount = tuneData(i, 2)
+    Next i
+    
+    ' Initialize arrays to track matches
+    Dim tuneMatched() As Boolean
+    Dim playerMatched() As Boolean
+    ReDim tuneMatched(1 To UBound(tuneData, 1))
+    ReDim playerMatched(1 To UBound(playerData, 1))
+    
+    ' Arrays to store match results for updating source sheets
+    Dim tuneMatchedPlayer() As Long
+    Dim playerMatchedTune() As Long
+    ReDim tuneMatchedPlayer(1 To UBound(tuneData, 1))
+    ReDim playerMatchedTune(1 To UBound(playerData, 1))
+    
+    ' Process each measure
+    For currentMeasure = 1 To measureCount
+        ' Find tune notes for this measure
+        tuneStart = 0: tuneEnd = 0
+        For i = 1 To UBound(tuneData, 1)
+            If tuneData(i, 2) = currentMeasure Then
+                If tuneStart = 0 Then tuneStart = i
+                tuneEnd = i
+            End If
+        Next i
+        
+        ' Find player notes for this measure
+        playerStart = 0: playerEnd = 0
+        For i = 1 To UBound(playerData, 1)
+            If playerData(i, 2) = currentMeasure Then
+                If playerStart = 0 Then playerStart = i
+                playerEnd = i
+            End If
+        Next i
+        
+        ' Skip if no tune notes in this measure
+        If tuneStart = 0 Then GoTo NextMeasure
+        
+        ' Initialize indices for this measure
+        ti = tuneStart
+        pi = playerStart
+        
+        ' Process notes in this measure
+        Do While ti <= tuneEnd
+            Dim tuneNote As String
+            Dim playerNote As String
+            Dim tuneEvent As Long
+            Dim playerEvent As Long
+            Dim matchType As String
+            
+            tuneNote = CStr(tuneData(ti, 3))
+            tuneEvent = CLng(tuneData(ti, 4))
+            
+            If pi > 0 And pi <= playerEnd Then
+                playerNote = CStr(playerData(pi, 3))
+                playerEvent = CLng(playerData(pi, 4))
+            Else
+                playerNote = ""
+                playerEvent = 0
+            End If
+            
+            If tuneNote = playerNote And pi > 0 And pi <= playerEnd Then
+                ' MATCH
+                matchType = "MATCH"
+                WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                    ti - tuneStart + 1, tuneNote, tuneEvent, _
+                    pi - playerStart + 1, playerNote, playerEvent, matchType
+                
+                tuneMatched(ti) = True
+                playerMatched(pi) = True
+                tuneMatchedPlayer(ti) = playerEvent
+                playerMatchedTune(pi) = tuneEvent
+                
+                outputRow = outputRow + 1
+                ti = ti + 1
+                pi = pi + 1
+            Else
+                ' Mismatch - use lookahead
+                Dim foundInPlayer As Long
+                Dim foundInTune As Long
+                foundInPlayer = FindNoteAheadMM(playerData, tuneNote, pi, playerEnd, lookahead)
+                
+                If playerNote <> "" Then
+                    foundInTune = FindNoteAheadMM(tuneData, playerNote, ti, tuneEnd, lookahead)
+                Else
+                    foundInTune = 0
+                End If
+                
+                If foundInPlayer > 0 And (foundInTune = 0 Or (foundInPlayer - pi) <= (foundInTune - ti)) Then
+                    ' Player has EXTRA notes before match
+                    Do While pi < foundInPlayer And pi <= playerEnd
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            0, "", 0, _
+                            pi - playerStart + 1, CStr(playerData(pi, 3)), CLng(playerData(pi, 4)), "EXTRA"
+                        playerMatched(pi) = True
+                        outputRow = outputRow + 1
+                        pi = pi + 1
+                    Loop
+                    
+                    ' Now match
+                    If pi <= playerEnd Then
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            ti - tuneStart + 1, tuneNote, tuneEvent, _
+                            pi - playerStart + 1, CStr(playerData(pi, 3)), CLng(playerData(pi, 4)), "MATCH"
+                        
+                        tuneMatched(ti) = True
+                        playerMatched(pi) = True
+                        tuneMatchedPlayer(ti) = CLng(playerData(pi, 4))
+                        playerMatchedTune(pi) = tuneEvent
+                        
+                        outputRow = outputRow + 1
+                        ti = ti + 1
+                        pi = pi + 1
+                    End If
+                    
+                ElseIf foundInTune > 0 Then
+                    ' Player MISSED some tune notes
+                    Do While ti < foundInTune And ti <= tuneEnd
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            ti - tuneStart + 1, CStr(tuneData(ti, 3)), CLng(tuneData(ti, 4)), _
+                            0, "", 0, "MISSED"
+                        tuneMatched(ti) = True
+                        outputRow = outputRow + 1
+                        ti = ti + 1
+                    Loop
+                    
+                    ' Now match
+                    If ti <= tuneEnd And pi > 0 And pi <= playerEnd Then
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            ti - tuneStart + 1, CStr(tuneData(ti, 3)), CLng(tuneData(ti, 4)), _
+                            pi - playerStart + 1, playerNote, playerEvent, "MATCH"
+                        
+                        tuneMatched(ti) = True
+                        playerMatched(pi) = True
+                        tuneMatchedPlayer(ti) = playerEvent
+                        playerMatchedTune(pi) = CLng(tuneData(ti, 4))
+                        
+                        outputRow = outputRow + 1
+                        ti = ti + 1
+                        pi = pi + 1
+                    End If
+                    
+                Else
+                    ' No match found - WRONG or MISSED
+                    If pi > 0 And pi <= playerEnd Then
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            ti - tuneStart + 1, tuneNote, tuneEvent, _
+                            pi - playerStart + 1, playerNote, playerEvent, "WRONG"
+                        tuneMatched(ti) = True
+                        playerMatched(pi) = True
+                        outputRow = outputRow + 1
+                        ti = ti + 1
+                        pi = pi + 1
+                    Else
+                        WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                            ti - tuneStart + 1, tuneNote, tuneEvent, _
+                            0, "", 0, "MISSED"
+                        tuneMatched(ti) = True
+                        outputRow = outputRow + 1
+                        ti = ti + 1
+                    End If
+                End If
+            End If
+        Loop
+        
+        ' Remaining player notes are EXTRA
+        Do While pi > 0 And pi <= playerEnd
+            If Not playerMatched(pi) Then
+                WriteMatchRow wsMelody, outputRow, currentMeasure, _
+                    0, "", 0, _
+                    pi - playerStart + 1, CStr(playerData(pi, 3)), CLng(playerData(pi, 4)), "EXTRA"
+                playerMatched(pi) = True
+                outputRow = outputRow + 1
+            End If
+            pi = pi + 1
+        Loop
+        
+NextMeasure:
+    Next currentMeasure
+    
+    ' Add summary statistics
+    outputRow = outputRow + 2
+    Dim matchCount As Long, missedCount As Long, extraCount As Long, wrongCount As Long
+    matchCount = 0: missedCount = 0: extraCount = 0: wrongCount = 0
+    
+    For i = dataStartRow To outputRow - 3
+        Select Case wsMelody.Cells(i, 8).Value
+            Case "MATCH": matchCount = matchCount + 1
+            Case "MISSED": missedCount = missedCount + 1
+            Case "EXTRA": extraCount = extraCount + 1
+            Case "WRONG": wrongCount = wrongCount + 1
+        End Select
+    Next i
+    
+    With wsMelody
+        .Cells(outputRow, 1).Value = "SUMMARY"
+        .Cells(outputRow, 1).Font.Bold = True
+        outputRow = outputRow + 1
+        .Cells(outputRow, 1).Value = "Matched:"
+        .Cells(outputRow, 2).Value = matchCount
+        outputRow = outputRow + 1
+        .Cells(outputRow, 1).Value = "Missed:"
+        .Cells(outputRow, 2).Value = missedCount
+        outputRow = outputRow + 1
+        .Cells(outputRow, 1).Value = "Extra:"
+        .Cells(outputRow, 2).Value = extraCount
+        outputRow = outputRow + 1
+        .Cells(outputRow, 1).Value = "Wrong:"
+        .Cells(outputRow, 2).Value = wrongCount
+        outputRow = outputRow + 1
+        
+        Dim totalExpected As Long
+        totalExpected = matchCount + missedCount + wrongCount
+        If totalExpected > 0 Then
+            .Cells(outputRow, 1).Value = "Match Rate:"
+            .Cells(outputRow, 2).Value = Format(matchCount / totalExpected, "0.0%")
+        End If
+    End With
+    
+    ' Update source sheets with matched event columns
+    UpdateMatchedEvents wsTunePerf, wsPlayerPerf, tuneData, playerData, tuneMatchedPlayer, playerMatchedTune
+    
+    Exit Sub
+    
+ErrorHandler:
+    ' Silently exit on error - don't interrupt workflow
+    Debug.Print "BuildCoreMelodyMatching Error: " & Err.Description
+End Sub
+
+'------------------------------------------------------------------------------
+' Helper: Find a note ahead in data array
+'------------------------------------------------------------------------------
+Private Function FindNoteAheadMM(ByRef data As Variant, findNote As String, _
+                                  startIdx As Long, endIdx As Long, maxLook As Long) As Long
+    Dim i As Long
+    Dim maxIdx As Long
+    FindNoteAheadMM = 0
+    If startIdx <= 0 Or startIdx > endIdx Then Exit Function
+    
+    maxIdx = startIdx + maxLook - 1
+    If maxIdx > endIdx Then maxIdx = endIdx
+    
+    For i = startIdx To maxIdx
+        If CStr(data(i, 3)) = findNote Then
+            FindNoteAheadMM = i
+            Exit Function
+        End If
+    Next i
+End Function
+
+'------------------------------------------------------------------------------
+' Helper: Write a row to the matching detail table
+'------------------------------------------------------------------------------
+Private Sub WriteMatchRow(ws As Worksheet, row As Long, measure As Long, _
+                          tunePos As Long, tuneNote As String, tuneEvent As Long, _
+                          playerPos As Long, playerNote As String, playerEvent As Long, _
+                          matchType As String)
+    With ws
+        .Cells(row, 1).Value = measure
+        If tunePos > 0 Then .Cells(row, 2).Value = tunePos
+        .Cells(row, 3).Value = tuneNote
+        If tuneEvent > 0 Then .Cells(row, 4).Value = tuneEvent
+        If playerPos > 0 Then .Cells(row, 5).Value = playerPos
+        .Cells(row, 6).Value = playerNote
+        If playerEvent > 0 Then .Cells(row, 7).Value = playerEvent
+        .Cells(row, 8).Value = matchType
+        
+        ' Color code match types
+        Select Case matchType
+            Case "MATCH"
+                .Cells(row, 8).Interior.Color = RGB(198, 239, 206)
+            Case "MISSED"
+                .Cells(row, 8).Interior.Color = RGB(255, 199, 206)
+            Case "EXTRA"
+                .Cells(row, 8).Interior.Color = RGB(255, 235, 156)
+            Case "WRONG"
+                .Cells(row, 8).Interior.Color = RGB(255, 182, 193)
+        End Select
+    End With
+End Sub
+
+'------------------------------------------------------------------------------
+' Helper: Update source sheets with matched event columns
+'------------------------------------------------------------------------------
+Private Sub UpdateMatchedEvents(wsTunePerf As Worksheet, wsPlayerPerf As Worksheet, _
+                                tuneData As Variant, playerData As Variant, _
+                                tuneMatchedPlayer() As Long, playerMatchedTune() As Long)
+    Dim i As Long, lastCol As Long, matchCol As Long
+    Dim tuneLastRow As Long, playerLastRow As Long
+    Dim eventOrder As Long, searchRow As Long
+    
+    On Error Resume Next
+    
+    ' === Update Tune Performance ===
+    lastCol = wsTunePerf.Cells(5, wsTunePerf.Columns.Count).End(xlToLeft).Column
+    matchCol = 0
+    For i = 1 To lastCol
+        If wsTunePerf.Cells(5, i).Value = "matched_player_event" Then
+            matchCol = i
+            Exit For
+        End If
+    Next i
+    
+    If matchCol = 0 Then
+        matchCol = lastCol + 1
+        wsTunePerf.Cells(5, matchCol).Value = "matched_player_event"
+        wsTunePerf.Cells(5, matchCol).Font.Bold = True
+    End If
+    
+    tuneLastRow = wsTunePerf.Cells(wsTunePerf.Rows.Count, "A").End(xlUp).row
+    If tuneLastRow > 5 Then
+        wsTunePerf.Range(wsTunePerf.Cells(6, matchCol), wsTunePerf.Cells(tuneLastRow, matchCol)).ClearContents
+    End If
+    
+    ' Write matched player events
+    For i = 1 To UBound(tuneData, 1)
+        If tuneMatchedPlayer(i) > 0 Then
+            eventOrder = CLng(tuneData(i, 4))
+            For searchRow = 6 To tuneLastRow
+                If wsTunePerf.Cells(searchRow, 1).Value = eventOrder Then
+                    wsTunePerf.Cells(searchRow, matchCol).Value = tuneMatchedPlayer(i)
+                    Exit For
+                End If
+            Next searchRow
+        End If
+    Next i
+    
+    ' === Update Player Performance ===
+    lastCol = wsPlayerPerf.Cells(5, wsPlayerPerf.Columns.Count).End(xlToLeft).Column
+    matchCol = 0
+    For i = 1 To lastCol
+        If wsPlayerPerf.Cells(5, i).Value = "matched_tune_event" Then
+            matchCol = i
+            Exit For
+        End If
+    Next i
+    
+    If matchCol = 0 Then
+        matchCol = lastCol + 1
+        wsPlayerPerf.Cells(5, matchCol).Value = "matched_tune_event"
+        wsPlayerPerf.Cells(5, matchCol).Font.Bold = True
+    End If
+    
+    playerLastRow = wsPlayerPerf.Cells(wsPlayerPerf.Rows.Count, "A").End(xlUp).row
+    If playerLastRow > 5 Then
+        wsPlayerPerf.Range(wsPlayerPerf.Cells(6, matchCol), wsPlayerPerf.Cells(playerLastRow, matchCol)).ClearContents
+    End If
+    
+    ' Write matched tune events
+    For i = 1 To UBound(playerData, 1)
+        If playerMatchedTune(i) > 0 Then
+            eventOrder = CLng(playerData(i, 4))
+            For searchRow = 6 To playerLastRow
+                If wsPlayerPerf.Cells(searchRow, 1).Value = eventOrder Then
+                    wsPlayerPerf.Cells(searchRow, matchCol).Value = playerMatchedTune(i)
+                    Exit For
+                End If
+            Next searchRow
+        End If
+    Next i
+    
+    On Error GoTo 0
+End Sub
+
+
+

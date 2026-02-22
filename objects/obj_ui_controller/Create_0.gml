@@ -36,6 +36,7 @@ if (!variable_global_exists("ui_fields")) {
 }
 //Tune variables
 	global.tune_selection = -1;
+	global.selected_tune_time_sig = ""; // Time signature of tune currently selected in picker (before OK clicked)
 	global.tune_library = array_create(5);
 	global.tune_library[0]="Tune Not Set";
 	global.tune_library[1]="ScotlandTheBrave.csv";

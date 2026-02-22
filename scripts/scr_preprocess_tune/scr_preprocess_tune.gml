@@ -7,22 +7,31 @@
 //   - tune_expand_embellishment(_emb_name, _base_midi) — Expand embellishment notation into note sequence
 //   - tune_build_playable_events(_tune) — Filter and convert raw events to MIDI format
 
-/// ============ USER-CONFIGURABLE GRACENOTE TIMING ============
-/// Adjust these values to control how gracenote duration varies with tempo
-/// Stored globally so any script can access without needing an instance variable.
-if (!variable_global_exists("GRACENOTE_CONFIG")) {
-	global.GRACENOTE_CONFIG = {
-		min_ms: 20,                 // Duration at fast tempo (120+ BPM)
-		max_ms: 80,                 // Duration at slow tempo (50-60 BPM)
-		fast_bpm_threshold: 120,    // BPM above which uses min_ms
-		slow_bpm_threshold: 60      // BPM below which uses max_ms
-	};
-}
-
-function scr_preprocess_tune(_tune, _override_bpm) {
+function scr_preprocess_tune(_tune, _overrides) {
 	if (!_tune.tune_data.is_loaded) {
 		show_debug_message("ERROR: scr_preprocess_tune called on unloaded tune");
 		return array_create(0);
+	}
+
+	var override_bpm = undefined;
+	var override_swing = undefined;
+	var override_grace_ms = undefined;
+	if (is_struct(_overrides)) {
+		if (struct_exists(_overrides, "bpm") && !is_undefined(_overrides.bpm)) {
+			override_bpm = _overrides.bpm;
+		}
+		if (struct_exists(_overrides, "swing_mult") && !is_undefined(_overrides.swing_mult)) {
+			override_swing = _overrides.swing_mult;
+		} else if (struct_exists(_overrides, "swing") && !is_undefined(_overrides.swing)) {
+			override_swing = _overrides.swing;
+		}
+		if (struct_exists(_overrides, "gracenote_override_ms") && !is_undefined(_overrides.gracenote_override_ms)) {
+			override_grace_ms = _overrides.gracenote_override_ms;
+		} else if (struct_exists(_overrides, "gracenote_ms") && !is_undefined(_overrides.gracenote_ms)) {
+			override_grace_ms = _overrides.gracenote_ms;
+		}
+	} else if (!is_undefined(_overrides)) {
+		override_bpm = _overrides;
 	}
 
 	show_debug_message("=== Preprocessing tune: " + string(_tune.tune_data.filename) + " ===");
@@ -43,34 +52,44 @@ function scr_preprocess_tune(_tune, _override_bpm) {
 	// Tempo & timing - handle empty strings with fallback defaults
 	var tempo_str = string(meta.tempo_default ?? "");
 	var tempo_bpm = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
-	if (!is_undefined(_override_bpm)) {
-		tempo_bpm = real(_override_bpm);
+	if (!is_undefined(override_bpm)) {
+		tempo_bpm = real(override_bpm);
 	}
+	var effective_quarter_bpm = tune_get_effective_quarter_bpm(tempo_bpm, meta.meter ?? "4/4");
 	
 	// Calculate unit_ms from BPM and unit note length
 	// BPM is quarter notes per minute, so ms_per_quarter = 60000 / BPM
-	var ms_per_quarter = 60000 / tempo_bpm;
+	var ms_per_quarter = 60000 / effective_quarter_bpm;
 	
 	// Check what the unit note is (defaults to eighth note if not specified)
 	var unit_note = string(meta.unit_note_length ?? "1/8");
-	var unit_ms = ms_per_quarter / 2;  // Assuming 1/8 notes for now
-	// TODO: Parse unit_note to handle other note values (1/16, 1/4, etc.)
+	var unit_multiplier = tune_note_fraction_to_quarter_multiplier(unit_note);
+	var unit_ms = ms_per_quarter * unit_multiplier;
 	
-	show_debug_message("  Tempo: " + string(tempo_bpm) + " BPM -> " + string(ms_per_quarter) + "ms per beat");
-	show_debug_message("  Calculated unit_ms: " + string(unit_ms) + " (for " + unit_note + " notes)");
+	show_debug_message("  Tempo: " + string(tempo_bpm) + " BPM (effective quarter BPM " + string(effective_quarter_bpm) + ") -> " + string(ms_per_quarter) + "ms per beat");
+	show_debug_message("  Calculated unit_ms: " + string(unit_ms) + " (for " + unit_note + " notes, multiplier=" + string(unit_multiplier) + ")");
 	
 	var base_str = string(perf.instrument_midi_note_base ?? "");
 	var base_midi = (string_length(base_str) > 0) ? real(base_str) : 55;
 	
-	var channel_str = string(perf.channel ?? "");
-	var channel = (string_length(channel_str) > 0) ? real(channel_str) : 0;
+	// Tune output channels (0-based): default tune pipes = 2; channel 1 reserved.
+	var channel = 2;
 	
-	show_debug_message("  Tempo: " + string(tempo_bpm) + " BPM -> " + string(ms_per_quarter) + "ms per beat");
-	show_debug_message("  Calculated unit_ms: " + string(unit_ms) + " (for " + unit_note + " notes)");
+	show_debug_message("  Tempo: " + string(tempo_bpm) + " BPM (effective quarter BPM " + string(effective_quarter_bpm) + ") -> " + string(ms_per_quarter) + "ms per beat");
+	show_debug_message("  Calculated unit_ms: " + string(unit_ms) + " (for " + unit_note + " notes, multiplier=" + string(unit_multiplier) + ")");
 	show_debug_message("  Base MIDI: " + string(base_midi));
 	
+	// Apply swing overrides before building playable events
+	var perf_swing = perf.swing ?? "";
+	var swing_value = !is_undefined(override_swing) ? override_swing : (meta.swing ?? perf_swing ?? "");
+	var swing_mult = tune_parse_swing_multiplier(swing_value);
+	var grace_override_ms = !is_undefined(override_grace_ms) ? override_grace_ms : (meta.gracenote_override_ms ?? meta.gracenote_ms ?? undefined);
+	if (swing_mult > 0) {
+		events = tune_apply_swing_to_events(events, tempo_bpm, unit_ms, swing_mult, grace_override_ms);
+	}
+
 	// Build playable events
-	var playable = tune_build_playable_events(_tune, tempo_bpm, unit_ms, base_midi, channel, events);
+	var playable = tune_build_playable_events(_tune, tempo_bpm, unit_ms, base_midi, channel, events, grace_override_ms);
 	
 	show_debug_message("  → Generated " + string(array_length(playable)) + " playable events");
 	
@@ -83,7 +102,28 @@ function scr_preprocess_tune(_tune, _override_bpm) {
 /// @function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channel, _events)
 /// @description Iterate through tune events and convert to MIDI format.
 
-function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channel, _events) {
+/// @function tune_voice_to_channel(_voice, _default_channel)
+/// @description Map voice labels to MIDI channels (0-based).
+/// @param _voice Voice label ("pipes", "harmony1", "support1", "drums", etc.)
+/// @param _default_channel Fallback channel if voice is missing/unknown
+
+function tune_voice_to_channel(_voice, _default_channel) {
+	var v = string_lower(string(_voice ?? ""));
+	switch (v) {
+		case "pipes": return 2;
+		case "harmony1": return 3;
+		case "harmony2": return 4;
+		case "harmony3": return 5;
+		case "support1": return 10; // MIDI channel 11 (1-based)
+		case "support2": return 11; // MIDI channel 12 (1-based)
+		case "support3": return 12; // MIDI channel 13 (1-based)
+		case "support4": return 13; // MIDI channel 14 (1-based)
+		case "drums": return 9;     // MIDI channel 10 (1-based)
+		default: return _default_channel;
+	}
+}
+
+function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channel, _events, _grace_override_ms) {
 	var events = _events;  // Use the passed events array instead of trying to read from _tune
 	var playable = array_create(0);
 	var note_off_queue = array_create(0); // Store pending note-offs
@@ -94,9 +134,20 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 	for (var i = 0; i < array_length(events); i++) {
 		var ev = events[i];
 		var time_ms = tune_units_to_ms(ev.total_units, _tempo, _unit_ms);
+		var ev_voice = struct_exists(ev, "voice") ? ev.voice : "";
+		var ev_channel = tune_voice_to_channel(ev_voice, _channel);
 		
 		// Skip structure events (bars, divisions)
 		if (ev.type == "structure") {
+			array_push(playable, {
+				time: time_ms,
+				type: "marker",
+				marker_type: ev.structure ?? "structure",
+				measure: ev.measure ?? 0,
+				beat: ev.beat ?? 0,
+				beat_fraction: ev.division ?? 0,
+				event_id: ev.event_id ?? 0
+			});
 			continue;
 		}
 		
@@ -115,7 +166,11 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				type: "note_on",
 				note: midi_note,
 				velocity: velocity,
-				channel: _channel
+                channel: ev_channel,
+                measure: ev.measure ?? 0,
+                beat: ev.beat ?? 0,
+                beat_fraction: ev.division ?? 0,
+                event_id: ev.event_id ?? 0
 			});
 			
 			// Calculate note off time - shorten duration by stolen time from embellishment
@@ -126,7 +181,11 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 			array_push(note_off_queue, {
 				time: note_off_time,
 				note: midi_note,
-				channel: _channel
+				channel: ev_channel,
+				measure: ev.measure ?? 0,
+				beat: ev.beat ?? 0,
+				beat_fraction: ev.division ?? 0,
+				event_id: ev.event_id ?? 0
 			});
 		}
 		
@@ -173,7 +232,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				}
 				
 				// Expand embellishment into notes (with BPM scaling & constraints)
-				var expanded_notes = embellishment_to_notes(emb_found, target_duration_ms, preceding_duration_ms, _tempo);
+				var expanded_notes = embellishment_to_notes(emb_found, target_duration_ms, preceding_duration_ms, _tempo, _grace_override_ms);
 				
 				// Calculate embellishment start time based on anchor semantics
 				var anchor_index = emb_found.anchor_index - 1;  // 0-based
@@ -229,14 +288,22 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 						type: "note_on",
 						note: midi_from_letter,
 						velocity: 70,
-						channel: _channel
+						channel: ev_channel,
+						measure: ev.measure ?? 0,
+						beat: ev.beat ?? 0,
+						beat_fraction: ev.division ?? 0,
+						event_id: ev.event_id ?? 0
 					});
 					
 					// Note off
 					array_push(note_off_queue, {
 						time: current_emb_time + note_duration,
 						note: midi_from_letter,
-						channel: _channel
+						channel: ev_channel,
+						measure: ev.measure ?? 0,
+						beat: ev.beat ?? 0,
+						beat_fraction: ev.division ?? 0,
+						event_id: ev.event_id ?? 0
 					});
 					
 					current_emb_time += note_duration;
@@ -248,18 +315,26 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				
 				// Use tempo-based duration for single-note
 				if (array_length(emb_notes) == 1) {
-					var gracenote_ms = tune_get_gracenote_timing(_tempo);
+					var gracenote_ms = tune_get_gracenote_timing(_tempo, _grace_override_ms);
 					array_push(playable, {
 						time: time_ms,
 						type: "note_on",
 						note: emb_notes[0],
 						velocity: 70,
-						channel: _channel
+						channel: ev_channel,
+						measure: ev.measure ?? 0,
+						beat: ev.beat ?? 0,
+						beat_fraction: ev.division ?? 0,
+						event_id: ev.event_id ?? 0
 					});
 					array_push(note_off_queue, {
 						time: time_ms + gracenote_ms,
 						note: emb_notes[0],
-						channel: _channel
+						channel: ev_channel,
+						measure: ev.measure ?? 0,
+						beat: ev.beat ?? 0,
+						beat_fraction: ev.division ?? 0,
+						event_id: ev.event_id ?? 0
 					});
 				} else {
 					// Multi-note: distribute evenly
@@ -272,12 +347,20 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 							type: "note_on",
 							note: emb_notes[j],
 							velocity: 70,
-							channel: _channel
+							channel: ev_channel,
+							measure: ev.measure ?? 0,
+							beat: ev.beat ?? 0,
+							beat_fraction: ev.division ?? 0,
+							event_id: ev.event_id ?? 0
 						});
 						array_push(note_off_queue, {
 							time: emb_time + (time_per_note * 0.8),
 							note: emb_notes[j],
-							channel: _channel
+							channel: ev_channel,
+							measure: ev.measure ?? 0,
+							beat: ev.beat ?? 0,
+							beat_fraction: ev.division ?? 0,
+							event_id: ev.event_id ?? 0
 						});
 					}
 				}
@@ -293,7 +376,11 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 			type: "note_off",
 			note: note_off.note,
 			velocity: 0,
-			channel: note_off.channel
+			channel: note_off.channel,
+			measure: note_off.measure ?? 0,
+			beat: note_off.beat ?? 0,
+			beat_fraction: note_off.beat_fraction ?? 0,
+			event_id: note_off.event_id ?? 0
 		});
 	}
 	
@@ -315,29 +402,152 @@ function tune_units_to_ms(_units, _tempo_bpm, _unit_ms) {
 	return _units * _unit_ms;
 }
 
-/// @function tune_get_gracenote_timing(_tempo_bpm)
-/// @description Calculate gracenote duration based on tempo.
-/// Uses GRACENOTE_CONFIG for user-configurable parameters.
+/// @function tune_get_effective_quarter_bpm(_tempo_bpm, _meter)
+/// @description Convert metadata BPM to quarter-note BPM used by runtime timing.
+/// In cut time (2/2 or C|), BPM is interpreted as half-note BPM.
+
+function tune_get_effective_quarter_bpm(_tempo_bpm, _meter) {
+	return timing_get_effective_quarter_bpm(_tempo_bpm, _meter);
+}
+
+/// @function tune_note_fraction_to_quarter_multiplier(_note_fraction)
+/// @description Convert a note fraction string (e.g., "1/8", "1/4", "3/16")
+/// to a multiplier of quarter-note duration.
+/// @param _note_fraction String note length fraction
+/// @returns Quarter-note multiplier (fallback 0.5 = 1/8)
+
+function tune_note_fraction_to_quarter_multiplier(_note_fraction) {
+	var fraction = string_trim(string(_note_fraction ?? ""));
+	if (fraction == "") return 0.5;
+
+	var parts = string_split(fraction, "/");
+	if (array_length(parts) != 2) return 0.5;
+
+	var numer = real(parts[0]);
+	var denom = real(parts[1]);
+	if (denom <= 0 || numer <= 0) return 0.5;
+
+	// Relative to quarter note (1/4): (numer/denom) / (1/4) = 4*numer/denom
+	return (4 * numer) / denom;
+}
+
+/// @function tune_get_gracenote_timing(_tempo_bpm, _override_ms)
+/// @description Calculate gracenote duration based on tempo, with optional override.
+/// Uses fallback gracenote timing from EMBELLISHMENT_CONFIG.
 /// @param _tempo_bpm  Tempo in beats per minute
 /// @returns Duration in milliseconds
 
-function tune_get_gracenote_timing(_tempo_bpm) {
-	var config = global.GRACENOTE_CONFIG;
+function tune_get_gracenote_timing(_tempo_bpm, _override_ms) {
+	var config = global.EMBELLISHMENT_CONFIG;
 	var gracenote_ms;
+	if (!is_undefined(_override_ms) && real(_override_ms) > 0) {
+		return real(_override_ms);
+	}
 	
-	if (_tempo_bpm <= config.slow_bpm_threshold) {
+	if (_tempo_bpm <= config.fallback_slow_bpm_threshold) {
 		// At or below slow threshold: use maximum gracenote duration
-		gracenote_ms = config.max_ms;
-	} else if (_tempo_bpm >= config.fast_bpm_threshold) {
+		gracenote_ms = config.fallback_max_ms;
+	} else if (_tempo_bpm >= config.fallback_fast_bpm_threshold) {
 		// At or above fast threshold: use minimum gracenote duration
-		gracenote_ms = config.min_ms;
+		gracenote_ms = config.fallback_min_ms;
 	} else {
 		// Linear interpolation between thresholds
-		var ratio = (_tempo_bpm - config.slow_bpm_threshold) / (config.fast_bpm_threshold - config.slow_bpm_threshold);
-		gracenote_ms = config.max_ms - (config.max_ms - config.min_ms) * ratio;
+		var ratio = (_tempo_bpm - config.fallback_slow_bpm_threshold) / (config.fallback_fast_bpm_threshold - config.fallback_slow_bpm_threshold);
+		gracenote_ms = config.fallback_max_ms - (config.fallback_max_ms - config.fallback_min_ms) * ratio;
 	}
 	
 	return gracenote_ms;
+}
+
+/// @function tune_parse_swing_multiplier(_swing_value)
+/// @description Parse swing multiplier from metadata or override (0 or empty = default)
+
+function tune_parse_swing_multiplier(_swing_value) {
+	var s = string(_swing_value ?? "");
+	if (string_length(s) == 0) return 0;
+	return real(s);
+}
+
+/// @function tune_get_gracenote_unit_ms(_tempo_bpm, _override_ms)
+/// @description Get BPM-scaled gracenote unit, with optional override.
+
+function tune_get_gracenote_unit_ms(_tempo_bpm, _override_ms) {
+	var cfg = global.EMBELLISHMENT_CONFIG;
+	if (!is_undefined(_override_ms) && real(_override_ms) > 0) {
+		return real(_override_ms);
+	}
+	var bpm_delta = _tempo_bpm - cfg.reference_bpm;
+	var unit_ms = cfg.gracenote_unit_ms_base + (bpm_delta * cfg.bpm_scaling_factor);
+	return clamp(unit_ms, cfg.min_gracenote_ms, cfg.max_gracenote_ms);
+}
+
+/// @function tune_get_broken_dir(_ev, _next_ev)
+/// @description Determine broken rhythm direction from explicit markers.
+
+function tune_get_broken_dir(_ev, _next_ev) {
+	var broken = "";
+	if (struct_exists(_ev, "broken_dir")) broken = string(_ev.broken_dir);
+	if (broken == "" && struct_exists(_ev, "emb_reserved")) broken = string(_ev.emb_reserved);
+
+	broken = string_lower(string_trim(broken));
+	if (broken == "" || broken == "none") return "";
+	if (broken == "dotcut" || broken == "cutdot") return broken;
+
+	return "";
+}
+
+/// @function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, _grace_override_ms)
+/// @description Apply swing rules to broken rhythm pairs and recompute total_units.
+
+function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, _grace_override_ms) {
+	var count = array_length(_events);
+	var out = array_create(count);
+	var running_units = 0;
+	var grace_ms = tune_get_gracenote_unit_ms(_tempo_bpm, _grace_override_ms);
+	var grace_units = grace_ms / _unit_ms;
+	var i = 0;
+	while (i < count) {
+		var ev = _events[i];
+		if (ev.type == "note") {
+			var next_ev = (i + 1 < count) ? _events[i + 1] : undefined;
+			var broken_dir = tune_get_broken_dir(ev, next_ev);
+			if (broken_dir != "" && next_ev != undefined && next_ev.type == "note") {
+				var w1 = real(ev.written ?? ev.adjusted ?? 0);
+				var w2 = real(next_ev.written ?? next_ev.adjusted ?? 0);
+				var pair_units = w1 + w2;
+				if (pair_units > 0) {
+					var default_cut_units = (broken_dir == "dotcut") ? (w2 * 0.5) : (w1 * 0.5);
+					var cut_units = _swing_mult * grace_units;
+					if (cut_units < default_cut_units) cut_units = default_cut_units;
+					if (cut_units > pair_units - 0.0001) cut_units = pair_units - 0.0001;
+					var dot_units = pair_units - cut_units;
+					if (broken_dir == "dotcut") {
+						ev.adjusted = dot_units;
+						next_ev.adjusted = cut_units;
+					} else {
+						ev.adjusted = cut_units;
+						next_ev.adjusted = dot_units;
+					}
+					ev.total_units = running_units;
+					running_units += real(ev.adjusted);
+					next_ev.total_units = running_units;
+					running_units += real(next_ev.adjusted);
+					out[i] = ev;
+					out[i + 1] = next_ev;
+					i += 2;
+					continue;
+				}
+			}
+			var adj = real(ev.adjusted ?? ev.written ?? 0);
+			ev.total_units = running_units;
+			running_units += adj;
+		} else {
+			ev.total_units = running_units;
+		}
+		out[i] = ev;
+		i += 1;
+	}
+	return out;
 }
 
 /// @function tune_note_letter_to_midi(_letter, _base_midi)
@@ -346,11 +556,11 @@ function tune_get_gracenote_timing(_tempo_bpm) {
 /// @param _base_midi  Not used (replaced by exact MIDI lookup)
 /// @returns MIDI note number
 
-function tune_note_letter_to_midi(_letter, _base_midi) {
-	// Bagpipe chanter MIDI note mapping (exact from Excel reference)
-	// Bagpipe uses C# and F# as standard notes
-	// Using struct instead of ds_map for simplicity and memory efficiency
-	var note_map = {
+function tune_get_note_map(_chanter) {
+	var chanter = string(_chanter);
+
+	// Default bagpipe chanter MIDI note mapping (exact from Excel reference)
+	var default_map = {
 		G: 55,    // Low G
 		A: 57,    // Low A
 		B: 59,    // B
@@ -363,6 +573,48 @@ function tune_note_letter_to_midi(_letter, _base_midi) {
 		_cnat: 60,  // Cnat (C natural, C4) — prefixed with _ since =c is not a valid struct key
 		_fnat: 65   // Fnat (F natural, F4)
 	};
+
+	if (chanter == "blair") {
+		// Blair Digital Chanter mapping (order: G, A, B, Cnat, C#, D, E, Fnat, F#, G, A)
+		return {
+			G: 56,
+			A: 58,
+			B: 60,
+			_cnat: 61,
+			c: 62,
+			d: 63,
+			e: 65,
+			_fnat: 66,
+			f: 67,
+			g: 68,
+			a: 70
+		};
+	}
+
+	return default_map;
+}
+
+function tune_build_midi_to_letter_map(_note_map) {
+	var out = {};
+	var names = variable_struct_get_names(_note_map);
+	for (var i = 0; i < array_length(names); i++) {
+		var key = names[i];
+		var midi = _note_map[$ key];
+		var letter = key;
+		if (key == "_cnat") {
+			letter = "=c";
+		} else if (key == "_fnat") {
+			letter = "=f";
+		}
+		out[$ string(midi)] = letter;
+	}
+	return out;
+}
+
+function tune_note_letter_to_midi(_letter, _base_midi) {
+	// Bagpipe uses C# and F# as standard notes
+	// Using struct instead of ds_map for simplicity and memory efficiency
+	var note_map = tune_get_note_map(global.MIDI_chanter ?? "default");
 	
 	// Handle special note names
 	var midi;
@@ -457,11 +709,14 @@ function tune_export_playable_events_csv(_playable_array, _tune_filename) {
 	// Write each event
 	for (var i = 0; i < array_length(_playable_array); i++) {
 		var ev = _playable_array[i];
+		var ev_note = struct_exists(ev, "note") ? ev.note : "";
+		var ev_velocity = struct_exists(ev, "velocity") ? ev.velocity : "";
+		var ev_channel = struct_exists(ev, "channel") ? ev.channel : "";
 		var row = string(ev.time) + "," + 
 		          string(ev.type) + "," + 
-		          string(ev.note ?? "") + "," + 
-		          string(ev.velocity ?? "") + "," + 
-		          string(ev.channel ?? "");
+		          string(ev_note) + "," + 
+		          string(ev_velocity) + "," + 
+		          string(ev_channel);
 		file_text_write_string(file, row + chr(10));
 	}
 	

@@ -39,6 +39,7 @@
     {"name":"scr_metronome","order":10,"path":"scripts/scr_metronome/scr_metronome.yy",},
     {"name":"scr_MIDI","order":1,"path":"scripts/scr_MIDI/scr_MIDI.yy",},
     {"name":"scr_preprocess_tune","order":7,"path":"scripts/scr_preprocess_tune/scr_preprocess_tune.yy",},
+    {"name":"scr_timing_utils","order":11,"path":"scripts/scr_timing_utils/scr_timing_utils.yy",},
     {"name":"scr_tune_library","order":6,"path":"scripts/scr_tune_library/scr_tune_library.yy",},
     {"name":"scr_tune_load","order":5,"path":"scripts/scr_tune_load/scr_tune_load.yy",},
     {"name":"scr_tune_scripts","order":3,"path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},

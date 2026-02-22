@@ -1,0 +1,1334 @@
+Option Explicit
+
+' ============================================================
+' CONFIGURATION
+' ============================================================
+
+Const SHEET_EVENTS As String = "Tune"
+Const ABC_METADATA_CELL As String = "F2"
+Const ABC_SOURCE_CELL As String = "G2"
+
+Const HEADER_ROW As Long = 50
+Const FIRST_DATA_ROW As Long = 51
+
+' ============================================================
+' COLUMN MAPPING — NEW 23-COLUMN SCHEMA
+' ============================================================
+
+Const COL_EVENT_ID As Long = 1
+Const COL_TYPE As Long = 2
+Const COL_STRUCTURE As Long = 3
+
+Const COL_PART As Long = 4
+Const COL_MEASURE As Long = 5
+Const COL_BEAT As Long = 6
+Const COL_DIVISION As Long = 7
+Const COL_PHRASE As Long = 8
+
+Const COL_NOTE_LETTER As Long = 9
+Const COL_NOTE_MIDI As Long = 10
+
+Const COL_WRITTEN_UNITS As Long = 11
+Const COL_ADJUSTED_UNITS As Long = 12
+Const COL_TOTAL_UNITS As Long = 13
+
+Const COL_EMBELLISH_PRECEDING As Long = 14
+Const COL_EMBELLISH_LITERAL As Long = 15
+Const COL_EMBELLISH_TARGET As Long = 16
+Const COL_EMBELLISH_TYPE As Long = 17
+Const COL_EMBELLISH_RESERVED As Long = 18
+
+Const COL_BROKEN_DIR As Long = 19
+
+Const COL_START_MS As Long = 20
+Const COL_END_MS As Long = 21
+Const COL_TEMPO_BPM As Long = 22
+Const COL_VOICE As Long = 23
+
+' ============================================================
+' MUSICAL CONSTANTS (now dynamic via module-level variables)
+' ============================================================
+
+Private TimeSigNum As Long          ' e.g., 7 for 7/4
+Private TimeSigDen As Long          ' e.g., 4 for 7/4
+Private UnitNoteFraction As Double  ' e.g., 0.125 for L:1/8
+Private UnitsPerBeat As Double      ' calculated: beat duration / unit duration
+Private BeatsPerMeasure As Long     ' = TimeSigNum
+Private UnitsPerMeasure As Double   ' = UnitsPerBeat * BeatsPerMeasure
+
+Private PickupOffsetUnits As Double
+Private PickupDetected As Boolean
+
+Const EPSILON As Double = 0.000001
+Const ROUND_DECIMALS As Long = 9
+
+' ============================================================
+' ENTRY POINT
+' ============================================================
+
+Public Sub ParseABCToEvents()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+
+    Dim metadata As String, abc As String
+    metadata = ws.Range(ABC_METADATA_CELL).Value
+    abc = ws.Range(ABC_SOURCE_CELL).Value
+    
+    If Trim$(metadata) = "" Then
+        MsgBox "No ABC metadata found in " & ABC_METADATA_CELL, vbExclamation
+        Exit Sub
+    End If
+    
+    If Trim$(abc) = "" Then
+        MsgBox "No ABC events found in " & ABC_SOURCE_CELL, vbExclamation
+        Exit Sub
+    End If
+
+    ' Parse metadata and set up time signature variables
+    ParseABCMetadata ws, metadata
+    
+    ' Calculate rhythmic constants based on parsed metadata
+    CalculateRhythmicConstants ws
+
+    PickupOffsetUnits = 0#
+    PickupDetected = False
+
+    ClearEventRows ws
+
+    Dim tokens As Collection
+    Set tokens = TokenizeABC(abc)
+
+    Dim flatTokens As Collection
+    Set flatTokens = ExpandRepeats(tokens)
+
+    WriteEventsFromTokens ws, flatTokens
+    
+    ' Detect pickup after first pass (before recalculating positions)
+    DetectPickup ws
+    
+    RecalculatePositions ws
+    PopulateEmbellishmentTargets ws
+    InferStructuralMetadata ws
+
+    MsgBox "ABC parsing complete." & vbCrLf & _
+           "Time Sig: " & TimeSigNum & "/" & TimeSigDen & vbCrLf & _
+           "Units per beat: " & UnitsPerBeat & vbCrLf & _
+           "Units per measure: " & UnitsPerMeasure & vbCrLf & _
+           "Pickup units: " & PickupOffsetUnits, vbInformation
+End Sub
+
+' ============================================================
+' CALCULATE RHYTHMIC CONSTANTS FROM METADATA
+' ============================================================
+
+Private Sub CalculateRhythmicConstants(ws As Worksheet)
+    ' Read time signature from metadata
+    Dim tsNum As Variant, tsDen As Variant
+    tsNum = GetMetadataValue(ws, "time_sig_num")
+    tsDen = GetMetadataValue(ws, "time_sig_den")
+    
+    ' Default to 4/4 if not specified
+    If IsEmpty(tsNum) Or tsNum = "" Then tsNum = 4
+    If IsEmpty(tsDen) Or tsDen = "" Then tsDen = 4
+    
+    TimeSigNum = CLng(tsNum)
+    TimeSigDen = CLng(tsDen)
+    
+    ' Read unit note length (L: field)
+    Dim unitLen As String
+    unitLen = GetMetadataValue(ws, "unit_note_length")
+    
+    ' Parse unit note length (e.g., "1/8" -> 0.125)
+    UnitNoteFraction = ParseFraction(unitLen)
+    If UnitNoteFraction = 0 Then UnitNoteFraction = 0.125  ' Default to 1/8
+    
+    ' Calculate beats per measure = numerator of time signature
+    BeatsPerMeasure = TimeSigNum
+    
+    ' Calculate units per beat:
+    ' A "beat" is one denominator note (e.g., quarter note in x/4 time)
+    ' Beat duration as fraction = 1/TimeSigDen (e.g., 1/4 for quarter note)
+    ' Units per beat = beat duration / unit duration
+    ' e.g., for 7/4 with L:1/8: beat = 1/4, unit = 1/8, so units per beat = (1/4)/(1/8) = 2
+    Dim beatFraction As Double
+    beatFraction = 1# / CDbl(TimeSigDen)
+    UnitsPerBeat = beatFraction / UnitNoteFraction
+    
+    ' Calculate units per measure
+    UnitsPerMeasure = UnitsPerBeat * CDbl(BeatsPerMeasure)
+End Sub
+
+Private Function GetMetadataValue(ws As Worksheet, ByVal variableName As String) As Variant
+    Dim r As Long
+    For r = 2 To 48
+        If LCase(Trim(ws.Cells(r, 2).Value)) = LCase(variableName) Then
+            GetMetadataValue = ws.Cells(r, 3).Value
+            Exit Function
+        End If
+    Next r
+    GetMetadataValue = ""
+End Function
+
+Private Function ParseFraction(ByVal fracStr As String) As Double
+    ' Parse a fraction string like "1/8" into a decimal
+    fracStr = Trim(fracStr)
+    If fracStr = "" Then
+        ParseFraction = 0
+        Exit Function
+    End If
+    
+    Dim parts() As String
+    parts = Split(fracStr, "/")
+    
+    If UBound(parts) = 0 Then
+        ' No slash - it's a whole number
+        ParseFraction = CDbl(parts(0))
+    ElseIf UBound(parts) = 1 Then
+        ' Has slash - it's a fraction
+        Dim num As Double, den As Double
+        num = CDbl(Trim(parts(0)))
+        den = CDbl(Trim(parts(1)))
+        If den <> 0 Then
+            ParseFraction = num / den
+        Else
+            ParseFraction = 0
+        End If
+    Else
+        ParseFraction = 0
+    End If
+End Function
+
+' ============================================================
+' DETECT PICKUP (ANACRUSIS)
+' ============================================================
+
+Private Sub DetectPickup(ws As Worksheet)
+    ' Find the first bar line and check how many units precede it
+    ' If less than a full measure, it's a pickup
+    
+    Dim rowIndex As Long
+    rowIndex = FIRST_DATA_ROW
+    
+    Dim firstBarUnits As Double
+    firstBarUnits = -1
+    
+    Do While ws.Cells(rowIndex, COL_EVENT_ID).Value <> ""
+        If ws.Cells(rowIndex, COL_TYPE).Value = "structure" And _
+           ws.Cells(rowIndex, COL_STRUCTURE).Value = "bar" Then
+            firstBarUnits = CDbl(ws.Cells(rowIndex, COL_TOTAL_UNITS).Value)
+            Exit Do
+        End If
+        rowIndex = rowIndex + 1
+    Loop
+    
+    If firstBarUnits < 0 Then
+        ' No bar found
+        PickupOffsetUnits = 0
+        PickupDetected = False
+        Exit Sub
+    End If
+    
+    ' Check if the first bar has less than a full measure
+    ' Allow small tolerance for floating point comparison
+    If firstBarUnits < (UnitsPerMeasure - EPSILON) And firstBarUnits > EPSILON Then
+        ' This is a pickup
+        PickupOffsetUnits = firstBarUnits
+        PickupDetected = True
+    Else
+        ' Full measure or empty - no pickup
+        PickupOffsetUnits = 0
+        PickupDetected = False
+    End If
+End Sub
+
+' ============================================================
+' CLEAR EVENT TABLE
+' ============================================================
+
+Private Sub ClearEventRows(ws As Worksheet)
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    If lastRow >= FIRST_DATA_ROW Then
+        ws.Rows(FIRST_DATA_ROW & ":" & lastRow).ClearContents
+    End If
+End Sub
+
+' ============================================================
+' TOKENIZATION
+' ============================================================
+
+Private Function TokenizeABC(ByVal abc As String) As Collection
+    Dim tokens As New Collection
+    Dim i As Long, ch As String, nextCh As String
+
+    i = 1
+    Do While i <= Len(abc)
+        ch = Mid$(abc, i, 1)
+
+        If ch = " " Or ch = vbTab Or ch = vbCr Or ch = vbLf Then
+            i = i + 1
+            GoTo ContinueLoop
+        End If
+
+        If ch = "{" Then
+            Dim j As Long
+            j = InStr(i, abc, "}")
+            If j = 0 Then
+                AddToken tokens, "unknown", ch
+                i = i + 1
+            Else
+                AddToken tokens, "embellishment", Mid$(abc, i, j - i + 1)
+                i = j + 1
+            End If
+            GoTo ContinueLoop
+        End If
+
+        If ch = "|" Then
+            nextCh = ""
+            If i < Len(abc) Then nextCh = Mid$(abc, i + 1, 1)
+
+            If nextCh = ":" Then
+                AddToken tokens, "repeat_start", "|:"
+                i = i + 2
+            ElseIf nextCh = "|" Then
+                AddToken tokens, "double_bar", "||"
+                i = i + 2
+            ElseIf nextCh = "]" Then
+                AddToken tokens, "end_bar", "|]"
+                i = i + 2
+            Else
+                AddToken tokens, "bar", "|"
+                i = i + 1
+            End If
+            GoTo ContinueLoop
+        End If
+
+        If ch = ":" Then
+            nextCh = ""
+            If i < Len(abc) Then nextCh = Mid$(abc, i + 1, 1)
+            If nextCh = "|" Then
+                AddToken tokens, "repeat_end", ":|"
+                i = i + 2
+            Else
+                i = i + 1
+            End If
+            GoTo ContinueLoop
+        End If
+
+        If ch = "(" Then
+            ' Tuplet marker: (2, (3, (4, etc.
+            Dim tupletStart As Long
+            tupletStart = i
+            i = i + 1
+            Do While i <= Len(abc)
+                ch = Mid$(abc, i, 1)
+                If (ch >= "0" And ch <= "9") Or ch = ":" Then
+                    i = i + 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            AddToken tokens, "tuplet", Mid$(abc, tupletStart, i - tupletStart)
+            GoTo ContinueLoop
+        End If
+
+        If ch = "[" Then
+            nextCh = ""
+            If i < Len(abc) Then nextCh = Mid$(abc, i + 1, 1)
+            If nextCh = "|" Then
+                AddToken tokens, "start_bar", "[|"
+                i = i + 2
+                GoTo ContinueLoop
+            ElseIf nextCh = "1" Then
+                AddToken tokens, "ending1", "[1"
+                i = i + 2
+                GoTo ContinueLoop
+            ElseIf nextCh = "2" Then
+                AddToken tokens, "ending2", "[2"
+                i = i + 2
+                GoTo ContinueLoop
+            ElseIf nextCh = "[" Then
+                ' Double bracket - variant ending marker like [[1
+                i = i + 1
+                GoTo ContinueLoop
+            End If
+        End If
+
+        If ch = "]" Then
+            nextCh = ""
+            If i < Len(abc) Then nextCh = Mid$(abc, i + 1, 1)
+            If nextCh = "|" Then
+                AddToken tokens, "end_bar", "]|"
+                i = i + 2
+                GoTo ContinueLoop
+            ElseIf nextCh = "]" Then
+                ' Close variant ending
+                i = i + 2
+                GoTo ContinueLoop
+            End If
+            i = i + 1
+            GoTo ContinueLoop
+        End If
+
+        If ch = ")" Then
+            ' End of tuplet (though ABC often doesn't use explicit end)
+            AddToken tokens, "tuplet_end", ")"
+            i = i + 1
+            GoTo ContinueLoop
+        End If
+
+        If (ch >= "A" And ch <= "Z") Or (ch >= "a" And ch <= "z") Then
+            Dim startPos As Long
+            startPos = i
+            i = i + 1
+            Do While i <= Len(abc)
+                ch = Mid$(abc, i, 1)
+                If (ch >= "0" And ch <= "9") Or ch = "/" Or ch = ">" Or ch = "<" Then
+                    i = i + 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            AddToken tokens, "note", Mid$(abc, startPos, i - startPos)
+            GoTo ContinueLoop
+        End If
+
+        i = i + 1
+
+ContinueLoop:
+    Loop
+
+    Set TokenizeABC = tokens
+End Function
+
+Private Sub AddToken(ByRef tokens As Collection, ByVal tokenType As String, ByVal text As String)
+    Dim t(1 To 2) As Variant
+    t(1) = tokenType
+    t(2) = text
+    tokens.Add t
+End Sub
+
+' ============================================================
+' REPEAT EXPANSION
+' ============================================================
+
+Private Function ExpandRepeats(ByVal tokens As Collection) As Collection
+    Dim flat As New Collection
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+
+    Dim inRepeat As Boolean
+    Dim repeatBuffer As New Collection
+    Dim ending1Buffer As New Collection
+    Dim ending2Buffer As New Collection
+    Dim repeatMode As String
+    Dim pendingSecondEnding As Boolean
+    Dim hasEndings As Boolean
+
+    For i = 1 To tokens.Count
+        Dim t As Variant
+        t = tokens(i)
+
+        Select Case t(1)
+            Case "repeat_start"
+                Set repeatBuffer = New Collection
+                Set ending1Buffer = New Collection
+                Set ending2Buffer = New Collection
+                inRepeat = True
+                repeatMode = "main"
+                pendingSecondEnding = False
+                hasEndings = False
+
+            Case "ending1"
+                If inRepeat Then
+                    repeatMode = "end1"
+                    hasEndings = True
+                ElseIf pendingSecondEnding Then
+                    repeatMode = "end2"
+                End If
+
+            Case "ending2"
+                If pendingSecondEnding Then
+                    repeatMode = "end2"
+                End If
+
+            Case "repeat_end"
+                If inRepeat Then
+                    Dim barToken(1 To 2) As Variant
+                    barToken(1) = "bar"
+                    barToken(2) = "|"
+                    
+                    If hasEndings Then
+                        ' With endings: add main + first ending, then wait for second ending
+                        For j = 1 To repeatBuffer.Count
+                            flat.Add repeatBuffer(j)
+                        Next j
+                        For j = 1 To ending1Buffer.Count
+                            flat.Add ending1Buffer(j)
+                        Next j
+                        flat.Add barToken
+                        
+                        pendingSecondEnding = True
+                        repeatMode = "end2"
+                    Else
+                        ' Simple repeat: add buffer twice with bar in between
+                        For k = 1 To repeatBuffer.Count
+                            flat.Add repeatBuffer(k)
+                        Next k
+                        flat.Add barToken
+                        For k = 1 To repeatBuffer.Count
+                            flat.Add repeatBuffer(k)
+                        Next k
+                        flat.Add barToken
+                    End If
+                    
+                    inRepeat = False
+                End If
+
+            Case Else
+                If inRepeat Then
+                    Select Case repeatMode
+                        Case "end1"
+                            ending1Buffer.Add t
+                        Case Else
+                            repeatBuffer.Add t
+                    End Select
+                ElseIf pendingSecondEnding Then
+                    If repeatMode = "end2" Then
+                        ending2Buffer.Add t
+                        ' Finalize second pass when we hit a bar in the second ending
+                        If t(1) = "bar" Or t(1) = "double_bar" Or t(1) = "end_bar" Then
+                            For k = 1 To repeatBuffer.Count
+                                flat.Add repeatBuffer(k)
+                            Next k
+                            For k = 1 To ending2Buffer.Count
+                                flat.Add ending2Buffer(k)
+                            Next k
+                            pendingSecondEnding = False
+                            repeatMode = "main"
+                        End If
+                    End If
+                Else
+                    flat.Add t
+                End If
+        End Select
+    Next i
+
+    Set ExpandRepeats = flat
+End Function
+
+' ============================================================
+' DURATION PARSING
+' ============================================================
+
+Private Function GetNoteDurationUnits(ByVal tokenText As String) As Double
+    Dim baseDur As Double
+    baseDur = 1#
+
+    Dim i As Long
+    i = 2
+
+    Dim numPart As String, denPart As String
+    Dim ch As String
+
+    Do While i <= Len(tokenText)
+        ch = Mid$(tokenText, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            numPart = numPart & ch
+        ElseIf ch = "/" Then
+            i = i + 1
+            Do While i <= Len(tokenText)
+                ch = Mid$(tokenText, i, 1)
+                If ch >= "0" And ch <= "9" Then
+                    denPart = denPart & ch
+                    i = i + 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            Exit Do
+        Else
+            Exit Do
+        End If
+        i = i + 1
+    Loop
+
+    If numPart <> "" And denPart = "" Then
+        baseDur = CDbl(numPart)
+    ElseIf numPart = "" And denPart <> "" Then
+        baseDur = 1# / CDbl(denPart)
+    ElseIf numPart <> "" And denPart <> "" Then
+        baseDur = CDbl(numPart) / CDbl(denPart)
+    End If
+
+    GetNoteDurationUnits = baseDur
+End Function
+
+Private Function GetNoteLetterOnly(ByVal tokenText As String) As String
+    GetNoteLetterOnly = Left$(tokenText, 1)
+End Function
+
+Private Function HasBrokenGreater(ByVal tokenText As String) As Boolean
+    HasBrokenGreater = (InStr(1, tokenText, ">", vbBinaryCompare) > 0)
+End Function
+
+Private Function HasBrokenLess(ByVal tokenText As String) As Boolean
+    HasBrokenLess = (InStr(1, tokenText, "<", vbBinaryCompare) > 0)
+End Function
+
+' ============================================================
+' WRITE EVENTS (FIRST PASS)
+' ============================================================
+
+Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
+    Dim totalUnits As Double
+    totalUnits = 0#
+
+    Dim currentPart As Long
+    currentPart = 1
+
+    Dim currentRow As Long
+    currentRow = FIRST_DATA_ROW
+
+    ' Tuplet tracking
+    Dim inTuplet As Boolean
+    inTuplet = False
+    Dim tupletRatio As Double
+    tupletRatio = 1#
+    Dim tupletNotesRemaining As Long
+    tupletNotesRemaining = 0
+
+    Dim i As Long
+    For i = 1 To tokens.Count
+        Dim t As Variant
+        t = tokens(i)
+
+        Select Case t(1)
+
+            Case "tuplet"
+                ' Parse tuplet marker: (3, (2, (4, (3:2, etc.
+                Dim tupletStr As String
+                tupletStr = t(2)
+                Dim tupletN As Long
+                tupletN = CLng(Mid$(tupletStr, 2, 1))  ' Get first digit after (
+                inTuplet = True
+                tupletNotesRemaining = tupletN
+                ' (n means "n notes in the time of n-1" (or of 2 for n=3)
+                ' For (3: 3 notes in time of 2 -> ratio = 2/3
+                ' For (2: 2 notes in time of 3 -> ratio = 3/2
+                Select Case tupletN
+                    Case 2
+                        tupletRatio = 1.5  ' 3/2
+                    Case 3
+                        tupletRatio = 0.666666667  ' 2/3
+                    Case 4
+                        tupletRatio = 0.75  ' 3/4
+                    Case Else
+                        tupletRatio = CDbl(tupletN - 1) / CDbl(tupletN)
+                End Select
+
+            Case "tuplet_end"
+                inTuplet = False
+                tupletRatio = 1#
+                tupletNotesRemaining = 0
+
+            Case "bar", "double_bar", "end_bar", "start_bar"
+                WriteBarRow ws, currentRow, currentPart, totalUnits
+                currentRow = currentRow + 1
+                ' Bar line also ends tuplet implicitly
+                inTuplet = False
+                tupletRatio = 1#
+                tupletNotesRemaining = 0
+
+            Case "embellishment"
+                WriteEmbellishmentRow ws, currentRow, currentPart, totalUnits, t(2)
+                currentRow = currentRow + 1
+
+            Case "note"
+                Dim noteText As String
+                noteText = t(2)
+
+                Dim baseDur As Double
+                baseDur = GetNoteDurationUnits(noteText)
+                
+                ' Apply tuplet ratio if we're in a tuplet
+                If inTuplet Then
+                    baseDur = baseDur * tupletRatio
+                    tupletNotesRemaining = tupletNotesRemaining - 1
+                    If tupletNotesRemaining <= 0 Then
+                        inTuplet = False
+                        tupletRatio = 1#
+                    End If
+                End If
+
+                Dim dur1 As Double, dur2 As Double
+
+                If HasBrokenGreater(noteText) Or HasBrokenLess(noteText) Then
+                    Dim nextT As Variant
+                    If i < tokens.Count Then nextT = tokens(i + 1)
+
+                    If i < tokens.Count And nextT(1) = "note" Then
+                        If HasBrokenGreater(noteText) Then
+                            dur1 = baseDur * 1.5
+                            dur2 = baseDur * 0.5
+                        Else
+                            dur1 = baseDur * 0.5
+                            dur2 = baseDur * 1.5
+                        End If
+
+                        Dim clean1 As String
+                        clean1 = Replace(Replace(noteText, ">", ""), "<", "")
+
+                        Dim brokenDir As String
+                        If HasBrokenGreater(noteText) Then
+                            brokenDir = "dotcut"
+                        Else
+                            brokenDir = "cutdot"
+                        End If
+
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean1, dur1, brokenDir
+                        totalUnits = totalUnits + dur1
+                        currentRow = currentRow + 1
+
+                        Dim clean2 As String
+                        clean2 = Replace(Replace(nextT(2), ">", ""), "<", "")
+                        
+                        ' Second note of broken rhythm also counts toward tuplet
+                        Dim dur2Base As Double
+                        dur2Base = GetNoteDurationUnits(nextT(2))
+                        If inTuplet Then
+                            dur2Base = dur2Base * tupletRatio
+                            tupletNotesRemaining = tupletNotesRemaining - 1
+                            If tupletNotesRemaining <= 0 Then
+                                inTuplet = False
+                                tupletRatio = 1#
+                            End If
+                        End If
+                        ' Recalculate dur2 with broken rhythm applied to potentially-tuplet-adjusted base
+                        If HasBrokenGreater(noteText) Then
+                            dur2 = dur2Base * 0.5
+                        Else
+                            dur2 = dur2Base * 1.5
+                        End If
+
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean2, dur2
+                        totalUnits = totalUnits + dur2
+                        currentRow = currentRow + 1
+
+                        i = i + 1
+                    Else
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur
+                        totalUnits = totalUnits + baseDur
+                        currentRow = currentRow + 1
+                    End If
+                Else
+                    WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur
+                    totalUnits = totalUnits + baseDur
+                    currentRow = currentRow + 1
+                End If
+
+        End Select
+    Next i
+End Sub
+
+Private Sub WriteBarRow(ws As Worksheet, ByVal rowIndex As Long, ByVal part As Long, ByVal totalUnits As Double)
+    ws.Cells(rowIndex, COL_EVENT_ID).Value = rowIndex - FIRST_DATA_ROW + 1
+    ws.Cells(rowIndex, COL_TYPE).Value = "structure"
+    ws.Cells(rowIndex, COL_STRUCTURE).Value = "bar"
+
+    ws.Cells(rowIndex, COL_PART).Value = part
+    ws.Cells(rowIndex, COL_VOICE).Value = ""
+    ws.Cells(rowIndex, COL_TOTAL_UNITS).Value = SanitizeNumber(totalUnits)
+End Sub
+
+Private Sub WriteEmbellishmentRow(ws As Worksheet, ByVal rowIndex As Long, ByVal part As Long, ByVal totalUnits As Double, ByVal embText As String, Optional ByVal voice As String = "pipes")
+    ws.Cells(rowIndex, COL_EVENT_ID).Value = rowIndex - FIRST_DATA_ROW + 1
+    ws.Cells(rowIndex, COL_TYPE).Value = "embellishment"
+
+    ws.Cells(rowIndex, COL_PART).Value = part
+    ws.Cells(rowIndex, COL_VOICE).Value = voice
+    
+    ' Store literal ABC sequence
+    ws.Cells(rowIndex, COL_EMBELLISH_LITERAL).Value = embText
+    
+    ' Find preceding note (look backwards for last "note" type row)
+    Dim precedingNote As String
+    precedingNote = FindPrecedingNote(ws, rowIndex)
+    ws.Cells(rowIndex, COL_EMBELLISH_PRECEDING).Value = precedingNote
+    
+    ' Target note will be populated in a second pass after all events are written
+
+    ws.Cells(rowIndex, COL_WRITTEN_UNITS).Value = 0#
+    ws.Cells(rowIndex, COL_ADJUSTED_UNITS).Value = 0#
+    ws.Cells(rowIndex, COL_TOTAL_UNITS).Value = SanitizeNumber(totalUnits)
+End Sub
+
+Private Sub WriteNoteRow(ws As Worksheet, ByVal rowIndex As Long, ByVal part As Long, ByVal totalUnits As Double, ByVal noteText As String, ByVal durUnits As Double, Optional ByVal brokenDir As String = "", Optional ByVal voice As String = "pipes")
+    Dim noteLetter As String
+    noteLetter = GetNoteLetterOnly(noteText)
+
+    ws.Cells(rowIndex, COL_EVENT_ID).Value = rowIndex - FIRST_DATA_ROW + 1
+    ws.Cells(rowIndex, COL_TYPE).Value = "note"
+
+    ws.Cells(rowIndex, COL_PART).Value = part
+    ws.Cells(rowIndex, COL_VOICE).Value = voice
+    ws.Cells(rowIndex, COL_NOTE_LETTER).Value = noteLetter
+
+    ws.Cells(rowIndex, COL_WRITTEN_UNITS).Value = SanitizeNumber(durUnits)
+    ws.Cells(rowIndex, COL_ADJUSTED_UNITS).Value = SanitizeNumber(durUnits)
+    ws.Cells(rowIndex, COL_TOTAL_UNITS).Value = SanitizeNumber(totalUnits)
+
+    ' Store broken rhythm marker for notes (used by swing processing)
+    ws.Cells(rowIndex, COL_BROKEN_DIR).Value = brokenDir
+End Sub
+
+Private Function FindPrecedingNote(ws As Worksheet, ByVal currentRow As Long) As String
+    Dim r As Long
+    For r = currentRow - 1 To FIRST_DATA_ROW Step -1
+        If ws.Cells(r, COL_TYPE).Value = "note" Then
+            FindPrecedingNote = ws.Cells(r, COL_NOTE_LETTER).Value
+            Exit Function
+        End If
+    Next r
+    FindPrecedingNote = "" ' No preceding note found
+End Function
+
+Private Function FindTargetNote(ws As Worksheet, ByVal currentRow As Long) As String
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    
+    Dim r As Long
+    For r = currentRow + 1 To lastRow
+        If ws.Cells(r, COL_TYPE).Value = "note" Then
+            FindTargetNote = ws.Cells(r, COL_NOTE_LETTER).Value
+            Exit Function
+        End If
+    Next r
+    FindTargetNote = "" ' No target note found
+End Function
+
+Private Sub PopulateEmbellishmentTargets(ws As Worksheet)
+    Dim rowIndex As Long
+    rowIndex = FIRST_DATA_ROW
+    
+    Do While ws.Cells(rowIndex, COL_EVENT_ID).Value <> ""
+        If ws.Cells(rowIndex, COL_TYPE).Value = "embellishment" Then
+            ' Find next note
+            Dim targetNote As String
+            targetNote = FindTargetNote(ws, rowIndex)
+            ws.Cells(rowIndex, COL_EMBELLISH_TARGET).Value = targetNote
+        End If
+        rowIndex = rowIndex + 1
+    Loop
+End Sub
+
+' ============================================================
+' SECOND PASS: POSITION CALCULATION
+' ============================================================
+
+Private Sub RecalculatePositions(ws As Worksheet)
+    Dim rowIndex As Long
+    rowIndex = FIRST_DATA_ROW
+
+    Do While ws.Cells(rowIndex, COL_EVENT_ID).Value <> ""
+        Dim totalUnits As Double
+        totalUnits = ws.Cells(rowIndex, COL_TOTAL_UNITS).Value
+
+        Dim measure As Long, beat As Long
+        Dim division As Double
+
+        GetPositionFromUnits totalUnits, measure, beat, division
+
+        ws.Cells(rowIndex, COL_MEASURE).Value = measure
+        ws.Cells(rowIndex, COL_BEAT).Value = beat
+        ws.Cells(rowIndex, COL_DIVISION).Value = SanitizeNumber(division)
+
+        rowIndex = rowIndex + 1
+    Loop
+End Sub
+
+Private Sub GetPositionFromUnits(ByVal totalUnits As Double, _
+                                 ByRef measure As Long, _
+                                 ByRef beat As Long, _
+                                 ByRef division As Double)
+
+    ' Handle pickup (anacrusis) - events before the first full measure
+    If PickupDetected And totalUnits < PickupOffsetUnits Then
+        measure = 0
+
+        Dim unitsIntoPickup As Double
+        unitsIntoPickup = totalUnits
+
+        ' Calculate beat within pickup (1-indexed)
+        beat = Fix(unitsIntoPickup / UnitsPerBeat) + 1
+
+        Dim unitsIntoBeat As Double
+        unitsIntoBeat = unitsIntoPickup - (beat - 1) * UnitsPerBeat
+
+        ' Division is fraction through the beat (0 to <1)
+        division = unitsIntoBeat / UnitsPerBeat
+        Exit Sub
+    End If
+
+    ' Shift units to account for pickup
+    Dim shiftedUnits As Double
+    shiftedUnits = totalUnits - PickupOffsetUnits
+
+    ' Calculate measure (1-indexed)
+    measure = Fix(shiftedUnits / UnitsPerMeasure) + 1
+
+    ' Calculate position within measure
+    Dim unitsIntoMeasure As Double
+    unitsIntoMeasure = shiftedUnits - (measure - 1) * UnitsPerMeasure
+
+    ' Calculate beat within measure (1-indexed)
+    beat = Fix(unitsIntoMeasure / UnitsPerBeat) + 1
+
+    ' Calculate position within beat
+    Dim unitsIntoBeat2 As Double
+    unitsIntoBeat2 = unitsIntoMeasure - (beat - 1) * UnitsPerBeat
+
+    ' Division is fraction through the beat (0 to <1)
+    division = unitsIntoBeat2 / UnitsPerBeat
+End Sub
+
+'============================================================
+'METADATA PARSING
+'============================================================
+
+Private Sub ParseABCMetadata(ws As Worksheet, ByVal metadataText As String)
+    Dim lines() As String
+    lines = Split(metadataText, vbLf)
+    
+    Dim i As Long
+    Dim line As String
+    Dim key As String, Value As String
+    
+    ' Clear existing metadata values in metadata block rows 2-48, column C (Value)
+    ws.Range("C2:C48").ClearContents
+    
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If line = "" Then GoTo SkipLine ' Skip blank lines
+        
+        ' Check if line matches metadata header pattern: single letter + colon
+        If Len(line) >= 2 And Mid(line, 2, 1) = ":" Then
+            key = UCase(Left(line, 1))
+            Value = Trim(Mid(line, 3))
+            
+            Select Case key
+                Case "T" ' Title
+                    WriteMetadataValue ws, "title", Value
+                Case "C" ' Composer
+                    WriteMetadataValue ws, "composer", Value
+                Case "R" ' Rhythm
+                    WriteMetadataValue ws, "rhythm", Value
+                Case "M" ' Meter
+                    WriteMetadataValue ws, "meter", Value
+                    ParseMeterToTimeSig ws, Value
+                Case "L" ' Unit note length
+                    WriteMetadataValue ws, "unit_note_length", Value
+                Case "Q" ' Tempo default
+                    WriteMetadataValue ws, "tempo_default", Value
+                Case "K" ' Key
+                    WriteMetadataValue ws, "key", Value
+                Case "N" ' Notes / info
+                    WriteMetadataValue ws, "notes", Value
+                Case "Z" ' Transcription note
+                    WriteMetadataValue ws, "transcription note", Value
+                Case "P" ' Parts (if present)
+                    WriteMetadataValue ws, "parts", Value
+                Case Else
+                    ' Ignore unknown keys or add more mappings if needed
+            End Select
+        End If
+SkipLine:
+    Next i
+End Sub
+
+Private Sub WriteMetadataValue(ws As Worksheet, ByVal variableName As String, ByVal Value As String)
+    Dim r As Long
+    For r = 2 To 48
+        If LCase(Trim(ws.Cells(r, 2).Value)) = LCase(variableName) Then
+            ws.Cells(r, 3).Value = Value
+            Exit For
+        End If
+    Next r
+End Sub
+
+Private Sub ParseMeterToTimeSig(ws As Worksheet, ByVal meter As String)
+    ' Handle special meter symbols
+    If meter = "C" Then
+        WriteMetadataValue ws, "time_sig_num", "4"
+        WriteMetadataValue ws, "time_sig_den", "4"
+        Exit Sub
+    ElseIf meter = "C|" Then
+        WriteMetadataValue ws, "time_sig_num", "2"
+        WriteMetadataValue ws, "time_sig_den", "2"
+        Exit Sub
+    End If
+    
+    Dim parts() As String
+    parts = Split(meter, "/")
+    If UBound(parts) = 1 Then
+        WriteMetadataValue ws, "time_sig_num", Trim(parts(0))
+        WriteMetadataValue ws, "time_sig_den", Trim(parts(1))
+    End If
+End Sub
+
+Private Sub InferStructuralMetadata(ws As Worksheet)
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    If lastRow < FIRST_DATA_ROW Then Exit Sub
+    
+    Dim partsDict As Object
+    Set partsDict = CreateObject("Scripting.Dictionary")
+    
+    Dim maxMeasure As Long
+    maxMeasure = 0
+    
+    Dim r As Long
+    For r = FIRST_DATA_ROW To lastRow
+        Dim partVal As Variant
+        Dim measureVal As Variant
+        
+        partVal = ws.Cells(r, COL_PART).Value
+        measureVal = ws.Cells(r, COL_MEASURE).Value
+        
+        If Not partsDict.Exists(partVal) Then
+            partsDict.Add partVal, CreateObject("Scripting.Dictionary")
+        End If
+        
+        If Not partsDict(partVal).Exists(measureVal) Then
+            partsDict(partVal).Add measureVal, True
+        End If
+        
+        If measureVal > maxMeasure Then maxMeasure = measureVal
+    Next r
+    
+    ' Number of parts
+    Dim numParts As Long
+    numParts = partsDict.Count
+    WriteMetadataValue ws, "parts", CStr(numParts)
+    
+    ' Total measures
+    WriteMetadataValue ws, "measures_total", CStr(maxMeasure)
+    
+    ' Measures per part (average)
+    Dim totalMeasures As Long
+    totalMeasures = 0
+    Dim key As Variant
+    For Each key In partsDict.Keys
+        totalMeasures = totalMeasures + partsDict(key).Count
+    Next key
+    
+    Dim avgMeasuresPerPart As Double
+    If numParts > 0 Then
+        avgMeasuresPerPart = totalMeasures / numParts
+    Else
+        avgMeasuresPerPart = 0
+    End If
+    
+    WriteMetadataValue ws, "measures_per_part", Format(avgMeasuresPerPart, "0.00")
+End Sub
+
+' ============================================================
+' HELPERS
+' ============================================================
+
+Private Function SanitizeNumber(ByVal v As Double) As Double
+    If Abs(v) < EPSILON Then
+        SanitizeNumber = 0#
+    Else
+        SanitizeNumber = Round(v, ROUND_DECIMALS)
+    End If
+End Function
+
+Private Function NzNum(v As Variant) As String
+    If Trim$(v & "") = "" Then
+        NzNum = "0"
+    Else
+        NzNum = CStr(v)
+    End If
+End Function
+
+Private Function NzStr(v As Variant) As String
+    If Trim$(v & "") = "" Then
+        NzStr = ""
+    Else
+        NzStr = CStr(v)
+    End If
+End Function
+
+Private Function TrimComma(s As String) As String
+    If Right$(s, 1) = "," Then
+        TrimComma = Left$(s, Len(s) - 1)
+    Else
+        TrimComma = s
+    End If
+End Function
+
+Private Function EscapeJSON(s As String) As String
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    EscapeJSON = s
+End Function
+
+' ============================================================
+' JSON EXPORT
+' ============================================================
+Public Sub ExportEventsToJSON()
+
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+
+    Dim json As String
+    Dim metaTune As String, metaMet As String, metaPerf As String, metaInfo As String
+    Dim rowIndex As Long
+
+    ' BUILD METADATA BLOCK
+    metaTune = ""
+    metaMet = ""
+    metaPerf = ""
+    metaInfo = ""
+
+    ' Metadata rows: 2–48
+    For rowIndex = 2 To 48
+
+        Dim category As String
+        Dim key As String
+        Dim val As String
+
+        category = Trim$(ws.Cells(rowIndex, 1).Value)
+        key = Trim$(ws.Cells(rowIndex, 2).Value)
+        val = Trim$(ws.Cells(rowIndex, 3).Value)
+
+        If key <> "" Then
+            Dim entry As String
+            entry = """" & key & """: """ & EscapeJSON(val) & """"
+
+            Select Case LCase$(category)
+                Case "tune"
+                    metaTune = metaTune & entry & ","
+                Case "metronome"
+                    metaMet = metaMet & entry & ","
+                Case "performance"
+                    metaPerf = metaPerf & entry & ","
+                Case "info"
+                    metaInfo = metaInfo & entry & ","
+            End Select
+        End If
+    Next rowIndex
+
+    ' Trim trailing commas
+    metaTune = TrimComma(metaTune)
+    metaMet = TrimComma(metaMet)
+    metaPerf = TrimComma(metaPerf)
+    metaInfo = TrimComma(metaInfo)
+
+    ' START JSON OUTPUT
+    json = "{"
+
+    ' Place tune metadata at root level
+    json = json & """tune"":{" & metaTune & "},"
+
+    ' Include other metadata categories as nested objects under their keys
+    json = json & """metronome"":{" & metaMet & "},"
+    json = json & """performance"":{" & metaPerf & "},"
+    json = json & """info"":{" & metaInfo & "},"
+
+    json = json & """events"":["
+
+    ' EXPORT EVENTS (starting row 51)
+    rowIndex = 51
+
+    Do While ws.Cells(rowIndex, COL_EVENT_ID).Value <> ""
+
+        Dim obj As String
+        obj = "{"
+
+        obj = obj & """event_id"":" & NzNum(ws.Cells(rowIndex, COL_EVENT_ID).Value)
+        obj = obj & ",""type"":""" & NzStr(ws.Cells(rowIndex, COL_TYPE).Value) & """"
+        obj = obj & ",""structure"":""" & NzStr(ws.Cells(rowIndex, COL_STRUCTURE).Value) & """"
+
+        obj = obj & ",""part"":" & NzNum(ws.Cells(rowIndex, COL_PART).Value)
+        obj = obj & ",""voice"":""" & NzStr(ws.Cells(rowIndex, COL_VOICE).Value) & """"
+        obj = obj & ",""measure"":" & NzNum(ws.Cells(rowIndex, COL_MEASURE).Value)
+        obj = obj & ",""beat"":" & NzNum(ws.Cells(rowIndex, COL_BEAT).Value)
+        obj = obj & ",""division"":" & NzNum(ws.Cells(rowIndex, COL_DIVISION).Value)
+        obj = obj & ",""phrase"":""" & NzStr(ws.Cells(rowIndex, COL_PHRASE).Value) & """"
+
+        obj = obj & ",""letter"":""" & NzStr(ws.Cells(rowIndex, COL_NOTE_LETTER).Value) & """"
+        obj = obj & ",""midi_value"":" & NzNum(ws.Cells(rowIndex, COL_NOTE_MIDI).Value)
+
+        obj = obj & ",""written"":" & NzNum(ws.Cells(rowIndex, COL_WRITTEN_UNITS).Value)
+        obj = obj & ",""adjusted"":" & NzNum(ws.Cells(rowIndex, COL_ADJUSTED_UNITS).Value)
+        obj = obj & ",""total_units"":" & NzNum(ws.Cells(rowIndex, COL_TOTAL_UNITS).Value)
+
+        obj = obj & ",""emb_preceding"":""" & NzStr(ws.Cells(rowIndex, COL_EMBELLISH_PRECEDING).Value) & """"
+        obj = obj & ",""emb_literal"":""" & NzStr(ws.Cells(rowIndex, COL_EMBELLISH_LITERAL).Value) & """"
+        obj = obj & ",""emb_target"":""" & NzStr(ws.Cells(rowIndex, COL_EMBELLISH_TARGET).Value) & """"
+        obj = obj & ",""emb_type"":""" & NzStr(ws.Cells(rowIndex, COL_EMBELLISH_TYPE).Value) & """"
+        obj = obj & ",""emb_reserved"":""" & NzStr(ws.Cells(rowIndex, COL_EMBELLISH_RESERVED).Value) & """"
+
+        Dim brokenDir As String
+        brokenDir = NzStr(ws.Cells(rowIndex, COL_BROKEN_DIR).Value)
+        If LCase$(ws.Cells(rowIndex, COL_TYPE).Value) = "note" And brokenDir <> "" Then
+            obj = obj & ",""broken_dir"":""" & brokenDir & """"
+        End If
+
+        obj = obj & ",""start_time_ms"":" & NzNum(ws.Cells(rowIndex, COL_START_MS).Value)
+        obj = obj & ",""end_time_ms"":" & NzNum(ws.Cells(rowIndex, COL_END_MS).Value)
+        obj = obj & ",""tempo"":" & NzNum(ws.Cells(rowIndex, COL_TEMPO_BPM).Value)
+
+        obj = obj & "}"
+
+        json = json & obj & ","
+        rowIndex = rowIndex + 1
+    Loop
+
+    ' Trim trailing comma
+    If Right$(json, 1) = "," Then json = Left$(json, Len(json) - 1)
+
+    json = json & "]}"
+
+    ' SAVE FILE
+    Dim fileName As Variant
+    fileName = Application.GetSaveAsFilename("tune.json", "JSON Files (*.json), *.json")
+
+    If fileName <> False Then
+        Dim ff As Integer
+        ff = FreeFile
+        Open CStr(fileName) For Output As #ff
+        Print #ff, json
+        Close #ff
+        MsgBox "JSON export complete."
+    End If
+
+End Sub
+
+' ============================================================
+' INFER BROKEN RHYTHM MARKERS FROM DURATION PAIRS
+' ============================================================
+Public Sub InferBrokenRhythms()
+    ' Post-processing macro to detect broken rhythm pairs (3/2 + 1/2 or 1/2 + 3/2)
+    ' and populate broken_dir column on the FIRST note of each pair
+    ' GameMaker only checks the first note and applies swing to both notes
+    
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+    
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    If lastRow < FIRST_DATA_ROW Then Exit Sub
+    
+    Dim r As Long
+    Dim changedCount As Long
+    changedCount = 0
+    
+    For r = FIRST_DATA_ROW To lastRow - 1
+        ' Only check note rows
+        If LCase$(ws.Cells(r, COL_TYPE).Value) <> "note" Then GoTo NextRow
+        
+        ' Skip if already marked (from > < symbols in ABC)
+        If ws.Cells(r, COL_BROKEN_DIR).Value <> "" Then GoTo NextRow
+        
+        ' Find next note (skip embellishments, but stop at bars)
+        Dim nextNoteRow As Long
+        nextNoteRow = 0
+        Dim s As Long
+        For s = r + 1 To lastRow
+            Dim cellType As String
+            cellType = LCase$(ws.Cells(s, COL_TYPE).Value)
+            
+            If cellType = "structure" And ws.Cells(s, COL_STRUCTURE).Value = "bar" Then
+                ' Hit a bar before finding next note - stop searching
+                Exit For
+            ElseIf cellType = "note" Then
+                nextNoteRow = s
+                Exit For
+            End If
+        Next s
+        
+        If nextNoteRow = 0 Then GoTo NextRow
+        
+        ' Get written durations
+        Dim dur1 As Double, dur2 As Double
+        dur1 = CDbl(ws.Cells(r, COL_WRITTEN_UNITS).Value)
+        dur2 = CDbl(ws.Cells(nextNoteRow, COL_WRITTEN_UNITS).Value)
+        
+        ' Check for 3/2 + 1/2 pattern (dotcut - first note lengthened, second shortened)
+        If Abs(dur1 - 1.5) < EPSILON And Abs(dur2 - 0.5) < EPSILON Then
+            ws.Cells(r, COL_BROKEN_DIR).Value = "dotcut"
+            changedCount = changedCount + 1
+            ' Skip the second note of the pair to prevent double-processing
+            r = nextNoteRow
+        ' Check for 1/2 + 3/2 pattern (cutdot - first note shortened, second lengthened)
+        ElseIf Abs(dur1 - 0.5) < EPSILON And Abs(dur2 - 1.5) < EPSILON Then
+            ws.Cells(r, COL_BROKEN_DIR).Value = "cutdot"
+            changedCount = changedCount + 1
+            ' Skip the second note of the pair to prevent double-processing
+            r = nextNoteRow
+        End If
+        
+NextRow:
+    Next r
+    
+    MsgBox "Inferred " & changedCount & " broken rhythm marker(s).", vbInformation
+End Sub
+
+' ============================================================
+' EXPORT EMBELLISHMENT LIBRARY TO JSON
+' ============================================================
+Public Sub ExportEmbellishmentsToJSON()
+
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("Embellishments")
+
+    Dim json As String
+    json = "["
+
+    Dim rowIndex As Long
+    rowIndex = 2  ' Skip header row
+
+    Do While ws.Cells(rowIndex, 1).Value <> ""
+
+        Dim obj As String
+        obj = "{"
+
+        obj = obj & """emb_id"":" & NzNum(ws.Cells(rowIndex, 1).Value)
+        obj = obj & ",""emb_name"":""" & NzStr(ws.Cells(rowIndex, 2).Value) & """"
+        obj = obj & ",""pattern"":""" & NzStr(ws.Cells(rowIndex, 3).Value) & """"
+        obj = obj & ",""target_note"":""" & NzStr(ws.Cells(rowIndex, 4).Value) & """"
+        obj = obj & ",""notes"":""" & NzStr(ws.Cells(rowIndex, 5).Value) & """"
+        obj = obj & ",""timing"":""" & NzStr(ws.Cells(rowIndex, 6).Value) & """"
+        obj = obj & ",""anchor_index"":" & NzNum(ws.Cells(rowIndex, 7).Value)
+        obj = obj & ",""category"":""" & NzStr(ws.Cells(rowIndex, 8).Value) & """"
+
+        obj = obj & "}"
+
+        json = json & obj & ","
+        rowIndex = rowIndex + 1
+    Loop
+
+    ' Trim trailing comma
+    If Right$(json, 1) = "," Then json = Left$(json, Len(json) - 1)
+
+    json = json & "]"
+
+    ' Save file
+    Dim fileName As Variant
+    fileName = Application.GetSaveAsFilename("embellishments.json", "JSON Files (*.json), *.json")
+
+    If fileName <> False Then
+        Dim ff As Integer
+        ff = FreeFile
+        Open CStr(fileName) For Output As #ff
+        Print #ff, json
+        Close #ff
+        MsgBox "Embellishment library export complete."
+    End If
+
+End Sub
+

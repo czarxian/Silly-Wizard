@@ -105,7 +105,7 @@ function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
     return result;
 }
 
-/// @function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm)
+/// @function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm, grace_override_ms)
 /// @description Expands embellishment definition into individual note timings with BPM scaling & constraints
 /// @param {struct} emb_def - Embellishment struct from library
 /// @param {real} target_duration_ms - Duration of target note in milliseconds
@@ -113,7 +113,7 @@ function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
 /// @param {real} bpm - Tempo in beats per minute (for gracenote unit scaling)
 /// @returns {array} Array of note structs with {note, duration_ms}
 
-function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm) {
+function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm, grace_override_ms) {
     
     var notes_array = string_split(emb_def.notes, ",");
     var timing_array = string_split(emb_def.timing, ",");
@@ -129,9 +129,14 @@ function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_
     // ============ CONSTRAINT CASCADE: BPM-SCALED UNIT + FIT TO PRECEDING/TARGET ============
     
     var cfg = global.EMBELLISHMENT_CONFIG;
-    var bpm_delta = bpm - cfg.reference_bpm;
-    var gracenote_unit_ms = cfg.gracenote_unit_ms_base + (bpm_delta * cfg.bpm_scaling_factor);
-    gracenote_unit_ms = clamp(gracenote_unit_ms, cfg.min_gracenote_ms, cfg.max_gracenote_ms);
+    var gracenote_unit_ms;
+    if (!is_undefined(grace_override_ms) && real(grace_override_ms) > 0) {
+        gracenote_unit_ms = real(grace_override_ms);
+    } else {
+        var bpm_delta = bpm - cfg.reference_bpm;
+        gracenote_unit_ms = cfg.gracenote_unit_ms_base + (bpm_delta * cfg.bpm_scaling_factor);
+        gracenote_unit_ms = clamp(gracenote_unit_ms, cfg.min_gracenote_ms, cfg.max_gracenote_ms);
+    }
     
     // Sum timing units before and at/after anchor
     var before_timing_sum = 0;

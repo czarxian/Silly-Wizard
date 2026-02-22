@@ -15,16 +15,42 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 	scr_build_tune_library("tunes/");
 	global.emb_library = load_embellishment_library("embellishments.json");
 
-/// ============ EMBELLISHMENT TIMING CONFIGURATION ============
+/// ============ EMBELLISHMENT & GRACENOTE TIMING CONFIGURATION ============
 /// BPM-aware gracenote timing with safety constraints
 	global.EMBELLISHMENT_CONFIG = {
-		gracenote_unit_ms_base: 30,        // Base unit at reference BPM (e.g., 30ms at 60 BPM)
+		gracenote_unit_ms_base: 40,        // Base unit at reference BPM (e.g., 30ms at 60 BPM)
 		min_gracenote_ms: 15,              // Hard minimum (fastest notes can't go below this)
 		max_gracenote_ms: 80,              // Hard maximum (slowest notes can't exceed this)
 		bpm_scaling_factor: -0.1,          // ms per BPM increase (negative = faster tempo → shorter notes)
 		reference_bpm: 60,                 // Reference tempo for base unit calculation
-		max_emb_percent: 0.8               // Optional: embellishment notes can't exceed 80% of target duration
+		max_emb_percent: 0.8,              // Optional: embellishment notes can't exceed 80% of target duration
+		
+		// Fallback gracenote timing (for literal embellishment expansion)
+		fallback_min_ms: 20,               // Duration at fast tempo (120+ BPM)
+		fallback_max_ms: 80,               // Duration at slow tempo (50-60 BPM)
+		fallback_fast_bpm_threshold: 120,  // BPM above which uses fallback_min_ms
+		fallback_slow_bpm_threshold: 60    // BPM below which uses fallback_max_ms
 	};
+
+/// ============ METRONOME DRUM PROFILES ============
+/// Drum kit note mappings for different VSTs/synths
+	global.METRONOME_DRUM_PROFILES = {
+		"General MIDI": {
+			kick: 35,           // Acoustic Bass Drum
+			snare: 38,          // Acoustic Snare
+			hi_hat: 42,         // Closed Hi-Hat
+			side_stick: 37,     // Side Stick
+			cowbell: 56         // Cowbell
+		},
+		"Cantabile Drumline": {
+			kick: 41,           // Low bass drum (F1)
+			snare: 48,          // Snare straight (C2)
+			hi_hat: 51,         // Cymbal edge choke (D#2)
+			side_stick: 48,     // Snare straight
+			cowbell: 51         // Cymbal edge choke
+		}
+	};
+	global.current_metronome_drum_profile = "General MIDI";  // Default profile
 
 //Global ID References
 	global.ID_game_handler = id;
@@ -42,12 +68,18 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 	global.midi_input_device=0;
 	global.midi_input_device_name="not selected";
 	global.midi_input_channel=0;
+	global.chanter_channel=0;
 
   //MIDI Output 
 	global.midi_output_devices[0] = "not selected"; 
 	global.midi_output_device=0;
 	global.midi_output_device_name="not selected";
 	global.midi_ouput_channel=0;
+
+	// Chanter MIDI output mapping selection
+	global.MIDI_chanter_options = ["default", "blair"];
+	// global.MIDI_chanter = "default";
+	global.MIDI_chanter = "blair";
 
 //Metronome Settings
 	global.metronome_mode_options = ["None", "Click", "Drums"];
@@ -57,6 +89,10 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 	global.metronome_pattern_selection = 0; // Index into pattern_options array
 	
 	global.metronome_volume = 100; // 0-127 MIDI velocity
+
+// Swing/gracenote overrides (0 = use default BPM-scaled timing)
+	global.swing_mult = 0;
+	global.gracenote_override_ms = 0;
 
 // === SET/PLAYLIST STRUCTURE ===
 // Current set is an array of set items (each containing tune + playback settings)

@@ -86,13 +86,12 @@ function MIDI_process_messages()
 		byte2=0;
 		byte3=0;
 		byte2note=0;
-		messages = midi_input_message_count(global.midi_input);
+		messages = midi_input_message_count(global.midi_input_device);
 		_last_MIDI_on_event = 0;
-		_MIDI_input_device = global.midi_input;
-		_MIDI_output_device = global.midi_output;
+		_MIDI_input_device = global.midi_input_device;
+		_MIDI_output_device = global.midi_output_device;
 		_chanter_channel = global.chanter_channel;
-		var _metronome_start_time = global.metronome_start_time;
-		var _metronome_pause_delta = global.metronome_pause_delta;
+		// Use realtime clock since metronome timing may not be initialized.
 		
 //		```
 			for (m = 0; m < messages; m++)	{
@@ -102,7 +101,7 @@ function MIDI_process_messages()
 //		```
 		
 		//			time = midi_input_message_time(_MIDI_input_device, m);   //This uses MIDI time. Probably should be logged somewhere.
-		time = current_time - (_metronome_start_time + _metronome_pause_delta);   //This uses song time. Matches metronome.
+		time = current_time;
 		
 //		```
 		_MIDI_event_number = global.Midi_event_number;
@@ -148,7 +147,46 @@ function MIDI_process_messages()
 //	}
 //```
 		//  Having parsed the input, do something with it!
-		midi_output_message_send_short(_MIDI_output_device,byte1,byte2,byte3);  //Sends the MIDI Message to the MIDI Output Device
+		if (variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED) {
+			var log_channel = (byte1 >= 128) ? (byte1 & 15) : 0;
+			// Normalize timestamp relative to playback start (if tune is playing)
+			var normalized_time = time;
+			if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
+				normalized_time = time - global.tune_start_real;
+			}
+			// Determine event type from MIDI status byte
+			var status_type = byte1 & 240;  // Clear channel bits
+			var ev_type = "unknown";
+			if (status_type == 144) {  // Note On
+				ev_type = (byte3 > 0) ? "note_on" : "note_off";  // Velocity-zero = note off
+			} else if (status_type == 128) {  // Note Off
+				ev_type = "note_off";
+			}
+			// Raw log for player MIDI input (minimal fields)
+			event_history_add({
+				timestamp_ms: normalized_time,
+				expected_time_ms: 0,
+				actual_time_ms: normalized_time,
+				delta_ms: 0,
+				event_type: ev_type,
+				source: "player",
+				note_midi: byte2,
+				velocity: byte3,
+				channel: log_channel,
+				tune_name: global.current_tune_name ?? "unknown",
+				event_id: 0,
+				marker_type: "",
+				measure: 0,
+				beat: 0,
+				beat_fraction: 0
+			});
+		}
+		var out_status = byte1;
+		if (byte1 < 240) {
+			// Force output to channel 0 for channel voice messages.
+			out_status = (byte1 & 240);
+		}
+		midi_output_message_send_short(_MIDI_output_device, out_status, byte2, byte3);  //Sends the MIDI Message to the MIDI Output Device
 //```
 //			show_debug_message("Send to" + string(_MIDI_output_device) + "Note: " + string(byte2note) );
 //			show_debug_message(string(time) + "  " + string(byte1) + "  " + string(byte2) + "  " + string(byte3));
@@ -163,11 +201,20 @@ function MIDI_process_messages()
 }
 
 function MIDI_send_off() 	{
-	var n;
-	for(n=50; n<99; n++)  {   //Send end message to all notes in case one is playing
-		midi_output_message_send_short(1,128,n,0);
+	// Send note-off to all notes on all channels on the main output device
+	if (!variable_global_exists("midi_output_device")) {
+		show_debug_message("MIDI output device not initialized");
+		return;
 	}
-	show_debug_message("stop playing all notes");
+	
+	var channel, note;
+	for (channel = 0; channel < 16; channel++) {
+		var status_byte = 128 + channel; // Note-off (128) + channel
+		for (note = 0; note < 128; note++) {
+			midi_output_message_send_short(global.midi_output_device, status_byte, note, 0);
+		}
+	}
+	show_debug_message("✓ All notes stopped on all channels");
 }
 
 //Check MIDI errors on each step

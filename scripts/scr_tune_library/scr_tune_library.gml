@@ -293,6 +293,10 @@ function scr_build_tune_library(_root_folder)
         if (variable_struct_exists(meta, "title") && meta.title != "") entry.title = meta.title; else entry.title = string_replace(entry.filename, ".json", "");
         entry.composer = variable_struct_exists(meta, "composer") ? meta.composer : "";
         entry.rhythm = variable_struct_exists(meta, "rhythm") ? meta.rhythm : "";
+        
+        // Add tempo and time signature for tune window
+        entry.tempo_default = variable_struct_exists(meta, "tempo_default") ? meta.tempo_default : "120";
+        entry.meter = variable_struct_exists(meta, "meter") ? meta.meter : "4/4";
 
         array_push(tunes, entry);
     }

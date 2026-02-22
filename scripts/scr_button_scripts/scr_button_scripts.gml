@@ -28,6 +28,8 @@
 			case 16: show_debug_message("Metronome Volume change"); scr_metronome_volume_change(); break;
 			case 17: show_debug_message("Tune BPM change"); scr_tune_bpm_change(); break;
 			case 18: show_debug_message("Tune Count-In change"); scr_tune_countin_change(); break;
+			case 19: show_debug_message("Gracenote Override change"); scr_gracenote_override_change(); break;
+			case 20: show_debug_message("Swing Multiplier change"); scr_swing_mult_change(); break;
 			default: show_debug_message("switch default"); scr_script_not_set(); break;
 		}
 	}
@@ -65,7 +67,19 @@
 				set_item = global.current_set[global.current_set_item_index];
 			}
 			var bpm_override = (is_struct(set_item) && !is_undefined(set_item.bpm)) ? set_item.bpm : undefined;
-			var tune_events = scr_preprocess_tune(tune, bpm_override);
+			var overrides = undefined;
+			if (is_struct(set_item)) {
+				var swing_override = set_item.swing_mult;
+				if (is_undefined(swing_override)) swing_override = set_item.swing;
+				var grace_override = set_item.gracenote_override_ms;
+				if (is_undefined(grace_override)) grace_override = set_item.gracenote_ms;
+				overrides = {
+					bpm: bpm_override,
+					swing_mult: swing_override,
+					gracenote_override_ms: grace_override
+				};
+			}
+			var tune_events = scr_preprocess_tune(tune, is_struct(overrides) ? overrides : bpm_override);
 		
 			// Step 2: Metronome settings (from set item if available)
 			var metronome_settings = undefined;
@@ -90,14 +104,17 @@
 			var count_in_ms = 0;
 			if (count_in_measures > 0) {
 				var meta = tune.tune_data.tune_metadata;
-				var time_sig = string(meta.meter ?? "4/4");
+				var time_sig = metronome_normalize_time_sig(meta.meter ?? "4/4");
 				var time_sig_parts = string_split(time_sig, "/");
 				var beats_per_measure = real(time_sig_parts[0]);
+				var denom = real(time_sig_parts[1]);
 				var tempo_str = string(meta.tempo_default ?? "");
 				var bpm_effective = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
 				if (!is_undefined(bpm_override)) bpm_effective = real(bpm_override);
-				var ms_per_beat = 60000 / bpm_effective;
-				count_in_ms = count_in_measures * beats_per_measure * ms_per_beat;
+				var quarter_bpm_effective = metronome_get_effective_quarter_bpm(bpm_effective, time_sig);
+				var ms_per_quarter = 60000 / quarter_bpm_effective;
+				var beat_unit_ms = ms_per_quarter * (4 / denom);
+				count_in_ms = count_in_measures * beats_per_measure * beat_unit_ms;
 			
 				countin_events = metronome_generate_countin_events({
 					events: tune_events,
@@ -105,12 +122,25 @@
 				}, metronome_settings, count_in_measures);
 			
 				// Find pickup duration (time before measure 1)
+				// Prefer explicit measure-1 bar marker to avoid false offsets.
 				var pickup_start_ms = 0;
 				for (var i = 0; i < array_length(tune_events); i++) {
 					var ev = tune_events[i];
-					if (ev.type == "note_on" && ev.time > 0) {
+					if (ev.type == "marker"
+						&& (ev.marker_type ?? "") == "bar"
+						&& real(ev.measure ?? 0) == 1) {
 						pickup_start_ms = ev.time;
 						break;
+					}
+				}
+				// Fallback if markers are unavailable.
+				if (pickup_start_ms == 0) {
+					for (var i = 0; i < array_length(tune_events); i++) {
+						var ev = tune_events[i];
+						if (ev.type == "note_on" && real(ev.measure ?? 0) >= 1) {
+							pickup_start_ms = ev.time;
+							break;
+						}
 					}
 				}
 			
@@ -178,6 +208,29 @@
 			// Safely update gameinfo title from the picker's library
 			if (picker != noone && is_struct(picker.library) && picker.selected_index >= 0 && array_length(picker.library.tunes) > picker.selected_index) {
 				obj_gameinfo_win_title.field_contents = picker.library.tunes[picker.selected_index].title;
+				
+				// Get tune metadata directly from library (no file reading needed)
+				var entry = picker.library.tunes[picker.selected_index];
+				
+				// Update BPM field from library
+				var tempo_str = string(entry.tempo_default ?? "120");
+				if (string_length(tempo_str) > 0 && instance_exists(metro_field_3)) {
+					metro_field_3.field_value = real(tempo_str);
+					metro_field_3.field_contents = tempo_str;
+				}
+				
+				// Update pattern list based on time signature from library
+				var time_sig = string(entry.meter ?? "4/4");
+				// Store in temp global so metronome mode changes use the selected tune's time sig
+				global.selected_tune_time_sig = time_sig;
+				show_debug_message("Checkbox click - updating patterns for time_sig: " + time_sig);
+				metronome_update_pattern_list(time_sig);
+				show_debug_message("Pattern options after update: " + string(global.metronome_pattern_options));
+				if (instance_exists(metro_field_2) && array_length(global.metronome_pattern_options) > 0) {
+					metro_field_2.field_value = global.metronome_pattern_selection;
+					metro_field_2.field_contents = global.metronome_pattern_options[global.metronome_pattern_selection];
+					show_debug_message("Set metro_field_2 to: " + metro_field_2.field_contents);
+				}
 			} else {
 				show_debug_message("Should set the gameinfo tune");
 			}
@@ -282,6 +335,63 @@
 		
 		// If we opened settings window, update metronome pattern list based on current tune
 		if (new_visibility && layer_name == "settings_window_layer") {
+			// Refresh MIDI device lists each time settings opens (handles runtime port changes)
+			MIDI_scan_input_devices();
+			MIDI_scan_output_devices();
+
+			var input_count = midi_input_device_count();
+			var output_count = midi_output_device_count();
+			global._midi_refresh_input_count = input_count;
+			global._midi_refresh_output_count = output_count;
+
+			// Keep selected device indices in range and update display names
+			if (input_count > 0) {
+				global.midi_input_device = clamp(global.midi_input_device, 0, input_count - 1);
+				global.midi_input_device_name = midi_input_device_name(global.midi_input_device);
+			} else {
+				global.midi_input_device = 0;
+				global.midi_input_device_name = "no MIDI input devices found";
+			}
+
+			if (output_count > 0) {
+				global.midi_output_device = clamp(global.midi_output_device, 0, output_count - 1);
+				global.midi_output_device_name = midi_output_device_name(global.midi_output_device);
+			} else {
+				global.midi_output_device = 0;
+				global.midi_output_device_name = "no MIDI output devices found";
+			}
+
+			// Refresh MIDI field bounds/values without relying on fragile instance names
+			with (obj_field_base) {
+				if (!variable_instance_exists(id, "field_target")) continue;
+				if (!is_string(field_target)) continue;
+
+				if (field_target == "midi_input_devices" || field_target == "global.midi_input_devices") {
+					field_min_value = 0;
+					field_max_value = max(global._midi_refresh_input_count - 1, 0);
+					field_value = clamp(field_value, field_min_value, field_max_value);
+					field_contents = (global._midi_refresh_input_count > 0) ? midi_input_device_name(field_value) : "none";
+				}
+
+				if (field_target == "midi_output_devices" || field_target == "global.midi_output_devices") {
+					field_min_value = 0;
+					field_max_value = max(global._midi_refresh_output_count - 1, 0);
+					field_value = clamp(field_value, field_min_value, field_max_value);
+					field_contents = (global._midi_refresh_output_count > 0) ? midi_output_device_name(field_value) : "none";
+				}
+			}
+			global._midi_refresh_input_count = undefined;
+			global._midi_refresh_output_count = undefined;
+
+			show_debug_message("=== MIDI INPUT DEVICES (" + string(input_count) + ") ===");
+			for (var in_i = 0; in_i < input_count; in_i++) {
+				show_debug_message("IN[" + string(in_i) + "]: " + midi_input_device_name(in_i));
+			}
+			show_debug_message("=== MIDI OUTPUT DEVICES (" + string(output_count) + ") ===");
+			for (var out_i = 0; out_i < output_count; out_i++) {
+				show_debug_message("OUT[" + string(out_i) + "]: " + midi_output_device_name(out_i));
+			}
+
 			var tune = global.tune;
 			var time_sig = "4/4"; // Default
 			
@@ -307,6 +417,8 @@
 	//CASE 5 	
 	//Go to Main Menu button
 	function scr_goto_mainmenu(){
+		MIDI_send_off();
+		MIDI_stop_checking_messages_and_errors();
 		room_goto(Room_main_menu);
 		scr_open_window(0);
 	}
@@ -386,12 +498,18 @@
 		global.METRONOME_CONFIG.enabled = (global.metronome_mode > 0);
 		global.METRONOME_CONFIG.mode = global.metronome_mode_options[field.field_value];
 		
-		// Refresh pattern list based on current tune
+		// Refresh pattern list based on selected tune (if in tune window) or current loaded tune
 		var time_sig = "4/4";
-		var tune = global.tune;
-		if (instance_exists(tune) && tune.tune_data.is_loaded) {
-			var meta = tune.tune_data.tune_metadata;
-			time_sig = string(meta.meter ?? "4/4");
+		// Use selected tune's time sig if available (set when checkbox clicked)
+		if (variable_global_exists("selected_tune_time_sig") && global.selected_tune_time_sig != "") {
+			time_sig = global.selected_tune_time_sig;
+		} else {
+			// Otherwise use currently loaded tune
+			var tune = global.tune;
+			if (instance_exists(tune) && tune.tune_data.is_loaded) {
+				var meta = tune.tune_data.tune_metadata;
+				time_sig = string(meta.meter ?? "4/4");
+			}
 		}
 		metronome_update_pattern_list(time_sig);
 		if (instance_exists(metro_field_2) && array_length(global.metronome_pattern_options) > 0) {
@@ -535,6 +653,48 @@
 		show_debug_message("Count-in measures: " + string(new_val));
 	}
 
+	//CASE 19 - Gracenote Override (ms)
+	function scr_gracenote_override_change() {
+		var field = self.field_ref;
+		var new_val = field.field_value + self.button_click_value;
+		new_val = clamp(new_val, field.field_min_value, field.field_max_value);
+		field.field_value = new_val;
+		field.field_contents = string(new_val);
+		global.gracenote_override_ms = new_val;
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.gracenote_override_ms = global.gracenote_override_ms;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		show_debug_message("Gracenote override (ms): " + string(new_val));
+	}
+
+	//CASE 20 - Swing Multiplier
+	function scr_swing_mult_change() {
+		var field = self.field_ref;
+		var new_val = field.field_value + self.button_click_value;
+		new_val = clamp(new_val, field.field_min_value, field.field_max_value);
+		field.field_value = new_val;
+		field.field_contents = string(new_val);
+		global.swing_mult = new_val;
+		if (is_array(global.current_set)) {
+			var idx = global.current_set_item_index;
+			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+				var item = global.current_set[idx];
+				if (is_struct(item)) {
+					item.swing_mult = global.swing_mult;
+					global.current_set[idx] = item;
+				}
+			}
+		}
+		show_debug_message("Swing multiplier: " + string(new_val));
+	}
+
 	//CASE 9
 	function scr_settings_OK()	{
 	//Set the choices that were made in the settings window. 
@@ -578,6 +738,12 @@
 		            
 		            // === CREATE SET ITEM FROM SELECTED TUNE ===
 		            var item = create_set_item(tryfile);
+		            var perf = global.tune.tune_data.performance;
+		            var meta = global.tune.tune_data.tune_metadata;
+		            var default_swing = perf.swing ?? meta.swing ?? "";
+		            if (!is_undefined(default_swing) && string(default_swing) != "") {
+		                item.swing_mult = default_swing;
+		            }
 		            
 		            // Find and capture tune-specific settings by ui_name
 				    with(obj_field_base) {
@@ -591,6 +757,8 @@
 		                if (ui_name == "metro_field_1") item.metronome_mode = field_value;
 		                if (ui_name == "metro_field_2") item.metronome_pattern = field_value;
 		                if (ui_name == "metro_field_5") item.metronome_volume = field_value;
+						if (ui_name == "metro_field_6") item.swing_mult = field_value;
+						if (ui_name == "metro_field_7") item.gracenote_override_ms = field_value;
 		            }
 				    global.current_set = [item];
 				    global.current_set_item_index = 0;
@@ -601,6 +769,8 @@
 				    global.metronome_pattern_selection = item.metronome_pattern;
 				    global.metronome_volume = item.metronome_volume;
 				    global.count_in_measures = item.count_in_measures;
+			    	global.swing_mult = item.swing_mult;
+					global.gracenote_override_ms = item.gracenote_override_ms;
 		    
 				    show_debug_message("Created set item: " + tryfile + 
 		                " | BPM=" + string(item.bpm) + 
@@ -634,8 +804,8 @@
 	
 	//CASE 11
 	function start_play() {
-		midi_output_device_open_all();
-		midi_input_device_open_all();
+		midi_output_device_open(global.midi_output_device);
+		midi_input_device_open(global.midi_input_device);
 		MIDI_start_manual_check_messages();
 		show_debug_message("manual MIDI started");
 		show_debug_message("input = " + string(global.midi_input_device));
@@ -672,5 +842,22 @@
 	/// @function export_event_history()
 	/// @description Export the current event history to CSV
 	function export_event_history() {
-    	event_history_export_csv("event_history.csv");
+		var tune_name = global.current_tune_name ?? "unknown";
+		var safe_tune = event_history_sanitize_name(tune_name);
+		var tune_title = event_history_get_tune_title();
+		var clean_tune = event_history_clean_tune_name(tune_title);
+		if (clean_tune == "") {
+			clean_tune = "unknown";
+		}
+		var bpm = !is_undefined(global.current_bpm) ? global.current_bpm : 120;
+		var swing = !is_undefined(global.swing_mult) ? global.swing_mult : 0;
+		var grace = !is_undefined(global.gracenote_override_ms) ? global.gracenote_override_ms : 0;
+		var timestamp = event_history_format_timestamp();
+		var folder = "datafiles/performances/" + clean_tune;
+		if (!directory_exists(folder)) {
+			directory_create(folder);
+		}
+		var filename = clean_tune + "_" + timestamp + "_" + string(bpm) + "_" + string(swing) + "_" + string(grace) + ".csv";
+		var filepath = folder + "/" + filename;
+	    event_history_export_csv(filepath);
 	}

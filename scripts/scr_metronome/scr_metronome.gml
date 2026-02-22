@@ -12,16 +12,27 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
         channel: 9,  // MIDI channel 10 (0-indexed, so add 1 for actual MIDI)
         velocity_emphasis: 100,  // Synced with global.metronome_volume
         velocity_normal: 70,     // Calculated as 70% of emphasis
-        current_variant: "emphasis_beat_beat_beat",  // Default pattern
+        velocity_light: 40,      // Calculated as 40% of emphasis
+        current_variant: "default",  // Default pattern
         
         // Drum sound definitions (MIDI note numbers - General MIDI percussion)
-        drums: {
-            kick: 35,           // Acoustic Bass Drum (emphasis beat)
-            snare: 38,          // Acoustic Snare (normal beat)
-            hi_hat: 42,         // Closed Hi-Hat (optional accent emphasis)
-            side_stick: 37,     // Side Stick (for click mode)
-            cowbell: 56         // Cowbell (alternative click sound)
+        //drums: {
+        //    kick: 35,           // Acoustic Bass Drum (emphasis beat)
+        //    snare: 38,          // Acoustic Snare (normal beat)
+        //    hi_hat: 42,         // Closed Hi-Hat (optional accent emphasis)
+        //    side_stick: 37,     // Side Stick (for click mode)
+        //    cowbell: 56         // Cowbell (alternative click sound)
+        //},
+		// Alternate for Drumlines via Cantabile
+		    drums: {
+            kick: 41,           // Acoustic Bass Drum (emphasis beat)
+            snare: 60,          // Acoustic Snare (normal beat)
+            hi_hat: 63,         // Closed Hi-Hat (optional accent emphasis)
+            low_tenor: 53 ,     // Side Stick (for click mode)
+            tenor: 57          // Cowbell (alternative click sound)
         },
+		
+		
         
         // Pattern templates by MODE and time signature
         // "Click" mode = simple single-note patterns
@@ -29,81 +40,227 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
         patterns: {
             "Click": {
                 "4/4": {
-                    "simple": [
+                    "default": [
                         {beat_position: 0, drum_notes: [56], emphasis: true},   // Beat 1: cowbell
                         {beat_position: 1, drum_notes: [37], emphasis: false},  // Beat 2: side stick
                         {beat_position: 2, drum_notes: [37], emphasis: false},  // Beat 3: side stick
                         {beat_position: 3, drum_notes: [37], emphasis: false}   // Beat 4: side stick
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 2.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 3.5, drum_notes: [37], emphasis: false, light: true}
                     ]
                 },
                 "3/4": {
-                    "simple": [
+                    "default": [
                         {beat_position: 0, drum_notes: [56], emphasis: true},
                         {beat_position: 1, drum_notes: [37], emphasis: false},
                         {beat_position: 2, drum_notes: [37], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 2.5, drum_notes: [37], emphasis: false, light: true}
                     ]
                 },
                 "6/8": {
-                    "simple": [
+                    "default": [
                         {beat_position: 0, drum_notes: [56], emphasis: true},
                         {beat_position: 1, drum_notes: [37], emphasis: false},
                         {beat_position: 2, drum_notes: [37], emphasis: false},
-                        {beat_position: 3, drum_notes: [56], emphasis: true},
+                        {beat_position: 3, drum_notes: [37], emphasis: false},
                         {beat_position: 4, drum_notes: [37], emphasis: false},
                         {beat_position: 5, drum_notes: [37], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 2.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 3.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 4.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 4.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 5.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 5.5, drum_notes: [37], emphasis: false, light: true}
+                    ],
+                    "six_eight_emphasis_4": [
+                        {beat_position: 0, drum_notes: [56], emphasis: true},
+                        {beat_position: 1, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 2, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 3, drum_notes: [37], emphasis: false},
+                        {beat_position: 4, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 5, drum_notes: [37], emphasis: false, light: true}
+                    ]
+                },
+                "2/2": {
+                    "default": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true}
+                    ]
+                },
+                "7/4": {
+                    "default": [
+                        {beat_position: 0, drum_notes: [56], emphasis: true},
+                        {beat_position: 1, drum_notes: [37], emphasis: false},
+                        {beat_position: 2, drum_notes: [37], emphasis: false},
+                        {beat_position: 3, drum_notes: [37], emphasis: false},
+                        {beat_position: 4, drum_notes: [37], emphasis: false},
+                        {beat_position: 5, drum_notes: [37], emphasis: false},
+                        {beat_position: 6, drum_notes: [37], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 2.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 3.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 4.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 4.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 5.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 5.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 6.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 6.5, drum_notes: [37], emphasis: false, light: true}
                     ]
                 }
             },
             "Drums": {
                 "4/4": {
-                    // Pattern 1: Emphasis on 1, normal on 2-4
-                    "emphasis_beat_beat_beat": [
-                        {beat_position: 0, drum_notes: [35, 42], emphasis: true},   // Beat 1: kick + hi-hat
-                        {beat_position: 1, drum_notes: [38],    emphasis: false},   // Beat 2: snare
-                        {beat_position: 2, drum_notes: [38],    emphasis: false},   // Beat 3: snare
-                        {beat_position: 3, drum_notes: [38],    emphasis: false}    // Beat 4: snare
+                    "default": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},   // Beat 1: kick + hi-hat
+                        {beat_position: 1, drum_notes: ["snare"],    emphasis: false},         // Beat 2: snare
+                        {beat_position: 2, drum_notes: ["snare"],    emphasis: false},         // Beat 3: snare
+                        {beat_position: 3, drum_notes: ["snare"],    emphasis: false}          // Beat 4: snare
                     ],
-                    // Pattern 2: Two-feel - emphasis on 1 and 3
-                    "two_feel": [
-                        {beat_position: 0, drum_notes: [35, 42], emphasis: true},   // Beat 1: kick + hi-hat (emphasis)
-                        {beat_position: 1, drum_notes: [42],    emphasis: false},   // Beat 2: hi-hat only
-                        {beat_position: 2, drum_notes: [35, 42], emphasis: true},   // Beat 3: kick + hi-hat (emphasis)
-                        {beat_position: 3, drum_notes: [42],    emphasis: false}    // Beat 4: hi-hat only
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 3.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
                     ],
-                    // Pattern 3: Rock beat - hi-hat/snare on 0, kick on 2
                     "rock_beat_1": [
-                        {beat_position: 0, drum_notes: [42, 38], emphasis: true, light: false},   // Beat 1: hi-hat + snare (emphasis)
-                        {beat_position: 1, drum_notes: [42],    emphasis: false, light: true},    // Beat 2: hi-hat only (light)
-                        {beat_position: 2, drum_notes: [35, 42], emphasis: true, light: false},   // Beat 3: kick + hi-hat (emphasis)
-                        {beat_position: 3, drum_notes: [42],    emphasis: false, light: true}     // Beat 4: hi-hat only (light)
-                    ],
-                    // Pattern 4: Eighth notes with light upbeats
-                    "eighth_notes_light": [
-                        {beat_position: 0.0, drum_notes: [42, 38], emphasis: true, light: false},   // Beat 1: snare (emphasis)
-                        {beat_position: 0.5, drum_notes: [42],    emphasis: false, light: true},    // Upbeat: hi-hat (light)
-                        {beat_position: 1.0, drum_notes: [38],    emphasis: false, light: false},   // Beat 2: snare
-                        {beat_position: 1.5, drum_notes: [42],    emphasis: false, light: true},    // Upbeat: hi-hat (light)
-                        {beat_position: 2.0, drum_notes: [38],    emphasis: false, light: false},   // Beat 3: snare
-                        {beat_position: 2.5, drum_notes: [42],    emphasis: false, light: true},    // Upbeat: hi-hat (light)
-                        {beat_position: 3.0, drum_notes: [38],    emphasis: false, light: false},   // Beat 4: snare
-                        {beat_position: 3.5, drum_notes: [42],    emphasis: false, light: true}     // Upbeat: hi-hat (light)
+                        {beat_position: 0.0, drum_notes: ["hi_hat"],    emphasis: false, light: false},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["hi_hat"],    emphasis: false, light: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: ["kick", "hi_hat"], emphasis: true, light: false},
+                        {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: ["hi_hat"],    emphasis: false, light: false},
+                        {beat_position: 3.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
                     ]
                 },
                 "3/4": {
-                    "waltz": [
-                        {beat_position: 0, drum_notes: [35], emphasis: true},
-                        {beat_position: 1, drum_notes: [42], emphasis: false},
-                        {beat_position: 2, drum_notes: [42], emphasis: false}
+                    "default": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 2, drum_notes: ["snare"], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
                     ]
                 },
                 "6/8": {
-                    "compound": [
-                        {beat_position: 0, drum_notes: [35, 42], emphasis: true},
-                        {beat_position: 1, drum_notes: [42],    emphasis: false},
-                        {beat_position: 2, drum_notes: [42],    emphasis: false},
-                        {beat_position: 3, drum_notes: [38, 42], emphasis: true},
-                        {beat_position: 4, drum_notes: [42],    emphasis: false},
-                        {beat_position: 5, drum_notes: [42],    emphasis: false}
+                    "default": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 2, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 3, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 4, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 5, drum_notes: ["snare"],    emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 3.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 4.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 4.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 5.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 5.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
+                    ],
+                    "six_eight_emphasis_4": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 3, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 4, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
+                    ]
+                },
+                "2/2": {
+                    "default": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["snare"],    emphasis: false},
+                        {beat_position: 1.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1.5, drum_notes: ["snare"],    emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
+                    ]
+                },
+                "7/4": {
+                    "default": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 2, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 3, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 4, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 5, drum_notes: ["snare"], emphasis: false},
+                        {beat_position: 6, drum_notes: ["snare"], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 2.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 3.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 3.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 4.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 4.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 5.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 5.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 6.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 6.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
                     ]
                 }
             }
@@ -113,6 +270,21 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
         current_pattern: "4/4",
         current_variant: "emphasis_beat_beat_beat"
     };
+}
+
+/// @function metronome_normalize_time_sig(_time_sig)
+/// @description Normalize common time symbols and missing meters to a "n/d" string.
+
+function metronome_normalize_time_sig(_time_sig) {
+    return timing_normalize_time_sig(_time_sig);
+}
+
+/// @function metronome_get_effective_quarter_bpm(_bpm, _time_sig)
+/// @description Convert displayed BPM to quarter-note BPM used for timing.
+/// In cut time (2/2), BPM is interpreted as half-note BPM.
+
+function metronome_get_effective_quarter_bpm(_bpm, _time_sig) {
+    return timing_get_effective_quarter_bpm(_bpm, _time_sig);
 }
 
 /// @function metronome_generate_events(_tune)
@@ -153,6 +325,8 @@ function metronome_generate_events(_tune, _settings) {
     // Sync velocities from volume
     config.velocity_emphasis = volume;
     config.velocity_normal = floor(volume * 0.7);
+    config.velocity_light = floor(volume * 0.4);
+    config.velocity_light = floor(volume * 0.4);
 	
     // Get mode name from index
     var mode = global.metronome_mode_options[mode_index];
@@ -162,16 +336,16 @@ function metronome_generate_events(_tune, _settings) {
     var meta = _tune.tune_data.tune_metadata;
     
     // Get time signature and tempo with fallbacks
-    var time_sig = string(meta.meter ?? "4/4");
+    var time_sig = metronome_normalize_time_sig(meta.meter ?? "4/4");
     var tempo_str = string(meta.tempo_default ?? "");
     var bpm = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
     if (!is_undefined(bpm_override)) {
         bpm = real(bpm_override);
     }
     
-    // Calculate ms_per_beat from BPM (same calculation as tune preprocessing)
-    // BPM is quarter notes per minute
-    var ms_per_beat = 60000 / bpm;
+    // Calculate ms_per_quarter from effective quarter BPM
+    var effective_quarter_bpm = metronome_get_effective_quarter_bpm(bpm, time_sig);
+    var ms_per_quarter = 60000 / effective_quarter_bpm;
     
     // BPM-based timing calculated
     
@@ -211,18 +385,33 @@ function metronome_generate_events(_tune, _settings) {
         return [];
     }
     
-    // Find where measure 1, beat 1 starts (skip any pickup measures)
-    // Look in the PREPROCESSED events (_tune.events), not the raw JSON
+    // Find where measure 1, beat 1 starts
+    // Prefer the preprocessed structure marker for bar/measure 1.
+    // This avoids false offsets for tunes that legitimately start at time 0.
     var measure_1_start_ms = 0;
     var preprocessed = _tune.events;  // These have the calculated .time field
-    
-    // Find first event with non-zero timestamp (skips pickup measure at time 0)
+
+    // First pass: explicit bar marker for measure 1.
     for (var i = 0; i < array_length(preprocessed); i++) {
         var ev = preprocessed[i];
-        if (ev.type == "note_on" && ev.time > 0) {
+        if (ev.type == "marker"
+            && (ev.marker_type ?? "") == "bar"
+            && real(ev.measure ?? 0) == 1) {
             measure_1_start_ms = ev.time;
-            show_debug_message("Found first note_on after pickup at time " + string(measure_1_start_ms) + " ms");
+            show_debug_message("Found measure 1 bar marker at " + string(measure_1_start_ms) + " ms");
             break;
+        }
+    }
+
+    // Fallback: first note in measure 1 if marker is unavailable.
+    if (measure_1_start_ms == 0) {
+        for (var i = 0; i < array_length(preprocessed); i++) {
+            var ev = preprocessed[i];
+            if (ev.type == "note_on" && real(ev.measure ?? 0) >= 1) {
+                measure_1_start_ms = ev.time;
+                show_debug_message("Fallback measure 1 note_on at " + string(measure_1_start_ms) + " ms");
+                break;
+            }
         }
     }
     
@@ -237,7 +426,9 @@ function metronome_generate_events(_tune, _settings) {
     // Calculate measure duration from time signature
     var time_sig_parts = string_split(time_sig, "/");
     var beats_per_measure = real(time_sig_parts[0]);  // e.g., 4 in "4/4"
-    var measure_duration_ms = beats_per_measure * ms_per_beat;
+    var denom = real(time_sig_parts[1]);
+    var beat_unit_ms = ms_per_quarter * (4 / denom);
+    var measure_duration_ms = beats_per_measure * beat_unit_ms;
     
     // Generate metronome events for entire tune duration
     var metro_events = [];
@@ -248,12 +439,34 @@ function metronome_generate_events(_tune, _settings) {
         // Play each beat in the pattern for this measure
         for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
             var beat_def = pattern[beat_idx];
-            var beat_time_ms = current_time_ms + (beat_def.beat_position * ms_per_beat);
+            var beat_time_ms = current_time_ms + (beat_def.beat_position * beat_unit_ms);
+            
+            // Add a beat marker event (for logging, separate from MIDI)
+            var beat_number = floor(beat_def.beat_position) + 1;  // 1-based beat number
+            var beat_fraction = beat_def.beat_position - floor(beat_def.beat_position);
+            array_push(metro_events, {
+                time: beat_time_ms,
+                type: "marker",
+                marker_type: "beat",
+                measure: current_measure,
+                beat: beat_number,
+                beat_fraction: beat_fraction,
+                event_id: 0
+            });
             
             // Create a MIDI note_on event for each drum sound in this beat
             for (var sound_idx = 0; sound_idx < array_length(beat_def.drum_notes); sound_idx++) {
-                var note = beat_def.drum_notes[sound_idx];
-                var velocity = beat_def.emphasis ? config.velocity_emphasis : config.velocity_normal;
+                var note_key = beat_def.drum_notes[sound_idx];
+                var note = note_key;
+                if (is_string(note_key)) {
+                    if (variable_struct_exists(config.drums, note_key)) {
+                        note = config.drums[$ note_key];
+                    } else {
+                        continue;
+                    }
+                }
+                var is_light = (variable_struct_exists(beat_def, "light") && beat_def.light);
+                var velocity = beat_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
                 
                 array_push(metro_events, {
                     time: beat_time_ms,
@@ -279,7 +492,7 @@ function metronome_generate_events(_tune, _settings) {
         current_time_ms += measure_duration_ms;
     }
     
-    show_debug_message("✓ Metronome: Generated " + string(array_length(metro_events)) + " events for " + time_sig + " at " + string(bpm) + " BPM");
+    show_debug_message("✓ Metronome: Generated " + string(array_length(metro_events)) + " events for " + time_sig + " at " + string(bpm) + " BPM (effective quarter BPM " + string(effective_quarter_bpm) + ")");
     return metro_events;
 }
 
@@ -346,7 +559,8 @@ function metronome_pattern_to_symbols(_pattern) {
         var beat = _pattern[i];
         
         // Check for light beats first (defaults to false if not defined)
-        if (beat.light ?? false) {
+        var is_light = (variable_struct_exists(beat, "light") && beat.light);
+        if (is_light) {
             symbols += "·";  // U+00B7 Middle Dot - light beat
         } else if (beat.emphasis) {
             symbols += "●";  // U+25CF Black Circle - strong beat
@@ -364,9 +578,7 @@ function metronome_pattern_to_symbols(_pattern) {
 
 function metronome_update_pattern_list(_time_sig) {
     // Default to 4/4 if no tune loaded
-    if (_time_sig == undefined || _time_sig == "") {
-        _time_sig = "4/4";
-    }
+    _time_sig = metronome_normalize_time_sig(_time_sig);
     
     // Get current mode
     var mode = global.metronome_mode_options[global.metronome_mode];
@@ -442,11 +654,12 @@ function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
     config.mode = mode;
 	
     var meta = _tune.tune_data.tune_metadata;
-    var time_sig = string(meta.meter ?? "4/4");
+    var time_sig = metronome_normalize_time_sig(meta.meter ?? "4/4");
     var tempo_str = string(meta.tempo_default ?? "");
     var bpm = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
     if (!is_undefined(bpm_override)) bpm = real(bpm_override);
-    var ms_per_beat = 60000 / bpm;
+    var effective_quarter_bpm = metronome_get_effective_quarter_bpm(bpm, time_sig);
+    var ms_per_quarter = 60000 / effective_quarter_bpm;
 	
     // Get pattern for this mode/time signature
     var mode_patterns = config.patterns[$ mode];
@@ -470,17 +683,43 @@ function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
 	
     var time_sig_parts = string_split(time_sig, "/");
     var beats_per_measure = real(time_sig_parts[0]);
-    var measure_duration_ms = beats_per_measure * ms_per_beat;
+    var denom = real(time_sig_parts[1]);
+    var beat_unit_ms = ms_per_quarter * (4 / denom);
+    var measure_duration_ms = beats_per_measure * beat_unit_ms;
 	
     var events = [];
     var current_time_ms = 0;
     for (var m = 0; m < _count_in_measures; m++) {
         for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
             var beat_def = pattern[beat_idx];
-            var beat_time_ms = current_time_ms + (beat_def.beat_position * ms_per_beat);
+            var beat_time_ms = current_time_ms + (beat_def.beat_position * beat_unit_ms);
+            
+            // Add a beat marker event (for logging, separate from MIDI)
+            var beat_number = floor(beat_def.beat_position) + 1;  // 1-based beat number
+            var beat_fraction = beat_def.beat_position - floor(beat_def.beat_position);
+            var countin_measure = m - _count_in_measures;  // -1 for one bar, -2/-1 for two bars
+            array_push(events, {
+                time: beat_time_ms,
+                type: "marker",
+                marker_type: "countin_beat",
+                measure: countin_measure,
+                beat: beat_number,
+                beat_fraction: beat_fraction,
+                event_id: 0
+            });
+            
             for (var sound_idx = 0; sound_idx < array_length(beat_def.drum_notes); sound_idx++) {
-                var note = beat_def.drum_notes[sound_idx];
-                var velocity = beat_def.emphasis ? config.velocity_emphasis : config.velocity_normal;
+                var note_key = beat_def.drum_notes[sound_idx];
+                var note = note_key;
+                if (is_string(note_key)) {
+                    if (variable_struct_exists(config.drums, note_key)) {
+                        note = config.drums[$ note_key];
+                    } else {
+                        continue;
+                    }
+                }
+                var is_light = (variable_struct_exists(beat_def, "light") && beat_def.light);
+                var velocity = beat_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
                 array_push(events, { time: beat_time_ms, type: "note_on", channel: config.channel, note: note, velocity: velocity });
                 array_push(events, { time: beat_time_ms + 50, type: "note_off", channel: config.channel, note: note, velocity: 0 });
             }
