@@ -147,15 +147,20 @@ function MIDI_process_messages()
 //	}
 //```
 		//  Having parsed the input, do something with it!
+		var log_channel = (byte1 >= 128) ? (byte1 & 15) : 0;
+		var normalized_time = time;
+		if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
+			normalized_time = time - global.tune_start_real;
+		}
+		var status_type = byte1 & 240;  // Clear channel bits
+		if (status_type == 144 && byte3 > 0) {
+			cn_panel_on_player_note_on(byte2, log_channel, normalized_time);
+		} else if (status_type == 128 || (status_type == 144 && byte3 <= 0)) {
+			cn_panel_on_player_note_off(byte2, log_channel, normalized_time);
+		}
+
 		if (variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED) {
-			var log_channel = (byte1 >= 128) ? (byte1 & 15) : 0;
-			// Normalize timestamp relative to playback start (if tune is playing)
-			var normalized_time = time;
-			if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
-				normalized_time = time - global.tune_start_real;
-			}
 			// Determine event type from MIDI status byte
-			var status_type = byte1 & 240;  // Clear channel bits
 			var ev_type = "unknown";
 			if (status_type == 144) {  // Note On
 				ev_type = (byte3 > 0) ? "note_on" : "note_off";  // Velocity-zero = note off

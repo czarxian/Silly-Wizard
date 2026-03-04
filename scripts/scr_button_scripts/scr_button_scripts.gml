@@ -30,6 +30,7 @@
 			case 18: show_debug_message("Tune Count-In change"); scr_tune_countin_change(); break;
 			case 19: show_debug_message("Gracenote Override change"); scr_gracenote_override_change(); break;
 			case 20: show_debug_message("Swing Multiplier change"); scr_swing_mult_change(); break;
+			case 21: show_debug_message("Current-note measure scroll"); scr_current_note_measure_scroll(); break;
 			default: show_debug_message("switch default"); scr_script_not_set(); break;
 		}
 	}
@@ -254,6 +255,7 @@
 		show_debug_message("Uncheck in layer " + string(ui_layer) +
                        " group " + string(ui_group) +
                        " except ui_num " + string(this_num));
+			var target_group = ui_group;
 
 		var layer_entries = array_of_checkboxes[ui_layer];
 
@@ -279,7 +281,7 @@
 			// Only act on other checkboxes in the same group
 			if (num != this_num && instance_exists(cb)) {
 				with (cb) {
-					if (variable_instance_exists(id, "ui_group") && ui_group == other.ui_group) {
+					if (variable_instance_exists(id, "ui_group") && ui_group == target_group) {
 						button_checked = 0;
 						image_index    = 0;
 						show_debug_message("Unchecked " + string(ui_name) + " in group " + string(ui_group));
@@ -695,6 +697,18 @@
 		show_debug_message("Swing multiplier: " + string(new_val));
 	}
 
+	//CASE 21 - Current-note measure scroll
+	function scr_current_note_measure_scroll() {
+		if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+
+		var delta = real(self.button_click_value ?? 0);
+		if (delta == 0) return;
+
+		var previous_measure = real(global.current_note_panel.current_measure ?? 1);
+		var next_measure = cn_panel_scroll_measure(delta);
+		show_debug_message("Current-note measure: " + string(previous_measure) + " -> " + string(next_measure));
+	}
+
 	//CASE 9
 	function scr_settings_OK()	{
 	//Set the choices that were made in the settings window. 
@@ -835,7 +849,11 @@
 		show_debug_message("===== REGENERATING TUNE LIBRARY =====");
 		scr_build_tune_library("tunes/");
 		show_debug_message("===== TUNE LIBRARY REGENERATION COMPLETE =====");
-		show_debug_message("Tune library now contains " + string(array_length(global.tune)) + " tunes");
+		var tune_count = 0;
+		if (variable_global_exists("tune_library") && is_array(global.tune_library)) {
+			tune_count = array_length(global.tune_library);
+		}
+		show_debug_message("Tune library now contains " + string(tune_count) + " tunes");
 	}
 
 	//CASE 13

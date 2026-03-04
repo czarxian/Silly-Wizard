@@ -72,6 +72,18 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
                         {beat_position: 2.5, drum_notes: [37], emphasis: false, light: true}
                     ]
                 },
+                "2/4": {
+                    "default": [
+                        {beat_position: 0, drum_notes: [56], emphasis: true},
+                        {beat_position: 1, drum_notes: [37], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: [56], emphasis: true},
+                        {beat_position: 0.5, drum_notes: [37], emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: [37], emphasis: false},
+                        {beat_position: 1.5, drum_notes: [37], emphasis: false, light: true}
+                    ]
+                },
                 "6/8": {
                     "default": [
                         {beat_position: 0, drum_notes: [56], emphasis: true},
@@ -188,6 +200,18 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
                         {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
                         {beat_position: 2.0, drum_notes: ["snare"],     emphasis: false},
                         {beat_position: 2.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
+                    ]
+                },
+                "2/4": {
+                    "default": [
+                        {beat_position: 0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 1, drum_notes: ["snare"], emphasis: false}
+                    ],
+                    "half_beat": [
+                        {beat_position: 0.0, drum_notes: ["kick", "hi_hat"], emphasis: true},
+                        {beat_position: 0.5, drum_notes: ["hi_hat"],    emphasis: false, light: true},
+                        {beat_position: 1.0, drum_notes: ["snare"],     emphasis: false},
+                        {beat_position: 1.5, drum_notes: ["hi_hat"],    emphasis: false, light: true}
                     ]
                 },
                 "6/8": {
@@ -325,7 +349,6 @@ function metronome_generate_events(_tune, _settings) {
     // Sync velocities from volume
     config.velocity_emphasis = volume;
     config.velocity_normal = floor(volume * 0.7);
-    config.velocity_light = floor(volume * 0.4);
     config.velocity_light = floor(volume * 0.4);
 	
     // Get mode name from index
@@ -503,20 +526,47 @@ function metronome_generate_events(_tune, _settings) {
 
 function metronome_set_pattern(_time_sig, _variant_name) {
     var config = global.METRONOME_CONFIG;
-    
-    if (config.patterns[$ _time_sig] == undefined) {
-        show_debug_message("ERROR: Time signature not supported: " + _time_sig);
+    var time_sig = metronome_normalize_time_sig(_time_sig);
+    var mode_count = array_length(global.metronome_mode_options);
+    if (mode_count <= 0) {
+        show_debug_message("ERROR: Metronome mode options are not initialized");
+        return false;
+    }
+    var mode_index = clamp(real(global.metronome_mode), 0, mode_count - 1);
+    if (mode_index == 0) {
+        show_debug_message("ERROR: Cannot set metronome pattern while mode is None");
+        return false;
+    }
+    var mode = global.metronome_mode_options[mode_index];
+    var mode_patterns = config.patterns[$ mode];
+    if (mode_patterns == undefined) {
+        show_debug_message("ERROR: Mode not supported in pattern config: " + string(mode));
+        return false;
+    }
+    var time_sig_patterns = mode_patterns[$ time_sig];
+    if (time_sig_patterns == undefined) {
+        show_debug_message("ERROR: Time signature not supported for mode " + string(mode) + ": " + string(time_sig));
         return false;
     }
     
-    if (config.patterns[$ _time_sig][$ _variant_name] == undefined) {
-        show_debug_message("ERROR: Pattern variant not found: " + _time_sig + " / " + _variant_name);
+    if (time_sig_patterns[$ _variant_name] == undefined) {
+        show_debug_message("ERROR: Pattern variant not found: " + string(mode) + " / " + string(time_sig) + " / " + string(_variant_name));
         return false;
     }
     
-    config.current_pattern = _time_sig;
+    config.current_pattern = time_sig;
     config.current_variant = _variant_name;
-    show_debug_message("✓ Metronome pattern set to: " + _time_sig + " / " + _variant_name);
+
+    if (variable_global_exists("metronome_pattern_options") && is_array(global.metronome_pattern_options)) {
+        for (var i = 0; i < array_length(global.metronome_pattern_options); i++) {
+            if (global.metronome_pattern_options[i] == _variant_name) {
+                global.metronome_pattern_selection = i;
+                break;
+            }
+        }
+    }
+
+    show_debug_message("✓ Metronome pattern set to: " + string(mode) + " / " + string(time_sig) + " / " + string(_variant_name));
     return true;
 }
 
@@ -536,12 +586,17 @@ function metronome_toggle(_enabled) {
 function metronome_list_patterns() {
     var result = {};
     var patterns = global.METRONOME_CONFIG.patterns;
-    
-    var keys = struct_get_names(patterns);
-    for (var i = 0; i < array_length(keys); i++) {
-        var time_sig = keys[i];
-        var variants = struct_get_names(patterns[$ time_sig]);
-        result[$ time_sig] = variants;
+
+    var modes = struct_get_names(patterns);
+    for (var i = 0; i < array_length(modes); i++) {
+        var mode = modes[i];
+        var by_sig = {};
+        var sig_names = struct_get_names(patterns[$ mode]);
+        for (var s = 0; s < array_length(sig_names); s++) {
+            var sig = sig_names[s];
+            by_sig[$ sig] = struct_get_names(patterns[$ mode][$ sig]);
+        }
+        result[$ mode] = by_sig;
     }
     
     return result;

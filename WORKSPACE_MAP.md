@@ -92,10 +92,10 @@ This describes how a tune is triggered and how events flow through the system:
   - Columns include timing, beat, MIDI notes, and quality metrics
   - Import into Excel for analysis
 
-### 8. **Future: Player Input & Metronome**
-- When player MIDI input added: events logged with `source: "player"`, actual timing from input device
-- When metronome added: events logged with `source: "metronome"`, beat/measure context calculated
-- CSV export will allow comparison: game vs player vs expected timing
+### 8. **Player Input & Metronome Context**
+- Player MIDI input logging remains an active enhancement target (`source: "player"`, actual timing from input device)
+- Metronome generation is currently implemented and contributes beat/measure marker context during playback
+- CSV/export analysis is designed to compare expected/game/player timing as player-input logging expands
 
 ---
 

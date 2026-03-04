@@ -118,3 +118,386 @@
 	        }
 	    }
 	}
+
+function cn_panel_init_state() {
+	global.current_note_panel = {
+		bound: false,
+		refs: {
+			last_tune: noone,
+			current_tune: noone,
+			next_tune: noone,
+			last_player: noone,
+			current_player: noone,
+			next_player: noone
+		},
+		min_note_ms: 15,
+		core_min_note_ms: 100,
+		filter_marker_symbol: "^",
+		current_measure: 0,
+		tune_plan_by_measure: {},
+		plan_last_beat_by_measure: {},
+		tune_played_by_measure: {},
+		player_played_by_measure: {},
+		render_tokens: {},
+		classified_events: [],
+		pending_tune_notes: {},
+		pending_player_notes: {}
+	};
+}
+
+function cn_panel_note_key(_channel, _note_midi) {
+	return string(_channel) + ":" + string(_note_midi);
+}
+
+function cn_panel_append_note(_map, _measure, _note, _note_class = "normal") {
+	if (_measure < 1) return;
+	var key = string(_measure);
+	var slot = _map[$ key];
+	if (is_undefined(slot)) {
+		slot = {
+			text: "",
+			count: 0,
+			tokens: []
+		};
+	}
+	if (!variable_struct_exists(slot, "tokens") || !is_array(slot.tokens)) {
+		slot.tokens = [];
+	}
+	if (slot.count > 0) {
+		slot.text += " ";
+		array_push(slot.tokens, {
+			text: " ",
+			class: "space"
+		});
+	}
+	var token_text = string(_note);
+	slot.text += token_text;
+	array_push(slot.tokens, {
+		text: token_text,
+		class: string(_note_class)
+	});
+	slot.count += 1;
+	_map[$ key] = slot;
+}
+
+function cn_panel_append_separator(_map, _measure) {
+	if (_measure < 1) return;
+	cn_panel_append_note(_map, _measure, "|", "separator");
+}
+
+function cn_panel_append_filtered_marker(_map, _measure) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	var marker = string(global.current_note_panel.filter_marker_symbol ?? "^");
+	if (string_length(marker) <= 0) marker = "^";
+	cn_panel_append_note(_map, _measure, marker, "filtered_noise");
+}
+
+function cn_panel_get_tokens(_map, _measure) {
+	if (_measure < 1) return [];
+	var slot = _map[$ string(_measure)];
+	if (is_undefined(slot)) return [];
+	var tokens = slot.tokens;
+	if (is_undefined(tokens) || !is_array(tokens)) return [];
+	return tokens;
+}
+
+function cn_panel_tokens_to_text(_tokens) {
+	var out = "";
+	for (var i = 0; i < array_length(_tokens); i++) {
+		var tk = _tokens[i];
+		out += string(tk.text ?? "");
+	}
+	return out;
+}
+
+function cn_panel_record_event(_source, _measure, _note_midi, _channel, _duration_ms, _note_class, _is_filtered, _time_ms) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	var note_text = midi_to_letter(_note_midi, _channel);
+	array_push(global.current_note_panel.classified_events, {
+		source: string(_source),
+		measure: real(_measure),
+		note_midi: real(_note_midi),
+		note_text: note_text,
+		channel: real(_channel),
+		duration_ms: real(_duration_ms),
+		note_class: string(_note_class),
+		is_filtered: _is_filtered,
+		time_ms: real(_time_ms)
+	});
+}
+
+function cn_panel_get_text(_map, _measure) {
+	if (_measure < 1) return "";
+	var slot = _map[$ string(_measure)];
+	if (is_undefined(slot)) return "";
+	return string(slot.text ?? "");
+}
+
+function cn_panel_try_bind_refs() {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) {
+		cn_panel_init_state();
+	}
+	if (global.current_note_panel.bound) return;
+
+	if (!variable_global_exists("ui_assets") || !is_array(global.ui_assets)) return;
+
+	var refs = global.current_note_panel.refs;
+	for (var layer_idx = 0; layer_idx < array_length(global.ui_assets); layer_idx++) {
+		if (!is_array(global.ui_assets[layer_idx])) continue;
+		for (var i = 0; i < array_length(global.ui_assets[layer_idx]); i++) {
+			var entry = global.ui_assets[layer_idx][i];
+			if (!is_array(entry) || array_length(entry) < 2) continue;
+			var inst = entry[1];
+			if (!instance_exists(inst)) continue;
+
+			var key = "";
+			if (variable_instance_exists(inst, "ui_name")) {
+				key = string(inst.ui_name);
+			}
+			if (key == "" || key == "n/a") continue;
+
+			switch (key) {
+				case "obj_last_measure_tune_notes": refs.last_tune = inst; break;
+				case "obj_current_measure_tune_notes": refs.current_tune = inst; break;
+				case "obj_next_measure_tune_notes": refs.next_tune = inst; break;
+				case "obj_last_measure_player_notes": refs.last_player = inst; break;
+				case "obj_current_measure_player_notes": refs.current_player = inst; break;
+				case "obj_next_measure_player_notes": refs.next_player = inst; break;
+			}
+		}
+	}
+
+	global.current_note_panel.refs = refs;
+	if (instance_exists(refs.last_tune) && instance_exists(refs.current_tune) && instance_exists(refs.next_tune)
+		&& instance_exists(refs.last_player) && instance_exists(refs.current_player)) {
+		global.current_note_panel.bound = true;
+	}
+}
+
+function cn_panel_set_field(_field_id, _text) {
+	if (!instance_exists(_field_id)) return;
+	with (_field_id) {
+		field_contents = _text;
+	}
+}
+
+function cn_panel_get_max_measure() {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return 1;
+
+	var panel = global.current_note_panel;
+	var max_measure = 1;
+	var maps = [
+		panel.tune_plan_by_measure,
+		panel.tune_played_by_measure,
+		panel.player_played_by_measure
+	];
+
+	for (var i = 0; i < array_length(maps); i++) {
+		var map = maps[i];
+		if (!is_struct(map)) continue;
+
+		var names = variable_struct_get_names(map);
+		for (var j = 0; j < array_length(names); j++) {
+			var key = names[j];
+			var measure = floor(real(key));
+			if (measure > max_measure) max_measure = measure;
+		}
+	}
+
+	return max_measure;
+}
+
+function cn_panel_scroll_measure(_delta) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return 1;
+
+	var panel = global.current_note_panel;
+	var current_measure = max(1, floor(real(panel.current_measure ?? 1)));
+	var target_measure = current_measure + floor(real(_delta));
+	var max_measure = max(1, cn_panel_get_max_measure());
+
+	target_measure = clamp(target_measure, 1, max_measure);
+	panel.current_measure = target_measure;
+	global.current_note_panel = panel;
+	cn_panel_render();
+
+	return target_measure;
+}
+
+function cn_panel_render() {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	cn_panel_try_bind_refs();
+	var panel = global.current_note_panel;
+	var m = panel.current_measure;
+
+	var last_tune_tokens = cn_panel_get_tokens(panel.tune_played_by_measure, m - 1);
+	var current_tune_tokens = cn_panel_get_tokens(panel.tune_played_by_measure, m);
+	var next_tune_tokens = cn_panel_get_tokens(panel.tune_plan_by_measure, m + 1);
+	var last_player_tokens = cn_panel_get_tokens(panel.player_played_by_measure, m - 1);
+	var current_player_tokens = cn_panel_get_tokens(panel.player_played_by_measure, m);
+	var next_player_tokens = cn_panel_get_tokens(panel.player_played_by_measure, m + 1);
+
+	var last_tune_text = cn_panel_tokens_to_text(last_tune_tokens);
+	var current_tune_text = cn_panel_tokens_to_text(current_tune_tokens);
+	var next_tune_text = cn_panel_tokens_to_text(next_tune_tokens);
+	var last_player_text = cn_panel_tokens_to_text(last_player_tokens);
+	var current_player_text = cn_panel_tokens_to_text(current_player_tokens);
+	var next_player_text = cn_panel_tokens_to_text(next_player_tokens);
+
+	panel.render_tokens[$ "obj_last_measure_tune_notes"] = last_tune_tokens;
+	panel.render_tokens[$ "obj_current_measure_tune_notes"] = current_tune_tokens;
+	panel.render_tokens[$ "obj_next_measure_tune_notes"] = next_tune_tokens;
+	panel.render_tokens[$ "obj_last_measure_player_notes"] = last_player_tokens;
+	panel.render_tokens[$ "obj_current_measure_player_notes"] = current_player_tokens;
+	panel.render_tokens[$ "obj_next_measure_player_notes"] = next_player_tokens;
+	global.current_note_panel = panel;
+
+	cn_panel_set_field(panel.refs.last_tune, last_tune_text);
+	cn_panel_set_field(panel.refs.current_tune, current_tune_text);
+	cn_panel_set_field(panel.refs.next_tune, next_tune_text);
+	cn_panel_set_field(panel.refs.last_player, last_player_text);
+	cn_panel_set_field(panel.refs.current_player, current_player_text);
+	cn_panel_set_field(panel.refs.next_player, next_player_text);
+}
+
+function cn_panel_prepare_tune_plan(_events) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) {
+		cn_panel_init_state();
+	}
+	global.current_note_panel.current_measure = 1;
+	global.current_note_panel.tune_plan_by_measure = {};
+	global.current_note_panel.plan_last_beat_by_measure = {};
+	global.current_note_panel.tune_played_by_measure = {};
+	global.current_note_panel.player_played_by_measure = {};
+	global.current_note_panel.render_tokens = {};
+	global.current_note_panel.classified_events = [];
+	global.current_note_panel.pending_tune_notes = {};
+	global.current_note_panel.pending_player_notes = {};
+
+	for (var i = 0; i < array_length(_events); i++) {
+		var ev = _events[i];
+		if (ev.type != "note_on") continue;
+		if (!struct_exists(ev, "channel") || ev.channel == global.METRONOME_CONFIG.channel) continue;
+		var measure = real(ev.measure ?? 0);
+		if (measure < 1) continue;
+		var plan_key = string(measure);
+		var beat = real(ev.beat ?? 0);
+		if (beat > 0) {
+			var last_beat = global.current_note_panel.plan_last_beat_by_measure[$ plan_key];
+			if (!is_undefined(last_beat) && beat != last_beat) {
+				cn_panel_append_separator(global.current_note_panel.tune_plan_by_measure, measure);
+			}
+			global.current_note_panel.plan_last_beat_by_measure[$ plan_key] = beat;
+		}
+		var note_text = midi_to_letter(ev.note, ev.channel);
+		cn_panel_append_note(global.current_note_panel.tune_plan_by_measure, measure, note_text, "planned");
+	}
+
+	cn_panel_try_bind_refs();
+	cn_panel_render();
+}
+
+function cn_panel_on_tune_note_on(_measure, _note_midi, _channel, _time_ms) {
+	if (_measure < 1) return;
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	if (_channel == global.METRONOME_CONFIG.channel) return;
+
+	global.current_note_panel.current_measure = _measure;
+	var key = cn_panel_note_key(_channel, _note_midi);
+	global.current_note_panel.pending_tune_notes[$ key] = {
+		start_ms: real(_time_ms),
+		measure: _measure,
+		note_midi: _note_midi,
+		channel: _channel
+	};
+	cn_panel_render();
+}
+
+function cn_panel_on_tune_note_off(_measure, _note_midi, _channel, _time_ms) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	if (_channel == global.METRONOME_CONFIG.channel) return;
+
+	var key = cn_panel_note_key(_channel, _note_midi);
+	var pending = global.current_note_panel.pending_tune_notes[$ key];
+	if (is_undefined(pending)) return;
+
+	var duration_ms = real(_time_ms) - real(pending.start_ms);
+	global.current_note_panel.pending_tune_notes[$ key] = undefined;
+	if (duration_ms < real(global.current_note_panel.min_note_ms)) {
+		var filtered_measure = real(pending.measure ?? _measure);
+		if (filtered_measure >= 1) {
+			cn_panel_append_filtered_marker(global.current_note_panel.tune_played_by_measure, filtered_measure);
+			cn_panel_record_event("tune", filtered_measure, _note_midi, _channel, duration_ms, "filtered_noise", true, _time_ms);
+			cn_panel_render();
+		}
+		return;
+	}
+
+	var resolved_measure = real(pending.measure ?? _measure);
+	if (resolved_measure < 1) return;
+	var note_text = midi_to_letter(_note_midi, _channel);
+	var tune_class = (duration_ms < real(global.current_note_panel.core_min_note_ms)) ? "short_noncore" : "core_melody";
+	cn_panel_append_note(global.current_note_panel.tune_played_by_measure, resolved_measure, note_text, tune_class);
+	cn_panel_record_event("tune", resolved_measure, _note_midi, _channel, duration_ms, tune_class, false, _time_ms);
+	cn_panel_render();
+}
+
+function cn_panel_on_player_note_on(_note_midi, _channel, _time_ms) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	if (_channel != 0) return;
+
+	var measure = real(global.current_note_panel.current_measure ?? 0);
+	if (measure < 1) return;
+	var key = cn_panel_note_key(_channel, _note_midi);
+	global.current_note_panel.pending_player_notes[$ key] = {
+		start_ms: real(_time_ms),
+		measure: measure,
+		note_midi: _note_midi,
+		channel: _channel
+	};
+	cn_panel_render();
+}
+
+function cn_panel_on_player_note_off(_note_midi, _channel, _time_ms) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+	if (_channel != 0) return;
+
+	var key = cn_panel_note_key(_channel, _note_midi);
+	var pending = global.current_note_panel.pending_player_notes[$ key];
+	if (is_undefined(pending)) return;
+
+	var duration_ms = real(_time_ms) - real(pending.start_ms);
+	global.current_note_panel.pending_player_notes[$ key] = undefined;
+	if (duration_ms < real(global.current_note_panel.min_note_ms)) {
+		var filtered_measure = real(pending.measure ?? 0);
+		if (filtered_measure >= 1) {
+			cn_panel_append_filtered_marker(global.current_note_panel.player_played_by_measure, filtered_measure);
+			cn_panel_record_event("player", filtered_measure, _note_midi, _channel, duration_ms, "filtered_noise", true, _time_ms);
+			cn_panel_render();
+		}
+		return;
+	}
+
+	var measure = real(pending.measure ?? 0);
+	if (measure < 1) return;
+
+	var note_text = midi_to_letter(_note_midi, _channel);
+	var player_class = (duration_ms < real(global.current_note_panel.core_min_note_ms)) ? "short_noncore" : "core_melody";
+	cn_panel_append_note(global.current_note_panel.player_played_by_measure, measure, note_text, player_class);
+	cn_panel_record_event("player", measure, _note_midi, _channel, duration_ms, player_class, false, _time_ms);
+	cn_panel_render();
+}
+
+function cn_panel_on_beat_marker(_measure, _beat, _is_countin) {
+	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
+
+	var measure = real(_measure);
+	if (measure < 1) {
+		measure = max(1, real(global.current_note_panel.current_measure ?? 1));
+	}
+	if (measure < 1) measure = 1;
+
+	global.current_note_panel.current_measure = measure;
+	cn_panel_append_separator(global.current_note_panel.tune_played_by_measure, measure);
+	cn_panel_append_separator(global.current_note_panel.player_played_by_measure, measure);
+	cn_panel_render();
+}

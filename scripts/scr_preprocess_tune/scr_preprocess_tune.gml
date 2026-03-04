@@ -556,7 +556,7 @@ function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, 
 /// @param _base_midi  Not used (replaced by exact MIDI lookup)
 /// @returns MIDI note number
 
-function tune_get_note_map(_chanter) {
+function tune_get_note_map(_chanter, _base_midi = undefined) {
 	var chanter = string(_chanter);
 
 	// Default bagpipe chanter MIDI note mapping (exact from Excel reference)
