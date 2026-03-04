@@ -17,8 +17,9 @@
     {"name":"Timelines","order":5,"path":"folders/Timelines.yy",},
   ],
   "ResourceOrderSettings":[
+    {"name":"fnt_measure","order":1,"path":"fonts/fnt_measure/fnt_measure.yy",},
     {"name":"fnt_setting","order":2,"path":"fonts/fnt_setting/fnt_setting.yy",},
-    {"name":"fnt_title","order":1,"path":"fonts/fnt_title/fnt_title.yy",},
+    {"name":"fnt_title","order":3,"path":"fonts/fnt_title/fnt_title.yy",},
     {"name":"obj_btn_check","order":4,"path":"objects/obj_btn_check/obj_btn_check.yy",},
     {"name":"obj_btn_fieldL","order":1,"path":"objects/obj_btn_fieldL/obj_btn_fieldL.yy",},
     {"name":"obj_btn_fieldR","order":6,"path":"objects/obj_btn_fieldR/obj_btn_fieldR.yy",},

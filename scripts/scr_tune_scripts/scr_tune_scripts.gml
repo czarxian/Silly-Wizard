@@ -90,6 +90,8 @@ function tune_group_events_by_timestamp(_events) {
 /// @param tune_events  The array of events to play
 
 function tune_start(_tune_events) {
+    cn_panel_prepare_tune_plan(_tune_events);
+
     // Group events by timestamp for batched processing
     global.tune_event_groups = tune_group_events_by_timestamp(_tune_events);
     global.tune_group_index = 0;
@@ -126,6 +128,20 @@ function script_tune_callback_batched() {
     var group = global.tune_event_groups[global.tune_group_index];
     var real_elapsed = current_time - global.tune_start_real;
     var expected_elapsed = group.time;
+
+    var ordered_events = [];
+    for (var oi = 0; oi < array_length(group.events); oi++) {
+        var oev = group.events[oi];
+        if (oev.type == "note_off") array_push(ordered_events, oev);
+    }
+    for (var oi = 0; oi < array_length(group.events); oi++) {
+        var oev = group.events[oi];
+        if (oev.type == "marker") array_push(ordered_events, oev);
+    }
+    for (var oi = 0; oi < array_length(group.events); oi++) {
+        var oev = group.events[oi];
+        if (oev.type == "note_on") array_push(ordered_events, oev);
+    }
     
     // Temp: log first and last few groups to verify delta calculation
     if (global.tune_group_index < 3 || global.tune_group_index > array_length(global.tune_event_groups) - 3) {
@@ -133,9 +149,11 @@ function script_tune_callback_batched() {
     }
     
     // Process ALL events in this timestamp group
-    var last_note_on = undefined;
-    for (var i = 0; i < array_length(group.events); i++) {
-        var ev = group.events[i];
+    var has_last_note_on = false;
+    var last_note_on_note = 0;
+    var last_note_on_channel = 0;
+    for (var i = 0; i < array_length(ordered_events); i++) {
+        var ev = ordered_events[i];
         
         // PLAY EVENT using Giavapps MIDI send_short
         if (ev.type == "note_on") {
@@ -143,15 +161,25 @@ function script_tune_callback_batched() {
             midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, ev.velocity);
             // Track for UI update (only if not metronome channel)
             if (ev.channel != global.METRONOME_CONFIG.channel) {
-                last_note_on = ev;
+                has_last_note_on = true;
+                last_note_on_note = ev.note;
+                last_note_on_channel = ev.channel;
+                cn_panel_on_tune_note_on(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
             }
         } 
         else if (ev.type == "note_off") {
             var status_byte = 128 + ev.channel;
             midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, 0);
+            if (ev.channel != global.METRONOME_CONFIG.channel) {
+                cn_panel_on_tune_note_off(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
+            }
         }
         else if (ev.type == "marker") {
             // No MIDI output for marker entries.
+            var marker_kind = string(ev.marker_type ?? "");
+            if (marker_kind == "beat" || marker_kind == "countin_beat") {
+                cn_panel_on_beat_marker(real(ev.measure ?? 0), real(ev.beat ?? 0), marker_kind == "countin_beat");
+            }
         }
         
         // Log raw event data to history (enrichment will derive labels/structure later)
@@ -200,13 +228,10 @@ function script_tune_callback_batched() {
     }
     
     // Update UI once per group (only for note_on events)
-    if (last_note_on != undefined) {
-        var note_letter = midi_to_letter(last_note_on.note, last_note_on.channel);
+    if (has_last_note_on) {
+        var note_letter = midi_to_letter(last_note_on_note, last_note_on_channel);
         var display_text = note_letter + " (delta: " + string(real_elapsed - expected_elapsed) + "ms)";
         global.current_note_display = display_text;
-        if (instance_exists(obj_currentnote_field_1)) {
-            obj_currentnote_field_1.field_contents = display_text;
-        }
     }
     
     // Advance to next group
@@ -320,10 +345,6 @@ event_history_add({
 	if (ev.type == "note_on" && ev.channel != global.METRONOME_CONFIG.channel) {
 		var display_text = note_letter + " (delta: " + string(real_elapsed - expected_elapsed) + "ms)";
 		global.current_note_display = display_text;
-		// Update UI field directly (less overhead now that event logging is removed from callback)
-		if (instance_exists(obj_currentnote_field_1)) {
-			obj_currentnote_field_1.field_contents = display_text;
-		}
 	}
 
     // Advance index
@@ -384,13 +405,9 @@ function tune_cleanup_after_finish() {
 }
 
 //////Metronome//////
-//function tune_generate_metronome(_tune)
-//{
-    // TODO: Metronome generation is not yet functional
-    // For now, return empty array to disable metronome events
-    //return [];
-    
-    // Original implementation preserved below for reference when re-integrating:
+// Metronome playback generation is implemented in `scr_metronome.gml`
+// (`metronome_generate_events` and `metronome_generate_countin_events`).
+// The historical prototype below is intentionally left as reference only.
     /*
     // Check if metronome exists and is enabled
     if (is_undefined(_tune.metronome) || !variable_struct_exists(_tune.metronome, "enabled") || !_tune.metronome.enabled) {

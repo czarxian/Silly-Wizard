@@ -115,11 +115,33 @@ The project is “complete” when a player can:
 This roadmap is divided into Backlog, In Progress, and Done.
 Move items between sections as development progresses.
 
+Multi‑Tune Sets Strategy (Two‑Phase)
+• 	Phase 1 — Prototype (prebuilt sets):
+• 		Use static set JSON files that reference existing tune JSON files in sequence
+• 		Allow per‑tune overrides (tempo, metronome mode/pattern/volume, count‑in)
+• 		Reuse current single‑tune playback and logging pipeline for each item in the set
+• 		Goal: validate sequencing, transitions, and logging quickly with low UI risk
+• 	Phase 2 — Full feature (set builder UI):
+• 		Allow users to select multiple tunes, configure options, set order, and save sets
+• 		Write the same set JSON schema used in Phase 1 (no runtime rework)
+• 		Goal: deliver full UX after runtime behavior is proven stable
+• 	Workflow impact:
+• 		Keep existing tune workflow unchanged (ABC → Excel/VBA → tune JSON → playback)
+• 		Add orchestration layer only (set JSON → ordered tune references + overrides)
+• 	Initial implementation order:
+• 		1) Define/validate set schema
+• 		2) Build set loader + tune reference validation
+• 		3) Add set playback state transitions (next tune handoff)
+• 		4) Apply per‑item overrides in event generation
+• 		5) Add set‑level summary logging
+• 		6) Add minimal set selection UI
+• 		7) Add full set builder UI later
+
 Backlog (Planned but Not Started)
 Tune & Data Pipeline
 • 	Full metadata support in JSON
 • 	Ornament expansion rules (default + tune‑type + user preferences)
-• 	Multi‑tune set support
+• 	Multi‑tune set support (Phase 1 prebuilt set files, Phase 2 set builder UI)
 • 	Transition events (rolls, initial E, tune linking)
 UI
 • 	Scrollable tune picker
