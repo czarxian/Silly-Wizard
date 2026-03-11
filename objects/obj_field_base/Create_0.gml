@@ -8,6 +8,16 @@ event_inherited();
 image_index = 0;
 image_speed = 0;
 
+if (variable_instance_exists(self, "ui_name")) {
+	var anchor_name = string(ui_name);
+	if (anchor_name == "timeline_canvas_anchor" || anchor_name == "notebeam_canvas_anchor") {
+		if (sprite_index == noone) {
+			sprite_index = spr_field_item;
+			mask_index = spr_field_item;
+		}
+	}
+}
+
 //Adding an index to allow field management, updates, etc.
 
 	// Ensure global.ui_fields exists

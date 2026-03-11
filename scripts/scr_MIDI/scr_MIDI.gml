@@ -153,10 +153,33 @@ function MIDI_process_messages()
 			normalized_time = time - global.tune_start_real;
 		}
 		var status_type = byte1 & 240;  // Clear channel bits
+		var raw_note_midi = byte2;
+		var normalized_note_midi = raw_note_midi;
+		var canonical_note = "";
+		var is_note_message = (status_type == 144 || status_type == 128);
+		if (is_note_message) {
+			canonical_note = chanter_midi_to_canonical(raw_note_midi, global.MIDI_chanter ?? "default", log_channel);
+			if (string_length(canonical_note) > 0) {
+				var mapped_note = chanter_canonical_to_midi(canonical_note, global.MIDI_chanter ?? "default");
+				if (!is_undefined(mapped_note)) {
+					normalized_note_midi = mapped_note;
+				}
+			}
+		}
+
 		if (status_type == 144 && byte3 > 0) {
-			cn_panel_on_player_note_on(byte2, log_channel, normalized_time);
+			gv_on_player_note_on(normalized_note_midi, log_channel, normalized_time, byte3, canonical_note);
 		} else if (status_type == 128 || (status_type == 144 && byte3 <= 0)) {
-			cn_panel_on_player_note_off(byte2, log_channel, normalized_time);
+			gv_on_player_note_off(normalized_note_midi, log_channel, normalized_time, canonical_note);
+		}
+
+		var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
+		if (use_current_note_panel) {
+			if (status_type == 144 && byte3 > 0) {
+				cn_panel_on_player_note_on(normalized_note_midi, log_channel, normalized_time);
+			} else if (status_type == 128 || (status_type == 144 && byte3 <= 0)) {
+				cn_panel_on_player_note_off(normalized_note_midi, log_channel, normalized_time);
+			}
 		}
 
 		if (variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED) {
@@ -175,7 +198,9 @@ function MIDI_process_messages()
 				delta_ms: 0,
 				event_type: ev_type,
 				source: "player",
-				note_midi: byte2,
+				note_midi: normalized_note_midi,
+				note_midi_raw: raw_note_midi,
+				note_canonical: canonical_note,
 				velocity: byte3,
 				channel: log_channel,
 				tune_name: global.current_tune_name ?? "unknown",
@@ -191,7 +216,11 @@ function MIDI_process_messages()
 			// Force output to channel 0 for channel voice messages.
 			out_status = (byte1 & 240);
 		}
-		midi_output_message_send_short(_MIDI_output_device, out_status, byte2, byte3);  //Sends the MIDI Message to the MIDI Output Device
+		var out_data1 = byte2;
+		if (is_note_message) {
+			out_data1 = normalized_note_midi;
+		}
+		midi_output_message_send_short(_MIDI_output_device, out_status, out_data1, byte3);  //Sends the MIDI Message to the MIDI Output Device
 //```
 //			show_debug_message("Send to" + string(_MIDI_output_device) + "Note: " + string(byte2note) );
 //			show_debug_message(string(time) + "  " + string(byte1) + "  " + string(byte2) + "  " + string(byte3));

@@ -323,15 +323,14 @@ Example events:
 // Overrides timing multiplier to 1.2x; anchor from library
 ```
 
-7. Next Steps
 
-Build the GML JSON loader
+  
+   
 
-Build the event timeline processor
 
-Build the ornament expander (with override support)
+8. Next Steps
 
-Build the playback engine
+
 
 This page now serves as the authoritative reference for your tune data model.
 ```

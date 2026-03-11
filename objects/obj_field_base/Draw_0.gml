@@ -1,3 +1,21 @@
+if (variable_instance_exists(self, "ui_name") && string(ui_name) == "timeline_canvas_anchor") {
+	gv_draw_timeline_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	exit;
+}
+
+if (variable_instance_exists(self, "ui_name") && string(ui_name) == "notebeam_canvas_anchor") {
+	var draw_direct = true;
+	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+		if (variable_struct_exists(global.timeline_cfg, "notebeam_draw_from_timeline")
+			&& global.timeline_cfg.notebeam_draw_from_timeline) {
+			draw_direct = false;
+		}
+	}
+	if (draw_direct) {
+		gv_draw_notebeam_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	}
+	exit;
+}
 
 draw_self();
 

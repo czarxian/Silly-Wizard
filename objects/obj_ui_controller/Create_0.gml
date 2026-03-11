@@ -13,7 +13,7 @@ if (!variable_global_exists("ui_layer_names")) {
     global.ui_layer_names[0] = "main_menu_layer";
     global.ui_layer_names[1] = "settings_window_layer";
     global.ui_layer_names[2] = "tune_window_layer";
-    global.ui_layer_names[3] = "gameinfo_window_layer";
+    global.ui_layer_names[3] = "gameplay_layer";
 	global.ui_layer_names[4] = "current_note_layer";
 }
 

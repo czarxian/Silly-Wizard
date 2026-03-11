@@ -194,10 +194,23 @@ function event_history_enrich(_events) {
         
         // Derive note_letter from note_midi
         var note_midi = struct_get(ev, "note_midi") ?? 0;
+        var note_midi_raw = struct_get(ev, "note_midi_raw");
+        if (is_undefined(note_midi_raw)) {
+            note_midi_raw = note_midi;
+        }
         var note_channel = struct_get(ev, "channel") ?? -1;
+        var note_canonical = string(struct_get(ev, "note_canonical") ?? "");
         var note_letter = "";
         if (note_midi > 0) {
-            note_letter = midi_to_letter(note_midi, note_channel);
+            if (string_length(note_canonical) <= 0) {
+                note_canonical = chanter_midi_to_canonical(note_midi, global.MIDI_chanter ?? "default", note_channel);
+            }
+            if (string_length(note_canonical) > 0) {
+                note_letter = chanter_canonical_to_display(note_canonical);
+            }
+            if (note_letter == "?" || string_length(note_letter) <= 0) {
+                note_letter = midi_to_letter(note_midi, note_channel);
+            }
         }
         
         // Derive timing_quality based on source
@@ -223,6 +236,9 @@ function event_history_enrich(_events) {
             "",     // embellishment_name (not tracked in raw log yet)
             timing_quality
         );
+
+        struct_set(enriched_ev, "note_midi_raw", note_midi_raw);
+        struct_set(enriched_ev, "note_canonical", note_canonical);
         
         array_push(enriched, enriched_ev);
     }

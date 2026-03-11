@@ -120,6 +120,11 @@
 	}
 
 function cn_panel_init_state() {
+	var panel_min_note_ms = 15;
+	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "filter_noise_ms")) {
+		panel_min_note_ms = max(0, real(global.timeline_cfg.filter_noise_ms));
+	}
+
 	global.current_note_panel = {
 		bound: false,
 		refs: {
@@ -130,7 +135,7 @@ function cn_panel_init_state() {
 			current_player: noone,
 			next_player: noone
 		},
-		min_note_ms: 15,
+		min_note_ms: panel_min_note_ms,
 		core_min_note_ms: 100,
 		filter_marker_symbol: "^",
 		current_measure: 0,
@@ -481,7 +486,7 @@ function cn_panel_on_player_note_off(_note_midi, _channel, _time_ms) {
 	if (measure < 1) return;
 
 	var note_text = midi_to_letter(_note_midi, _channel);
-	var player_class = (duration_ms < real(global.current_note_panel.core_min_note_ms)) ? "short_noncore" : "core_melody";
+	var player_class = "core_melody";
 	cn_panel_append_note(global.current_note_panel.player_played_by_measure, measure, note_text, player_class);
 	cn_panel_record_event("player", measure, _note_midi, _channel, duration_ms, player_class, false, _time_ms);
 	cn_panel_render();

@@ -170,6 +170,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
                 measure: ev.measure ?? 0,
                 beat: ev.beat ?? 0,
                 beat_fraction: ev.division ?? 0,
+				is_embellishment: false,
                 event_id: ev.event_id ?? 0
 			});
 			
@@ -185,6 +186,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				measure: ev.measure ?? 0,
 				beat: ev.beat ?? 0,
 				beat_fraction: ev.division ?? 0,
+				is_embellishment: false,
 				event_id: ev.event_id ?? 0
 			});
 		}
@@ -292,6 +294,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 						measure: ev.measure ?? 0,
 						beat: ev.beat ?? 0,
 						beat_fraction: ev.division ?? 0,
+						is_embellishment: true,
 						event_id: ev.event_id ?? 0
 					});
 					
@@ -303,6 +306,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 						measure: ev.measure ?? 0,
 						beat: ev.beat ?? 0,
 						beat_fraction: ev.division ?? 0,
+						is_embellishment: true,
 						event_id: ev.event_id ?? 0
 					});
 					
@@ -325,6 +329,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 						measure: ev.measure ?? 0,
 						beat: ev.beat ?? 0,
 						beat_fraction: ev.division ?? 0,
+						is_embellishment: true,
 						event_id: ev.event_id ?? 0
 					});
 					array_push(note_off_queue, {
@@ -334,6 +339,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 						measure: ev.measure ?? 0,
 						beat: ev.beat ?? 0,
 						beat_fraction: ev.division ?? 0,
+						is_embellishment: true,
 						event_id: ev.event_id ?? 0
 					});
 				} else {
@@ -351,6 +357,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 							measure: ev.measure ?? 0,
 							beat: ev.beat ?? 0,
 							beat_fraction: ev.division ?? 0,
+							is_embellishment: true,
 							event_id: ev.event_id ?? 0
 						});
 						array_push(note_off_queue, {
@@ -360,6 +367,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 							measure: ev.measure ?? 0,
 							beat: ev.beat ?? 0,
 							beat_fraction: ev.division ?? 0,
+							is_embellishment: true,
 							event_id: ev.event_id ?? 0
 						});
 					}
@@ -380,6 +388,7 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 			measure: note_off.measure ?? 0,
 			beat: note_off.beat ?? 0,
 			beat_fraction: note_off.beat_fraction ?? 0,
+			is_embellishment: note_off.is_embellishment ?? false,
 			event_id: note_off.event_id ?? 0
 		});
 	}
@@ -556,42 +565,174 @@ function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, 
 /// @param _base_midi  Not used (replaced by exact MIDI lookup)
 /// @returns MIDI note number
 
-function tune_get_note_map(_chanter, _base_midi = undefined) {
-	var chanter = string(_chanter);
+function chanter_resolve_name(_chanter = undefined) {
+	var name = "";
+	if (!is_undefined(_chanter)) {
+		name = string(_chanter);
+	}
+	if (name == "" && variable_global_exists("MIDI_chanter")) {
+		name = string(global.MIDI_chanter);
+	}
+	if (name == "") {
+		name = "default";
+	}
+	return string_lower(name);
+}
 
-	// Default bagpipe chanter MIDI note mapping (exact from Excel reference)
-	var default_map = {
-		G: 55,    // Low G
-		A: 57,    // Low A
-		B: 59,    // B
-		c: 61,    // C# (C sharp, C#4)
-		d: 62,    // D
-		e: 64,    // E
-		f: 66,    // F# (F sharp, F#4)
-		g: 67,    // High G
-		a: 69,    // High A
-		_cnat: 60,  // Cnat (C natural, C4) — prefixed with _ since =c is not a valid struct key
-		_fnat: 65   // Fnat (F natural, F4)
-	};
+function chanter_build_profile(_chanter_name) {
+	var canonical_to_midi = {};
+	var input_aliases = {};
 
-	if (chanter == "blair") {
-		// Blair Digital Chanter mapping (order: G, A, B, Cnat, C#, D, E, Fnat, F#, G, A)
-		return {
-			G: 56,
-			A: 58,
-			B: 60,
-			_cnat: 61,
-			c: 62,
-			d: 63,
-			e: 65,
-			_fnat: 66,
-			f: 67,
-			g: 68,
-			a: 70
-		};
+	if (_chanter_name == "blair") {
+		// Blair Digital Chanter profile (canonical note -> playback/output MIDI)
+		canonical_to_midi[$ "G"] = 56;
+		canonical_to_midi[$ "A"] = 58;
+		canonical_to_midi[$ "B"] = 60;
+		canonical_to_midi[$ "=c"] = 61;
+		canonical_to_midi[$ "c"] = 62;
+		canonical_to_midi[$ "d"] = 63;
+		canonical_to_midi[$ "e"] = 65;
+		canonical_to_midi[$ "=f"] = 66;
+		canonical_to_midi[$ "f"] = 67;
+		canonical_to_midi[$ "g"] = 68;
+		canonical_to_midi[$ "a"] = 70;
+
+		// Input aliases seen from some Blair MIDI streams (player input normalization).
+		input_aliases[$ "56"] = "G";
+		input_aliases[$ "58"] = "A";
+		input_aliases[$ "60"] = "B";
+		input_aliases[$ "62"] = "c";
+		input_aliases[$ "63"] = "d";
+		input_aliases[$ "65"] = "e";
+		input_aliases[$ "66"] = "=f";
+		input_aliases[$ "67"] = "f";
+		input_aliases[$ "68"] = "g";
+		input_aliases[$ "79"] = "a";
+	} else {
+		// Default bagpipe profile (canonical note -> playback/output MIDI)
+		canonical_to_midi[$ "G"] = 55;
+		canonical_to_midi[$ "A"] = 57;
+		canonical_to_midi[$ "B"] = 59;
+		canonical_to_midi[$ "=c"] = 60;
+		canonical_to_midi[$ "c"] = 61;
+		canonical_to_midi[$ "d"] = 62;
+		canonical_to_midi[$ "e"] = 64;
+		canonical_to_midi[$ "=f"] = 65;
+		canonical_to_midi[$ "f"] = 66;
+		canonical_to_midi[$ "g"] = 67;
+		canonical_to_midi[$ "a"] = 69;
 	}
 
-	return default_map;
+	var input_midi_to_canonical = {};
+	var names = variable_struct_get_names(canonical_to_midi);
+	for (var i = 0; i < array_length(names); i++) {
+		var canonical = names[i];
+		var midi = floor(real(canonical_to_midi[$ canonical]));
+		input_midi_to_canonical[$ string(midi)] = canonical;
+	}
+
+	var alias_keys = variable_struct_get_names(input_aliases);
+	for (var j = 0; j < array_length(alias_keys); j++) {
+		var midi_key = alias_keys[j];
+		input_midi_to_canonical[$ midi_key] = string(input_aliases[$ midi_key]);
+	}
+
+	return {
+		name: _chanter_name,
+		canonical_to_midi: canonical_to_midi,
+		input_aliases: input_aliases,
+		input_midi_to_canonical: input_midi_to_canonical
+	};
+}
+
+function chanter_get_profile(_chanter = undefined) {
+	var name = chanter_resolve_name(_chanter);
+
+	if (!variable_global_exists("CHANTER_PROFILE_CACHE") || !is_struct(global.CHANTER_PROFILE_CACHE)) {
+		global.CHANTER_PROFILE_CACHE = {};
+	}
+
+	var profile = global.CHANTER_PROFILE_CACHE[$ name];
+	if (is_undefined(profile) || !is_struct(profile)) {
+		profile = chanter_build_profile(name);
+		global.CHANTER_PROFILE_CACHE[$ name] = profile;
+	}
+
+	return profile;
+}
+
+function chanter_canonical_to_display(_canonical_note) {
+	var note = string(_canonical_note ?? "");
+	if (note == "_cnat") note = "=c";
+	if (note == "_fnat") note = "=f";
+	if (note == "") return "?";
+	return note;
+}
+
+function chanter_midi_to_canonical(_midi_note, _chanter = undefined, _channel = -1) {
+	// Channel 10 percussion (0-based channel 9) is not part of chanter canonicalization.
+	if (real(_channel) == 9) return "";
+
+	var midi = floor(real(_midi_note));
+	if (midi < 0 || midi > 127) return "";
+
+	var profile = chanter_get_profile(_chanter);
+	var canonical = profile.input_midi_to_canonical[$ string(midi)];
+	if (is_undefined(canonical)) return "";
+
+	return string(canonical);
+}
+
+function chanter_canonical_to_midi(_canonical_note, _chanter = undefined) {
+	var canonical = string(_canonical_note ?? "");
+	if (canonical == "_cnat") canonical = "=c";
+	if (canonical == "_fnat") canonical = "=f";
+
+	var profile = chanter_get_profile(_chanter);
+	var midi = profile.canonical_to_midi[$ canonical];
+	if (is_undefined(midi)) return undefined;
+
+	return floor(real(midi));
+}
+
+function chanter_midi_to_display(_midi_note, _channel = -1, _chanter = undefined) {
+	// Percussion/drums on channel 9 (MIDI channel 10)
+	if (real(_channel) == 9) {
+		switch (_midi_note) {
+			case 35: return "kick";
+			case 36: return "kick";
+			case 38: return "snare";
+			case 40: return "snare";
+			case 42: return "hi-hat";
+			case 44: return "hi-hat";
+			case 46: return "hi-hat";
+			case 49: return "crash";
+			case 51: return "ride";
+			default: return "drum" + string(_midi_note);
+		}
+	}
+
+	var canonical = chanter_midi_to_canonical(_midi_note, _chanter, _channel);
+	if (string_length(canonical) <= 0) return "?";
+
+	return chanter_canonical_to_display(canonical);
+}
+
+function tune_get_note_map(_chanter, _base_midi = undefined) {
+	var profile = chanter_get_profile(_chanter);
+	var out = {};
+	var names = variable_struct_get_names(profile.canonical_to_midi);
+
+	for (var i = 0; i < array_length(names); i++) {
+		var canonical = names[i];
+		var midi = profile.canonical_to_midi[$ canonical];
+		var legacy_key = canonical;
+		if (canonical == "=c") legacy_key = "_cnat";
+		if (canonical == "=f") legacy_key = "_fnat";
+		out[$ legacy_key] = midi;
+	}
+
+	return out;
 }
 
 function tune_build_midi_to_letter_map(_note_map) {
@@ -611,26 +752,31 @@ function tune_build_midi_to_letter_map(_note_map) {
 	return out;
 }
 
-function tune_note_letter_to_midi(_letter, _base_midi) {
-	// Bagpipe uses C# and F# as standard notes
-	// Using struct instead of ds_map for simplicity and memory efficiency
-	var note_map = tune_get_note_map(global.MIDI_chanter ?? "default");
-	
-	// Handle special note names
-	var midi;
-	if (_letter == "=c") {
-		midi = note_map._cnat;
-	} else if (_letter == "=f") {
-		midi = note_map._fnat;
-	} else {
-		midi = note_map[$ _letter] ?? undefined;
+function tune_get_midi_to_letter_alias_map(_chanter) {
+	var profile = chanter_get_profile(_chanter);
+	var aliases = {};
+	var names = variable_struct_get_names(profile.input_aliases);
+
+	for (var i = 0; i < array_length(names); i++) {
+		var midi_key = names[i];
+		var canonical = string(profile.input_aliases[$ midi_key]);
+		aliases[$ midi_key] = chanter_canonical_to_display(canonical);
 	}
-	
-	if (midi == undefined) {
+
+	return aliases;
+}
+
+function tune_note_letter_to_midi(_letter, _base_midi) {
+	var canonical = string(_letter ?? "");
+	if (canonical == "_cnat") canonical = "=c";
+	if (canonical == "_fnat") canonical = "=f";
+
+	var midi = chanter_canonical_to_midi(canonical, global.MIDI_chanter ?? "default");
+	if (is_undefined(midi)) {
 		show_debug_message("WARNING: Unknown note letter '" + string(_letter) + "', defaulting to 55");
 		midi = 55;
 	}
-	
+
 	return midi;
 }
 

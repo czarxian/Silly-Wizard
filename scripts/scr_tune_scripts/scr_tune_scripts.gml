@@ -27,31 +27,7 @@ function create_set_item(_tune_filename) {
 /// @returns String letter notation
 
 function midi_to_letter(_midi_note, _channel = -1) {
-    // Handle percussion/drums on channel 9 (MIDI channel 10)
-    if (_channel == 9) {
-        // Return descriptive percussion names for common drum MIDI notes
-        switch (_midi_note) {
-            case 35: return "kick";
-            case 36: return "kick";
-            case 38: return "snare";
-            case 40: return "snare";
-            case 42: return "hi-hat";
-            case 44: return "hi-hat";
-            case 46: return "hi-hat";
-            case 49: return "crash";
-            case 51: return "ride";
-            default: return "drum" + string(_midi_note);
-        }
-    }
-    
-    // Initialize global note map once (cached per chanter selection)
-    var chanter = string(global.MIDI_chanter ?? "default");
-    if (!variable_global_exists("NOTE_MAP") || global.NOTE_MAP_CHANTER != chanter) {
-        var note_map = tune_get_note_map(chanter);
-        global.NOTE_MAP = tune_build_midi_to_letter_map(note_map);
-        global.NOTE_MAP_CHANTER = chanter;
-    }
-    return global.NOTE_MAP[$ string(_midi_note)] ?? "?";
+    return chanter_midi_to_display(_midi_note, _channel, global.MIDI_chanter ?? "default");
 }
 
 /// @function tune_group_events_by_timestamp(_events)
@@ -90,7 +66,9 @@ function tune_group_events_by_timestamp(_events) {
 /// @param tune_events  The array of events to play
 
 function tune_start(_tune_events) {
-    cn_panel_prepare_tune_plan(_tune_events);
+    if (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer) {
+        cn_panel_prepare_tune_plan(_tune_events);
+    }
 
     // Group events by timestamp for batched processing
     global.tune_event_groups = tune_group_events_by_timestamp(_tune_events);
@@ -105,6 +83,14 @@ function tune_start(_tune_events) {
     // Initialize current note display
     global.current_note_display = "";
 
+    // Optional scheduler correction (absolute-time catch-up)
+    if (!variable_global_exists("PLAYBACK_SCHEDULER_CATCHUP")) {
+        global.PLAYBACK_SCHEDULER_CATCHUP = true;
+    }
+
+    // Anchor real playback start before timer begins
+    global.tune_start_real = current_time;
+
     // First group delay is simply its timestamp
     var delta_ms = global.tune_event_groups[0].time;
 	show_debug_message("delta_ms " + string(delta_ms)); //For testing only
@@ -118,7 +104,6 @@ function tune_start(_tune_events) {
         time_source_expire_after
     );
 	time_source_start(global.tune_timer);
-    global.tune_start_real = current_time;
 }
 
 /// @function script_tune_callback_batched()
@@ -128,6 +113,7 @@ function script_tune_callback_batched() {
     var group = global.tune_event_groups[global.tune_group_index];
     var real_elapsed = current_time - global.tune_start_real;
     var expected_elapsed = group.time;
+    var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
 
     var ordered_events = [];
     for (var oi = 0; oi < array_length(group.events); oi++) {
@@ -164,21 +150,27 @@ function script_tune_callback_batched() {
                 has_last_note_on = true;
                 last_note_on_note = ev.note;
                 last_note_on_channel = ev.channel;
-                cn_panel_on_tune_note_on(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
+                if (use_current_note_panel) {
+                    cn_panel_on_tune_note_on(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
+                }
             }
         } 
         else if (ev.type == "note_off") {
             var status_byte = 128 + ev.channel;
             midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, 0);
             if (ev.channel != global.METRONOME_CONFIG.channel) {
-                cn_panel_on_tune_note_off(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
+                if (use_current_note_panel) {
+                    cn_panel_on_tune_note_off(real(ev.measure ?? 0), ev.note, ev.channel, real(ev.time ?? expected_elapsed));
+                }
             }
         }
         else if (ev.type == "marker") {
             // No MIDI output for marker entries.
             var marker_kind = string(ev.marker_type ?? "");
             if (marker_kind == "beat" || marker_kind == "countin_beat") {
-                cn_panel_on_beat_marker(real(ev.measure ?? 0), real(ev.beat ?? 0), marker_kind == "countin_beat");
+                if (use_current_note_panel) {
+                    cn_panel_on_beat_marker(real(ev.measure ?? 0), real(ev.beat ?? 0), marker_kind == "countin_beat");
+                }
             }
         }
         
@@ -192,6 +184,10 @@ function script_tune_callback_batched() {
         var ev_note = struct_exists(ev, "note") ? ev.note : 0;
         var ev_velocity = struct_exists(ev, "velocity") ? ev.velocity : 0;
         var ev_channel = struct_exists(ev, "channel") ? ev.channel : 0;
+        var ev_note_canonical = "";
+        if ((ev.type == "note_on" || ev.type == "note_off") && real(ev_note) > 0) {
+            ev_note_canonical = chanter_midi_to_canonical(ev_note, global.MIDI_chanter ?? "default", ev_channel);
+        }
         var ev_measure = struct_exists(ev, "measure") ? ev.measure : 0;
         var ev_beat = struct_exists(ev, "beat") ? ev.beat : 0;
         var ev_beat_fraction = struct_exists(ev, "beat_fraction") ? ev.beat_fraction : 0;
@@ -208,6 +204,8 @@ function script_tune_callback_batched() {
             event_type: ev_type,
             source: "game",
             note_midi: ev_note,
+            note_midi_raw: ev_note,
+            note_canonical: ev_note_canonical,
             velocity: ev_velocity,
             channel: ev_channel,
             tune_name: global.current_tune_name,
@@ -240,6 +238,7 @@ function script_tune_callback_batched() {
     // Check if done
     if (global.tune_group_index >= array_length(global.tune_event_groups)) {
         time_source_stop(global.tune_timer);
+        gv_on_tune_playback_finished(expected_elapsed);
         if (global.EVENT_HISTORY_AUTO_EXPORT && !global.EVENT_HISTORY_EXPORTED) {
             export_event_history();
             global.EVENT_HISTORY_EXPORTED = true;
@@ -254,6 +253,10 @@ function script_tune_callback_batched() {
     var next_time = global.tune_event_groups[global.tune_group_index].time;
     var prev_time = group.time;
     var delta_ms = next_time - prev_time;
+    if (global.PLAYBACK_SCHEDULER_CATCHUP) {
+        var real_elapsed_now = current_time - global.tune_start_real;
+        delta_ms = next_time - real_elapsed_now;
+    }
     delta_ms = max(delta_ms, 0.001);  // Clamp to minimum time source period
     
     time_source_reconfigure(
@@ -353,16 +356,22 @@ event_history_add({
     // If no more events, stop
     if (global.tune_index >= array_length(global.tune_events)) {
         time_source_stop(global.tune_timer);
+        gv_on_tune_playback_finished(expected_elapsed);
         // Schedule cleanup one beat later (600ms at moderate tempo)
         schedule_tune_cleanup(600);
         // show_debug_message("Tune finished.");
         return;
     }
 
-    // Compute RELATIVE delta
+    // Compute next delay (absolute-time catch-up when enabled)
     var next_time  = global.tune_events[global.tune_index].time;
     var prev_time  = ev.time;
     var delta_ms   = next_time - prev_time;
+    if (global.PLAYBACK_SCHEDULER_CATCHUP) {
+        var real_elapsed_now = current_time - global.tune_start_real;
+        delta_ms = next_time - real_elapsed_now;
+    }
+    delta_ms = max(delta_ms, 0.001);
 
     time_source_reconfigure(
         global.tune_timer,

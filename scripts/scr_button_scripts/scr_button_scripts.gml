@@ -183,10 +183,24 @@
 			global.playback_events = [];
 		}
 		
+		global.enable_current_note_layer = false;
 		room_goto(Room_play);
-		scr_open_window(0);
-		scr_open_window(3);
-		scr_open_window(4, true);
+
+		// Explicit layer visibility for play room (no toggle behavior)
+		var _main_layer_id = layer_get_id("main_menu_layer");
+		if (_main_layer_id != -1) layer_set_visible(_main_layer_id, false);
+
+		var _settings_layer_id = layer_get_id("settings_window_layer");
+		if (_settings_layer_id != -1) layer_set_visible(_settings_layer_id, false);
+
+		var _tune_layer_id = layer_get_id("tune_window_layer");
+		if (_tune_layer_id != -1) layer_set_visible(_tune_layer_id, false);
+
+		var _gameplay_layer_id = layer_get_id("gameplay_layer");
+		if (_gameplay_layer_id != -1) layer_set_visible(_gameplay_layer_id, true);
+
+		var _current_note_layer_id = layer_get_id("current_note_layer");
+		if (_current_note_layer_id != -1) layer_set_visible(_current_note_layer_id, false);
 	}
 
 	//CASE 2 Clicked Checkbox
@@ -421,8 +435,19 @@
 	function scr_goto_mainmenu(){
 		MIDI_send_off();
 		MIDI_stop_checking_messages_and_errors();
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+			global.timeline_state.active = false;
+		}
 		room_goto(Room_main_menu);
-		scr_open_window(0);
+
+		var _main_layer_id = layer_get_id("main_menu_layer");
+		if (_main_layer_id != -1) layer_set_visible(_main_layer_id, true);
+
+		var _gameplay_layer_id = layer_get_id("gameplay_layer");
+		if (_gameplay_layer_id != -1) layer_set_visible(_gameplay_layer_id, false);
+
+		var _current_note_layer_id = layer_get_id("current_note_layer");
+		if (_current_note_layer_id != -1) layer_set_visible(_current_note_layer_id, false);
 	}
 	
 	//CASE 6
@@ -829,19 +854,52 @@
 		var tune = global.tune;
 		show_debug_message("Tune instance: " + string(tune) + " exists: " + string(instance_exists(tune)));
 		show_debug_message("  DEBUG: Before preprocessing - tune.events length = " + string(array_length(tune.tune_data.events ?? array_create(0))));
+		
+		
 		if (instance_exists(tune) && tune.tune_data.is_loaded) {
-			// Events are already preprocessed and stored in global.playback_events
+		// Events are already preprocessed and stored in global.playback_events
 			if (variable_global_exists("playback_events") && array_length(global.playback_events) > 0) {
-				tune_start(global.playback_events);
-			} else {
-				show_debug_message("ERROR: No playback events prepared. Did you go through main menu?");
-			}
-		} else {
-			show_debug_message("ERROR: No tune loaded. Please select and confirm a tune first.");
-			if (!instance_exists(tune)) show_debug_message("  - obj_tune instance does not exist");
-			else if (!tune.tune_data.is_loaded) show_debug_message("  - tune.is_loaded = " + string(tune.tune_data.is_loaded));
+				var _started = tune_start(global.playback_events);
+		        // If tune_start returns undefined on success, this still passes
+				if (_started != false) {
+					gv_bind_from_loaded_tune();
+					
+					//Temp debug code
+					var _len = -1;
+					if (variable_global_exists("timeline_state")
+					    && is_struct(global.timeline_state)
+					    && variable_struct_exists(global.timeline_state, "planned_spans")
+					    && is_array(global.timeline_state.planned_spans)) {
+					    _len = array_length(global.timeline_state.planned_spans);
+					}
+					show_debug_message("[TIMELINE] planned_spans len=" + string(_len));
+					//end of temp debug code
+					
+				} else {
+					show_debug_message("ERROR: tune_start failed.");
+				}
+				} else {
+					show_debug_message("ERROR: No playback events prepared. Did you go through main menu?");
+				}
+				} else {
+				show_debug_message("ERROR: No tune loaded. Please select and confirm a tune first.");
+				if (!instance_exists(tune)) show_debug_message("  - obj_tune instance does not exist");
+				else if (!tune.tune_data.is_loaded) show_debug_message("  - tune.is_loaded = " + string(tune.tune_data.is_loaded));
 		}
-}
+		
+		//if (instance_exists(tune) && tune.tune_data.is_loaded) {
+		//	// Events are already preprocessed and stored in global.playback_events
+		//	if (variable_global_exists("playback_events") && array_length(global.playback_events) > 0) {
+		//		tune_start(global.playback_events);
+		//	} else {
+		//		show_debug_message("ERROR: No playback events prepared. Did you go through main menu?");
+		//	}
+		//} else {
+		//	show_debug_message("ERROR: No tune loaded. Please select and confirm a tune first.");
+		//	if (!instance_exists(tune)) show_debug_message("  - obj_tune instance does not exist");
+		//	else if (!tune.tune_data.is_loaded) show_debug_message("  - tune.is_loaded = " + string(tune.tune_data.is_loaded));
+		//}
+	}
 
 	//CASE 12
 	//Regenerate Tune Library (manual trigger)
