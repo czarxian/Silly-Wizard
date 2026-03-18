@@ -59,6 +59,11 @@ Private UnitsPerMeasure As Double   ' = UnitsPerBeat * BeatsPerMeasure
 Private PickupOffsetUnits As Double
 Private PickupDetected As Boolean
 
+' Harmony append state (set by AppendHarmonyEvents; reset after use)
+Private AppendStartRow As Long  ' 0 = normal start at FIRST_DATA_ROW
+Private ActiveVoice As String   ' "" = default "pipes"
+Const ABC_HARMONY1_CELL As String = "H2"
+
 Const EPSILON As Double = 0.000001
 Const ROUND_DECIMALS As Long = 9
 
@@ -68,7 +73,7 @@ Const ROUND_DECIMALS As Long = 9
 
 Public Sub ParseABCToEvents()
     Dim ws As Worksheet
-    Set ws = ActiveSheet
+    Set ws = ThisWorkbook.Worksheets(SHEET_EVENTS)
 
     Dim metadata As String, abc As String
     metadata = ws.Range(ABC_METADATA_CELL).Value
@@ -79,6 +84,8 @@ Public Sub ParseABCToEvents()
         Exit Sub
     End If
     
+    abc = PrepareABCForVoice(abc, "1")
+
     If Trim$(abc) = "" Then
         MsgBox "No ABC events found in " & ABC_SOURCE_CELL, vbExclamation
         Exit Sub
@@ -110,11 +117,110 @@ Public Sub ParseABCToEvents()
     PopulateEmbellishmentTargets ws
     InferStructuralMetadata ws
 
-    MsgBox "ABC parsing complete." & vbCrLf & _
-           "Time Sig: " & TimeSigNum & "/" & TimeSigDen & vbCrLf & _
-           "Units per beat: " & UnitsPerBeat & vbCrLf & _
-           "Units per measure: " & UnitsPerMeasure & vbCrLf & _
-           "Pickup units: " & PickupOffsetUnits, vbInformation
+    Dim summary As String
+    summary = "ABC parsing complete." & vbCrLf & _
+              "Time Sig: " & TimeSigNum & "/" & TimeSigDen & vbCrLf & _
+              "Units per beat: " & UnitsPerBeat & vbCrLf & _
+              "Units per measure: " & UnitsPerMeasure & vbCrLf & _
+              "Pickup units: " & PickupOffsetUnits
+
+    MsgBox summary, vbInformation
+End Sub
+
+' ============================================================
+' APPEND HARMONY VOICE
+' ============================================================
+' Reads ABC from ABC_HARMONY1_CELL (H2), strips metadata/comments, extracts
+' V:2 if voice markers are present, and appends events with voice "harmony1"
+' after the existing melody rows. Call ParseABCToEvents first.
+Public Sub AppendHarmonyEvents()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets(SHEET_EVENTS)
+
+    Call AppendHarmonyEventsCore(ws, True)
+End Sub
+
+Private Function AppendHarmonyEventsCore(ws As Worksheet, Optional ByVal showMessage As Boolean = True) As Long
+    AppendHarmonyEventsCore = 0
+
+    Dim harmonyABC As String
+    harmonyABC = ws.Range(ABC_HARMONY1_CELL).Value
+    harmonyABC = PrepareABCForVoice(harmonyABC, "2")
+
+    If Trim$(harmonyABC) = "" Then
+        If showMessage Then
+            MsgBox "No harmony ABC found in " & ABC_HARMONY1_CELL & "." & vbCrLf & _
+                   "Paste harmony ABC into cell " & ABC_HARMONY1_CELL & " and try again.", vbExclamation
+        End If
+        Exit Sub
+    End If
+
+    ' Verify melody events are present
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    If lastRow < FIRST_DATA_ROW Then
+        If showMessage Then
+            MsgBox "No melody events found. Run ParseABCToEvents first.", vbExclamation
+        End If
+        Exit Sub
+    End If
+
+    ' Re-derive rhythmic constants from the sheet (safe if VBA state was reset)
+    CalculateRhythmicConstants ws
+    PickupOffsetUnits = 0#
+    PickupDetected = False
+
+    ' Configure append state
+    AppendStartRow = lastRow + 1
+    ActiveVoice = "harmony1"
+
+    ' Tokenize and expand harmony ABC
+    Dim tokens As Collection
+    Set tokens = TokenizeABC(harmonyABC)
+
+    Dim flatTokens As Collection
+    Set flatTokens = ExpandRepeats(tokens)
+
+    ' Write harmony rows after existing melody rows
+    WriteEventsFromTokens ws, flatTokens
+
+    ' Populate timing/location fields for the merged table
+    DetectPickup ws
+    RecalculatePositions ws
+    PopulateEmbellishmentTargets ws
+    InferStructuralMetadata ws
+
+    ' Renumber all event_ids sequentially over the merged table
+    RenumberEventIds ws
+
+    ' Reset append state
+    AppendStartRow = 0
+    ActiveVoice = ""
+
+    Dim newLastRow As Long
+    newLastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    Dim addedRows As Long
+    addedRows = newLastRow - lastRow
+
+    AppendHarmonyEventsCore = addedRows
+
+    If showMessage Then
+        MsgBox "Harmony appended as 'harmony1'." & vbCrLf & _
+               addedRows & " harmony event(s) added." & vbCrLf & _
+               "Export JSON when ready.", vbInformation
+    End If
+End Function
+
+Private Sub RenumberEventIds(ws As Worksheet)
+    Dim r As Long
+    Dim newId As Long
+    newId = 1
+    r = FIRST_DATA_ROW
+    Do While ws.Cells(r, COL_EVENT_ID).Value <> ""
+        ws.Cells(r, COL_EVENT_ID).Value = newId
+        newId = newId + 1
+        r = r + 1
+    Loop
 End Sub
 
 ' ============================================================
@@ -210,13 +316,19 @@ Private Sub DetectPickup(ws As Worksheet)
     rowIndex = FIRST_DATA_ROW
     
     Dim firstBarUnits As Double
+    Dim secondBarUnits As Double
     firstBarUnits = -1
+    secondBarUnits = -1
     
     Do While ws.Cells(rowIndex, COL_EVENT_ID).Value <> ""
         If ws.Cells(rowIndex, COL_TYPE).Value = "structure" And _
            ws.Cells(rowIndex, COL_STRUCTURE).Value = "bar" Then
-            firstBarUnits = CDbl(ws.Cells(rowIndex, COL_TOTAL_UNITS).Value)
-            Exit Do
+            If firstBarUnits < 0 Then
+                firstBarUnits = CDbl(ws.Cells(rowIndex, COL_TOTAL_UNITS).Value)
+            Else
+                secondBarUnits = CDbl(ws.Cells(rowIndex, COL_TOTAL_UNITS).Value)
+                Exit Do
+            End If
         End If
         rowIndex = rowIndex + 1
     Loop
@@ -228,9 +340,22 @@ Private Sub DetectPickup(ws As Worksheet)
         Exit Sub
     End If
     
-    ' Check if the first bar has less than a full measure
-    ' Allow small tolerance for floating point comparison
-    If firstBarUnits < (UnitsPerMeasure - EPSILON) And firstBarUnits > EPSILON Then
+    ' Prefer observed bar spacing when available.
+    ' This avoids false pickup detection if metadata beat math differs from note-unit math.
+    Dim effectiveMeasureUnits As Double
+    effectiveMeasureUnits = UnitsPerMeasure
+
+    If secondBarUnits > firstBarUnits + EPSILON Then
+        Dim inferredMeasureUnits As Double
+        inferredMeasureUnits = secondBarUnits - firstBarUnits
+        If inferredMeasureUnits > EPSILON Then
+            effectiveMeasureUnits = inferredMeasureUnits
+        End If
+    End If
+
+    ' Check if the first bar has less than a full measure.
+    ' Allow small tolerance for floating point comparison.
+    If firstBarUnits < (effectiveMeasureUnits - EPSILON) And firstBarUnits > EPSILON Then
         ' This is a pickup
         PickupOffsetUnits = firstBarUnits
         PickupDetected = True
@@ -252,6 +377,92 @@ Private Sub ClearEventRows(ws As Worksheet)
         ws.Rows(FIRST_DATA_ROW & ":" & lastRow).ClearContents
     End If
 End Sub
+
+Private Function PrepareABCForVoice(ByVal abc As String, Optional ByVal desiredVoice As String = "") As String
+    Dim normalized As String
+    normalized = Replace(abc, vbCrLf, vbLf)
+    normalized = Replace(normalized, vbCr, vbLf)
+
+    Dim lines() As String
+    lines = Split(normalized, vbLf)
+
+    Dim hasVoiceHeaders As Boolean
+    Dim i As Long
+    For i = LBound(lines) To UBound(lines)
+        If IsVoiceHeaderLine(lines(i)) Then
+            hasVoiceHeaders = True
+            Exit For
+        End If
+    Next i
+
+    Dim currentVoice As String
+    Dim result As String
+    result = ""
+
+    For i = LBound(lines) To UBound(lines)
+        Dim line As String
+        line = Trim$(lines(i))
+
+        If line = "" Then GoTo NextPrepareLine
+        If Left$(line, 1) = "%" Then GoTo NextPrepareLine
+        If IsMetadataHeaderLine(line) Then GoTo NextPrepareLine
+
+        If IsVoiceHeaderLine(line) Then
+            currentVoice = ParseVoiceId(line)
+            GoTo NextPrepareLine
+        End If
+
+        If hasVoiceHeaders Then
+            If desiredVoice = "" Or currentVoice = desiredVoice Then
+                If result <> "" Then result = result & " "
+                result = result & line
+            End If
+        Else
+            If result <> "" Then result = result & " "
+            result = result & line
+        End If
+
+NextPrepareLine:
+    Next i
+
+    PrepareABCForVoice = Trim$(result)
+End Function
+
+Private Function IsVoiceHeaderLine(ByVal line As String) As Boolean
+    Dim trimmedLine As String
+    trimmedLine = LCase$(Trim$(line))
+    IsVoiceHeaderLine = (Len(trimmedLine) >= 2 And Left$(trimmedLine, 2) = "v:")
+End Function
+
+Private Function ParseVoiceId(ByVal line As String) As String
+    Dim payload As String
+    payload = Trim$(Mid$(Trim$(line), 3))
+
+    Dim i As Long
+    For i = 1 To Len(payload)
+        Dim ch As String
+        ch = Mid$(payload, i, 1)
+        If ch = " " Or ch = vbTab Then
+            ParseVoiceId = Left$(payload, i - 1)
+            Exit Function
+        End If
+    Next i
+
+    ParseVoiceId = payload
+End Function
+
+Private Function IsMetadataHeaderLine(ByVal line As String) As Boolean
+    Dim trimmedLine As String
+    trimmedLine = Trim$(line)
+
+    If Len(trimmedLine) < 2 Then Exit Function
+    If Mid$(trimmedLine, 2, 1) <> ":" Then Exit Function
+
+    Select Case UCase$(Left$(trimmedLine, 1))
+        Case "X", "T", "C", "M", "L", "R", "Q", "K", "N", "Z", "P", "G", "A", "B", "D", "F", "H", "I", "O", "S", "W", "U"
+            IsMetadataHeaderLine = True
+    End Select
+End Function
 
 ' ============================================================
 ' TOKENIZATION
@@ -589,7 +800,10 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
     currentPart = 1
 
     Dim currentRow As Long
-    currentRow = FIRST_DATA_ROW
+    currentRow = IIf(AppendStartRow > 0, AppendStartRow, FIRST_DATA_ROW)
+
+    Dim voiceLabel As String
+    voiceLabel = IIf(ActiveVoice <> "", ActiveVoice, "pipes")
 
     ' Tuplet tracking
     Dim inTuplet As Boolean
@@ -642,7 +856,7 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                 tupletNotesRemaining = 0
 
             Case "embellishment"
-                WriteEmbellishmentRow ws, currentRow, currentPart, totalUnits, t(2)
+                WriteEmbellishmentRow ws, currentRow, currentPart, totalUnits, t(2), voiceLabel
                 currentRow = currentRow + 1
 
             Case "note"
@@ -687,7 +901,7 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                             brokenDir = "cutdot"
                         End If
 
-                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean1, dur1, brokenDir
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean1, dur1, brokenDir, voiceLabel
                         totalUnits = totalUnits + dur1
                         currentRow = currentRow + 1
 
@@ -712,18 +926,18 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                             dur2 = dur2Base * 1.5
                         End If
 
-                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean2, dur2
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, clean2, dur2, , voiceLabel
                         totalUnits = totalUnits + dur2
                         currentRow = currentRow + 1
 
                         i = i + 1
                     Else
-                        WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur, , voiceLabel
                         totalUnits = totalUnits + baseDur
                         currentRow = currentRow + 1
                     End If
                 Else
-                    WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur
+                    WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur, , voiceLabel
                     totalUnits = totalUnits + baseDur
                     currentRow = currentRow + 1
                 End If
@@ -768,6 +982,10 @@ Private Sub WriteNoteRow(ws As Worksheet, ByVal rowIndex As Long, ByVal part As 
     Dim noteLetter As String
     noteLetter = GetNoteLetterOnly(noteText)
 
+    If LCase$(noteLetter) = "z" Then
+        noteLetter = ""
+    End If
+
     ws.Cells(rowIndex, COL_EVENT_ID).Value = rowIndex - FIRST_DATA_ROW + 1
     ws.Cells(rowIndex, COL_TYPE).Value = "note"
 
@@ -786,7 +1004,7 @@ End Sub
 Private Function FindPrecedingNote(ws As Worksheet, ByVal currentRow As Long) As String
     Dim r As Long
     For r = currentRow - 1 To FIRST_DATA_ROW Step -1
-        If ws.Cells(r, COL_TYPE).Value = "note" Then
+        If ws.Cells(r, COL_TYPE).Value = "note" And Trim$(ws.Cells(r, COL_NOTE_LETTER).Value & "") <> "" Then
             FindPrecedingNote = ws.Cells(r, COL_NOTE_LETTER).Value
             Exit Function
         End If
@@ -800,7 +1018,7 @@ Private Function FindTargetNote(ws As Worksheet, ByVal currentRow As Long) As St
     
     Dim r As Long
     For r = currentRow + 1 To lastRow
-        If ws.Cells(r, COL_TYPE).Value = "note" Then
+        If ws.Cells(r, COL_TYPE).Value = "note" And Trim$(ws.Cells(r, COL_NOTE_LETTER).Value & "") <> "" Then
             FindTargetNote = ws.Cells(r, COL_NOTE_LETTER).Value
             Exit Function
         End If
@@ -995,16 +1213,28 @@ Private Sub InferStructuralMetadata(ws As Worksheet)
         
         partVal = ws.Cells(r, COL_PART).Value
         measureVal = ws.Cells(r, COL_MEASURE).Value
+
+        If Not IsNumeric(measureVal) Then GoTo NextRowInfer
+
+        Dim measureNum As Long
+        measureNum = CLng(measureVal)
+
+        ' Exclude pickup bucket from structural metadata counts.
+        If measureNum <= 0 Then GoTo NextRowInfer
+
+        If Trim$(partVal & "") = "" Then partVal = 1
         
         If Not partsDict.Exists(partVal) Then
             partsDict.Add partVal, CreateObject("Scripting.Dictionary")
         End If
         
-        If Not partsDict(partVal).Exists(measureVal) Then
-            partsDict(partVal).Add measureVal, True
+        If Not partsDict(partVal).Exists(measureNum) Then
+            partsDict(partVal).Add measureNum, True
         End If
         
-        If measureVal > maxMeasure Then maxMeasure = measureVal
+        If measureNum > maxMeasure Then maxMeasure = measureNum
+
+    NextRowInfer:
     Next r
     
     ' Number of parts
@@ -1230,6 +1460,7 @@ Public Sub InferBrokenRhythms()
     For r = FIRST_DATA_ROW To lastRow - 1
         ' Only check note rows
         If LCase$(ws.Cells(r, COL_TYPE).Value) <> "note" Then GoTo NextRow
+        If Trim$(ws.Cells(r, COL_NOTE_LETTER).Value & "") = "" Then GoTo NextRow
         
         ' Skip if already marked (from > < symbols in ABC)
         If ws.Cells(r, COL_BROKEN_DIR).Value <> "" Then GoTo NextRow
@@ -1245,7 +1476,7 @@ Public Sub InferBrokenRhythms()
             If cellType = "structure" And ws.Cells(s, COL_STRUCTURE).Value = "bar" Then
                 ' Hit a bar before finding next note - stop searching
                 Exit For
-            ElseIf cellType = "note" Then
+            ElseIf cellType = "note" And Trim$(ws.Cells(s, COL_NOTE_LETTER).Value & "") <> "" Then
                 nextNoteRow = s
                 Exit For
             End If

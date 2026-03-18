@@ -243,6 +243,115 @@ All keys live in `global.timeline_cfg` set in `objects/obj_game_viz/Create_0.gml
 - **Debug emb groups at runtime:** After `gv_bind_timeline_on_tune_start`, add `show_debug_message(string(array_length(global.timeline_state.emb_groups)))` to confirm groups are being built.
 - **Debug split segments:** Trace `gv_collect_lane_overlap_segments` output for a specific player span to verify overlap ranges are correct.
 
+**6.6.7 Post-Play Alternating Beat Bands (implemented)**
+
+To improve readability over busy background art, the notebeam canvas now supports alternating translucent beat bands in review mode.
+
+Behavior:
+- Bands are drawn between consecutive beat markers (one band per beat interval).
+- Bands alternate even/odd styling by global beat index.
+- Bands render behind planned/player beams so note content remains readable.
+- Bands are only drawn when playback is complete (`global.timeline_state.playback_complete == true`).
+- During live playback, this feature does not draw and adds no runtime visual cost.
+
+Runtime draw function:
+- `gv_draw_notebeam_beat_boxes(...)` in `scripts/scr_game_viz/scr_game_viz.gml`
+- Called from `gv_draw_notebeam_canvas(...)` only when `review_split_beams` is enabled.
+
+Config keys (source of truth):
+- `notebeam_beat_box_even_color`
+- `notebeam_beat_box_odd_color`
+- `notebeam_beat_box_even_alpha`
+- `notebeam_beat_box_odd_alpha`
+
+These values are defined in `global.timeline_cfg` in `objects/obj_game_viz/Create_0.gml`.
+Important: values in `gv_draw_notebeam_beat_boxes` are fallback defaults only and are ignored whenever the config keys above exist.
+
+Current tuned defaults:
+- `notebeam_beat_box_even_color: make_color_rgb(245, 245, 245)`
+- `notebeam_beat_box_odd_color: make_color_rgb(35, 35, 35)`
+- `notebeam_beat_box_even_alpha: 0.12`
+- `notebeam_beat_box_odd_alpha: 0.28`
+
+Contrast tuning guidance:
+- Increase distinction by widening both color and alpha separation (light even band + dark odd band works best on tartan).
+- If bands look washed out by history overlays, lower `notebeam_history_band_alpha` in the same config block.
+
+Master toggle globals:
+- `global.show_review_beat_bands` enables/disables the alternating post-play beat bands.
+- `global.show_review_emb_boxes` enables/disables the embellishment window highlight boxes.
+- These globals are initialized in `objects/obj_game_controller/Create_0.gml`.
+- These are master on/off switches intended for future UI wiring.
+- Visual style and color tuning still live in `global.timeline_cfg` in `objects/obj_game_viz/Create_0.gml`.
+
+**6.6.8 Post-Play Embellishment Window Boxes (implemented)**
+
+To make planned embellishment groups easier to read, the notebeam canvas now supports a boxed highlight for each full embellishment window.
+
+Behavior:
+- Each box covers the full embellishment time window: grace-note start through target-note end.
+- Each box expands vertically to include all note lanes used by that embellishment plus its target note.
+- Boxes render over beat bands but under planned/player note beams.
+- Boxes only render for groups with a confirmed target note.
+- Boxes can be limited to review mode and can also be master-toggled off globally.
+
+Runtime draw function:
+- `gv_draw_notebeam_emb_group_boxes(...)` in `scripts/scr_game_viz/scr_game_viz.gml`
+
+Config keys:
+- `notebeam_emb_box_enabled`
+- `notebeam_emb_box_review_only`
+- `notebeam_emb_box_fill_color`
+- `notebeam_emb_box_fill_alpha`
+- `notebeam_emb_box_border_color`
+- `notebeam_emb_box_border_alpha`
+- `notebeam_emb_box_lane_padding_px`
+- `notebeam_emb_box_time_padding_ms`
+
+**6.6.9 Centralized Visual Tuning Controls (implemented)**
+
+Visual tuning for both notebeam history markers and tune-structure measure boxes is now centralized in one place:
+- `objects/obj_game_viz/Create_0.gml` (inside `global.timeline_cfg`)
+
+This means color/alpha adjustments no longer require editing draw logic in multiple functions.
+
+Notebeam prior run marker controls (start/end yellow markers):
+- `notebeam_history_start_color`
+- `notebeam_history_end_color`
+- `notebeam_history_start_alpha`
+- `notebeam_history_end_alpha`
+
+Current tuned defaults:
+- `notebeam_history_start_color: make_color_rgb(255, 235, 70)`
+- `notebeam_history_end_color: make_color_rgb(255, 218, 40)`
+- `notebeam_history_start_alpha: 0.52`
+- `notebeam_history_end_alpha: 0.95`
+
+Tune-structure panel controls (measure boxes + separator line):
+- `tune_structure_current_base_color`
+- `tune_structure_current_base_alpha`
+- `tune_structure_current_overlay_color`
+- `tune_structure_current_overlay_alpha`
+- `tune_structure_played_fill_color`
+- `tune_structure_played_fill_alpha`
+- `tune_structure_border_color`
+- `tune_structure_border_alpha`
+- `tune_structure_current_border_color`
+- `tune_structure_current_border_alpha`
+- `tune_structure_part_separator_color`
+- `tune_structure_part_separator_alpha`
+
+Current tuned defaults:
+- `tune_structure_played_fill_alpha: 0.72` (played dark boxes more visible)
+- `tune_structure_border_alpha: 0.58`
+- `tune_structure_current_base_alpha: 0.55`
+- `tune_structure_current_overlay_alpha: 0.35`
+
+Implementation note:
+- `scripts/scr_game_viz/scr_game_viz.gml` now reads these values from `global.timeline_cfg` inside `gv_draw_tune_structure_panel(...)`.
+- Hardcoded visual constants were replaced with config lookups + fallback defaults.
+- Result: one-stop runtime tuning for gameviz appearance.
+
 ---
 
 **7. Post Gameplay Analytics**

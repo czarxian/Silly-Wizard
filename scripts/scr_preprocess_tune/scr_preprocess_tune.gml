@@ -506,12 +506,11 @@ function tune_get_broken_dir(_ev, _next_ev) {
 }
 
 /// @function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, _grace_override_ms)
-/// @description Apply swing rules to broken rhythm pairs and recompute total_units.
+/// @description Apply swing rules to broken rhythm pairs without flattening multi-voice timing.
 
 function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, _grace_override_ms) {
 	var count = array_length(_events);
 	var out = array_create(count);
-	var running_units = 0;
 	var grace_ms = tune_get_gracenote_unit_ms(_tempo_bpm, _grace_override_ms);
 	var grace_units = grace_ms / _unit_ms;
 	var i = 0;
@@ -519,10 +518,28 @@ function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, 
 		var ev = _events[i];
 		if (ev.type == "note") {
 			var next_ev = (i + 1 < count) ? _events[i + 1] : undefined;
+			var ev_voice = struct_exists(ev, "voice") ? string_lower(string(ev.voice)) : "pipes";
+			var next_is_note = false;
+			var next_voice = "pipes";
+			var next_written = 0;
+			var next_adjusted = 0;
+			if (next_ev != undefined && is_struct(next_ev)) {
+				next_is_note = (string(variable_struct_get(next_ev, "type")) == "note");
+				if (variable_struct_exists(next_ev, "voice")) {
+					next_voice = string_lower(string(variable_struct_get(next_ev, "voice")));
+				}
+				if (variable_struct_exists(next_ev, "written")) {
+					next_written = real(variable_struct_get(next_ev, "written"));
+				}
+				if (variable_struct_exists(next_ev, "adjusted")) {
+					next_adjusted = real(variable_struct_get(next_ev, "adjusted"));
+				}
+			}
 			var broken_dir = tune_get_broken_dir(ev, next_ev);
-			if (broken_dir != "" && next_ev != undefined && next_ev.type == "note") {
+			if (broken_dir != "" && next_is_note && ev_voice == next_voice) {
 				var w1 = real(ev.written ?? ev.adjusted ?? 0);
-				var w2 = real(next_ev.written ?? next_ev.adjusted ?? 0);
+				var w2 = next_written;
+				if (w2 <= 0) w2 = next_adjusted;
 				var pair_units = w1 + w2;
 				if (pair_units > 0) {
 					var default_cut_units = (broken_dir == "dotcut") ? (w2 * 0.5) : (w1 * 0.5);
@@ -532,26 +549,20 @@ function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, 
 					var dot_units = pair_units - cut_units;
 					if (broken_dir == "dotcut") {
 						ev.adjusted = dot_units;
-						next_ev.adjusted = cut_units;
+						variable_struct_set(next_ev, "adjusted", cut_units);
 					} else {
 						ev.adjusted = cut_units;
-						next_ev.adjusted = dot_units;
+						variable_struct_set(next_ev, "adjusted", dot_units);
 					}
-					ev.total_units = running_units;
-					running_units += real(ev.adjusted);
-					next_ev.total_units = running_units;
-					running_units += real(next_ev.adjusted);
+					var pair_start_units = real(ev.total_units ?? 0);
+					ev.total_units = pair_start_units;
+					variable_struct_set(next_ev, "total_units", pair_start_units + real(ev.adjusted));
 					out[i] = ev;
 					out[i + 1] = next_ev;
 					i += 2;
 					continue;
 				}
 			}
-			var adj = real(ev.adjusted ?? ev.written ?? 0);
-			ev.total_units = running_units;
-			running_units += adj;
-		} else {
-			ev.total_units = running_units;
 		}
 		out[i] = ev;
 		i += 1;

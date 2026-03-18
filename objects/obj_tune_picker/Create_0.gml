@@ -11,3 +11,18 @@ global.tune_picker=id;
 
 //library = scr_load_tune_library();
 selected_index = -1;
+selected_tune_id = "";
+selected_tune_filename = "";
+selected_part_channel = -1;
+library = { tunes: [] };
+
+// 2A view-model state for filtered/scrolled tune list rendering.
+view_filter_rhythm = "all";
+view_sort_mode = "title_asc";
+view_scroll_offset = 0;
+view_visible_rows = 14;
+view_filtered_indices = [];
+view_rhythm_options = ["all"];
+view_layout = undefined;
+view_row_height = 56;
+view_row_gap = 6;

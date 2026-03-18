@@ -24,6 +24,7 @@
 	    }
 	    return -1;
 	}
+
 	
 	/// @function scr_hide_window(_target, _inst)
 	// @desc Safely hide a UI layer based on a button's label, a layer name, or a layer index. Returns true if a layer was hidden.

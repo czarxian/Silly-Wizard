@@ -4,7 +4,7 @@ if (!variable_global_exists("timeline_cfg_debug_gui") || !global.timeline_cfg_de
 
 if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) exit;
 if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) exit;
-if (!global.timeline_cfg.enabled) exit;
+if (!variable_struct_exists(global.timeline_cfg, "enabled") || !global.timeline_cfg.enabled) exit;
 if (!global.timeline_state.active) exit;
 
 var rect = gv_get_timeline_anchor_rect();

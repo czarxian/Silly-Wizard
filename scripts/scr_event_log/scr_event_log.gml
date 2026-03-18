@@ -22,6 +22,9 @@ if (!variable_global_exists("EVENT_HISTORY_AUTO_EXPORT")) {
 if (!variable_global_exists("EVENT_HISTORY_EXPORTED")) {
     global.EVENT_HISTORY_EXPORTED = false;
 }
+if (!variable_global_exists("EVENT_HISTORY_LIBRARY_UPDATED")) {
+    global.EVENT_HISTORY_LIBRARY_UPDATED = false;
+}
 
 /// @function event_history_add(_event_struct)
 /// @description Add a new event to the history log.
@@ -54,6 +57,7 @@ function event_history_add(_event_struct) {
 function event_history_clear() {
     global.EVENT_HISTORY = array_create(0);
     global.EVENT_HISTORY_EXPORTED = false;
+    global.EVENT_HISTORY_LIBRARY_UPDATED = false;
     show_debug_message("✓ Event history cleared");
 }
 
@@ -119,12 +123,13 @@ function event_history_get_tune_title() {
         var tune_data = obj_tune.tune_data;
         if (is_struct(tune_data) && variable_struct_exists(tune_data, "tune_metadata")) {
             var meta = tune_data.tune_metadata;
-            if (is_struct(meta) && variable_struct_exists(meta, "title") && meta.title != "") {
-                title = meta.title;
+            var meta_title = event_history_struct_get(meta, "title", "");
+            if (string(meta_title) != "") {
+                title = string(meta_title);
             }
         }
         if (title == "" && is_struct(tune_data) && variable_struct_exists(tune_data, "filename")) {
-            title = tune_data.filename;
+            title = string(variable_struct_get(tune_data, "filename"));
         }
     }
     if (title == "" && variable_global_exists("current_tune_name")) {
@@ -152,6 +157,558 @@ function event_history_clean_tune_name(_title) {
         }
     }
     return result;
+}
+
+/// @function event_history_struct_get(_struct, _key, _default)
+/// @description Safely read a value from a dynamic struct.
+function event_history_struct_get(_struct, _key, _default = undefined) {
+    if (!is_struct(_struct)) return _default;
+    if (!variable_struct_exists(_struct, _key)) return _default;
+    return variable_struct_get(_struct, _key);
+}
+
+/// @function event_history_normalize_tune_filename(_filename_or_path)
+/// @description Normalize a tune path to the library-relative filename when possible.
+function event_history_normalize_tune_filename(_filename_or_path) {
+    var path = string_trim(string(_filename_or_path ?? ""));
+    if (string_length(path) <= 0) return "";
+
+    path = string_replace_all(path, "\\", "/");
+    var lower = string_lower(path);
+    var markers = ["datafiles/tunes/", "tunes/"];
+
+    for (var i = 0; i < array_length(markers); i++) {
+        var marker = markers[i];
+        var pos = string_pos(marker, lower);
+        if (pos > 0) {
+            var start_at = pos + string_length(marker);
+            return string_copy(path, start_at, string_length(path) - start_at + 1);
+        }
+    }
+
+    var last_slash = 0;
+    for (var j = 1; j <= string_length(path); j++) {
+        if (string_copy(path, j, 1) == "/") {
+            last_slash = j;
+        }
+    }
+
+    if (last_slash > 0) {
+        return string_copy(path, last_slash + 1, string_length(path) - last_slash);
+    }
+
+    return path;
+}
+
+/// @function event_history_make_tune_history_id(_filename_or_path)
+/// @description Build a stable ID for tune-library history entries.
+function event_history_make_tune_history_id(_filename_or_path) {
+    var filename = event_history_normalize_tune_filename(_filename_or_path);
+    if (string_length(filename) <= 0) {
+        filename = string_trim(string(_filename_or_path ?? ""));
+    }
+    return string_lower(string_trim(filename));
+}
+
+/// @function event_history_format_play_date(_stamp)
+/// @description Convert YYYYMMDD-HHMMSS timestamps into YYYY-MM-DD labels.
+function event_history_format_play_date(_stamp) {
+    var stamp = string_trim(string(_stamp ?? ""));
+    if (string_length(stamp) >= 8 && string_pos("-", stamp) == 0) {
+        return string_copy(stamp, 1, 4) + "-" + string_copy(stamp, 5, 2) + "-" + string_copy(stamp, 7, 2);
+    }
+    return stamp;
+}
+
+/// @function event_history_get_tune_history_index_path()
+/// @description Path for the persistent tune-library history index.
+function event_history_get_tune_history_index_path() {
+    return "datafiles/performances/tune_history_index.json";
+}
+
+/// @function event_history_default_tune_history_index()
+/// @description Create a default empty history index payload.
+function event_history_default_tune_history_index() {
+    return {
+        schema_version: 1,
+        export_type: "tune_history_index",
+        updated_at: "",
+        tunes: []
+    };
+}
+
+/// @function event_history_load_tune_history_index()
+/// @description Read the persistent tune-library history index if it exists.
+function event_history_load_tune_history_index() {
+    var filepath = event_history_get_tune_history_index_path();
+    var file = file_text_open_read(filepath);
+    if (file < 0) {
+        return event_history_default_tune_history_index();
+    }
+
+    var raw = "";
+    while (!file_text_eof(file)) {
+        raw += file_text_read_string(file);
+        file_text_readln(file);
+    }
+    file_text_close(file);
+
+    if (string_trim(raw) == "") {
+        return event_history_default_tune_history_index();
+    }
+
+    var data = undefined;
+    try {
+        data = json_parse(raw);
+    } catch (e) {
+        show_debug_message("WARNING: Could not parse tune history index: " + filepath + " - " + string(e));
+        return event_history_default_tune_history_index();
+    }
+
+    var data_tunes = event_history_struct_get(data, "tunes", undefined);
+    if (!is_struct(data) || !is_array(data_tunes)) {
+        return event_history_default_tune_history_index();
+    }
+
+    if (!variable_struct_exists(data, "schema_version")) variable_struct_set(data, "schema_version", 1);
+    if (!variable_struct_exists(data, "export_type")) variable_struct_set(data, "export_type", "tune_history_index");
+    if (!variable_struct_exists(data, "updated_at")) variable_struct_set(data, "updated_at", "");
+    return data;
+}
+
+/// @function event_history_store_tune_history_index(_index)
+/// @description Persist the tune-library history index to disk.
+function event_history_store_tune_history_index(_index) {
+    if (!is_struct(_index)) return false;
+
+    var folder = "datafiles/performances";
+    if (!directory_exists(folder)) {
+        directory_create(folder);
+    }
+
+    var filepath = event_history_get_tune_history_index_path();
+    var file = file_text_open_write(filepath);
+    if (file < 0) {
+        show_debug_message("ERROR: Could not open tune history index for writing: " + filepath);
+        return false;
+    }
+
+    file_text_write_string(file, json_stringify(_index));
+    file_text_close(file);
+    return true;
+}
+
+/// @function event_history_is_numeric_text(_text)
+/// @description Return true when text can be safely parsed as a simple real number.
+function event_history_is_numeric_text(_text) {
+    var text = string_trim(string(_text ?? ""));
+    if (string_length(text) <= 0) return false;
+
+    var has_digit = false;
+    var dot_count = 0;
+    for (var i = 1; i <= string_length(text); i++) {
+        var ch = string_char_at(text, i);
+        if (ch >= "0" && ch <= "9") {
+            has_digit = true;
+            continue;
+        }
+        if (ch == "." && dot_count == 0) {
+            dot_count += 1;
+            continue;
+        }
+        if (i == 1 && ch == "-") {
+            continue;
+        }
+        return false;
+    }
+
+    return has_digit;
+}
+
+/// @function event_history_try_score_real(_value)
+/// @description Parse numeric score values when possible, otherwise return undefined.
+function event_history_try_score_real(_value) {
+    if (is_real(_value)) {
+        return real(_value);
+    }
+
+    var text = string_trim(string(_value ?? ""));
+    if (!event_history_is_numeric_text(text)) {
+        return undefined;
+    }
+
+    return real(text);
+}
+
+/// @function event_history_get_export_score(_export_info)
+/// @description Resolve an optional score value from export metadata or future globals.
+function event_history_get_export_score(_export_info = undefined) {
+    if (is_struct(_export_info)) {
+        if (variable_struct_exists(_export_info, "score")) return variable_struct_get(_export_info, "score");
+        if (variable_struct_exists(_export_info, "last_score")) return variable_struct_get(_export_info, "last_score");
+    }
+
+    var global_keys = [
+        "last_score",
+        "run_score",
+        "performance_score",
+        "final_score",
+        "overall_score"
+    ];
+
+    for (var i = 0; i < array_length(global_keys); i++) {
+        var key = global_keys[i];
+        if (variable_global_exists(key)) {
+            return variable_global_get(key);
+        }
+    }
+
+    return undefined;
+}
+
+/// @function event_history_get_export_info(_timestamp)
+/// @description Build shared metadata for CSV and summary exports.
+function event_history_get_export_info(_timestamp = "") {
+    var tune_name = variable_global_exists("current_tune_name")
+        ? string(global.current_tune_name)
+        : "unknown";
+    var tune_filename = event_history_normalize_tune_filename(tune_name);
+    var tune_title = event_history_get_tune_title();
+    var clean_tune = event_history_clean_tune_name(tune_title);
+    if (clean_tune == "") {
+        clean_tune = "unknown";
+    }
+
+    var bpm = variable_global_exists("current_bpm")
+        ? real(global.current_bpm)
+        : 120;
+    var swing = variable_global_exists("swing_mult")
+        ? string(global.swing_mult)
+        : "0";
+    var grace_override_ms = variable_global_exists("gracenote_override_ms")
+        ? real(global.gracenote_override_ms)
+        : 0;
+
+    var timestamp = string(_timestamp);
+    if (timestamp == "") {
+        timestamp = event_history_format_timestamp();
+    }
+
+    var folder = "datafiles/performances/" + clean_tune;
+    var base_name = clean_tune + "_" + timestamp + "_" + string(bpm) + "_" + swing + "_" + string(grace_override_ms);
+
+    return {
+        tune_name: tune_name,
+        tune_filename: tune_filename,
+        tune_id: event_history_make_tune_history_id((tune_filename != "") ? tune_filename : tune_name),
+        tune_title: tune_title,
+        clean_tune: clean_tune,
+        timestamp: timestamp,
+        bpm: bpm,
+        swing: swing,
+        grace_override_ms: grace_override_ms,
+        folder: folder,
+        base_name: base_name,
+        csv_path: folder + "/" + base_name + ".csv",
+        summary_path: folder + "/" + base_name + "_summary.json"
+    };
+}
+
+/// @function event_history_update_tune_history_index(_export_info)
+/// @description Update the persistent tune-library history index using the current run export metadata.
+function event_history_update_tune_history_index(_export_info = undefined) {
+    if (!variable_global_exists("EVENT_HISTORY") || array_length(global.EVENT_HISTORY) <= 0) {
+        return false;
+    }
+
+    var export_info = is_struct(_export_info)
+        ? _export_info
+        : event_history_get_export_info();
+
+    var tune_filename = string(event_history_struct_get(export_info, "tune_filename", ""));
+    if (string_length(tune_filename) <= 0) {
+        tune_filename = event_history_normalize_tune_filename(event_history_struct_get(export_info, "tune_name", ""));
+    }
+
+    var tune_id = string(event_history_struct_get(export_info, "tune_id", ""));
+    if (string_length(tune_id) <= 0) {
+        tune_id = event_history_make_tune_history_id((tune_filename != "") ? tune_filename : event_history_struct_get(export_info, "tune_name", ""));
+    }
+
+    if (string_length(tune_id) <= 0) {
+        return false;
+    }
+
+    var history_index = event_history_load_tune_history_index();
+    var tunes = event_history_struct_get(history_index, "tunes", []);
+    var match_idx = -1;
+
+    for (var i = 0; i < array_length(tunes); i++) {
+        var entry = tunes[i];
+        if (!is_struct(entry)) continue;
+
+        var entry_id = string_lower(string_trim(string(event_history_struct_get(entry, "id", ""))));
+        if (entry_id == tune_id) {
+            match_idx = i;
+            break;
+        }
+
+        var entry_filename = event_history_make_tune_history_id(event_history_struct_get(entry, "filename", ""));
+        if (string_length(entry_filename) > 0 && entry_filename == tune_id) {
+            match_idx = i;
+            break;
+        }
+    }
+
+    if (match_idx < 0) {
+        array_push(tunes, {
+            id: tune_id,
+            filename: tune_filename,
+            title: string(event_history_struct_get(export_info, "tune_title", "")),
+            plays_count: 0,
+            last_played_utc: "",
+            last_play_date: "",
+            last_score: "",
+            best_score: "",
+            last_bpm: 0,
+            last_swing: "",
+            last_grace_override_ms: 0,
+            last_export_base_name: ""
+        });
+        match_idx = array_length(tunes) - 1;
+    }
+
+    var history_entry = tunes[match_idx];
+
+    variable_struct_set(history_entry, "id", tune_id);
+    if (string_length(tune_filename) > 0) variable_struct_set(history_entry, "filename", tune_filename);
+
+    var tune_title = string_trim(string(event_history_struct_get(export_info, "tune_title", "")));
+    if (string_length(tune_title) > 0) {
+        variable_struct_set(history_entry, "title", tune_title);
+    }
+
+    variable_struct_set(history_entry, "plays_count", floor(max(0, real(event_history_struct_get(history_entry, "plays_count", 0)))) + 1);
+    variable_struct_set(history_entry, "last_played_utc", string(event_history_struct_get(export_info, "timestamp", "")));
+    variable_struct_set(history_entry, "last_play_date", event_history_format_play_date(event_history_struct_get(history_entry, "last_played_utc", "")));
+    variable_struct_set(history_entry, "last_bpm", real(event_history_struct_get(export_info, "bpm", 0)));
+    variable_struct_set(history_entry, "last_swing", string(event_history_struct_get(export_info, "swing", "")));
+    variable_struct_set(history_entry, "last_grace_override_ms", real(event_history_struct_get(export_info, "grace_override_ms", 0)));
+    variable_struct_set(history_entry, "last_export_base_name", string(event_history_struct_get(export_info, "base_name", "")));
+    variable_struct_set(history_entry, "tune_name", string(event_history_struct_get(export_info, "tune_name", "")));
+
+    var score_value = event_history_get_export_score(export_info);
+    var score_text = string_trim(string(score_value ?? ""));
+    if (string_length(score_text) > 0) {
+        variable_struct_set(history_entry, "last_score", score_text);
+
+        var score_real = event_history_try_score_real(score_value);
+        var best_real = event_history_try_score_real(event_history_struct_get(history_entry, "best_score", undefined));
+        if (!is_undefined(score_real)) {
+            if (is_undefined(best_real) || score_real > best_real) {
+                variable_struct_set(history_entry, "best_score", score_text);
+            }
+        } else if (string_length(string_trim(string(event_history_struct_get(history_entry, "best_score", "")))) <= 0) {
+            variable_struct_set(history_entry, "best_score", score_text);
+        }
+    }
+
+    tunes[match_idx] = history_entry;
+    variable_struct_set(history_index, "tunes", tunes);
+    variable_struct_set(history_index, "updated_at", event_history_format_timestamp());
+    return event_history_store_tune_history_index(history_index);
+}
+
+/// @function event_history_build_summary_player_spans()
+/// @description Build a compact per-note span array for review overlays.
+function event_history_build_summary_player_spans() {
+    var spans_out = array_create(0);
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) {
+        return spans_out;
+    }
+    if (!variable_struct_exists(global.timeline_state, "player_in") || !is_array(global.timeline_state.player_in)) {
+        return spans_out;
+    }
+
+    var player_spans = global.timeline_state.player_in;
+    var n_spans = array_length(player_spans);
+    for (var i = 0; i < n_spans; i++) {
+        var span = player_spans[i];
+        if (!is_struct(span)) continue;
+
+        var start_ms = real(span.start_ms ?? 0);
+        var end_ms = max(start_ms, real(span.end_ms ?? start_ms));
+        var note_canonical = string(span.note_canonical ?? "");
+        var note_midi = real(span.note_midi ?? -1);
+        var channel = real(span.channel ?? -1);
+        var lane_idx = gv_note_to_lane_index(note_canonical, note_midi, channel);
+        if (lane_idx < 0) continue;
+
+        array_push(spans_out, {
+            start_ms: start_ms,
+            end_ms: end_ms,
+            dur_ms: max(0, real(span.dur_ms ?? (end_ms - start_ms))),
+            note_canonical: note_canonical,
+            note_midi: note_midi,
+            channel: channel,
+            lane_idx: lane_idx
+        });
+    }
+
+    return spans_out;
+}
+
+/// @function event_history_export_summary_json(_filename_or_path, _export_info)
+/// @description Write a compact per-run summary JSON for review overlays.
+function event_history_export_summary_json(_filename_or_path, _export_info = undefined) {
+    var filepath = _filename_or_path;
+    if (string_pos("datafiles/", filepath) != 1) {
+        filepath = "datafiles/" + filepath;
+    }
+
+    var export_info = is_struct(_export_info)
+        ? _export_info
+        : event_history_get_export_info();
+    var export_folder = string(event_history_struct_get(export_info, "folder", ""));
+    if (export_folder != "" && !directory_exists(export_folder)) {
+        directory_create(export_folder);
+    }
+
+    var player_spans = event_history_build_summary_player_spans();
+    if (array_length(player_spans) <= 0) {
+        show_debug_message("[REVIEW_HISTORY] Skipping summary export because no player spans were captured.");
+        return false;
+    }
+
+    var payload = {
+        schema_version: 1,
+        export_type: "performance_summary",
+        tune_name: event_history_struct_get(export_info, "tune_name", ""),
+        tune_title: event_history_struct_get(export_info, "tune_title", ""),
+        clean_tune: event_history_struct_get(export_info, "clean_tune", ""),
+        timestamp: event_history_struct_get(export_info, "timestamp", ""),
+        bpm: event_history_struct_get(export_info, "bpm", 0),
+        swing: event_history_struct_get(export_info, "swing", ""),
+        grace_override_ms: event_history_struct_get(export_info, "grace_override_ms", 0),
+        player_spans: player_spans
+    };
+    variable_struct_set(payload, "player_span_count", array_length(event_history_struct_get(payload, "player_spans", [])));
+
+    var file = file_text_open_write(filepath);
+    if (file == -1) {
+        show_debug_message("ERROR: Could not open summary file for writing: " + filepath);
+        return false;
+    }
+
+    file_text_write_string(file, json_stringify(payload));
+    file_text_close(file);
+    show_debug_message("✓ Exported review summary to: " + filepath);
+    return true;
+}
+
+/// @function event_history_summary_timestamp_key(_summary)
+/// @description Convert summary timestamps into sortable numeric keys.
+function event_history_summary_timestamp_key(_summary) {
+    if (!is_struct(_summary)) return 0;
+
+    var stamp = string(event_history_struct_get(_summary, "timestamp", "0"));
+    stamp = string_replace_all(stamp, "-", "");
+    if (stamp == "") return 0;
+
+    return real(stamp);
+}
+
+/// @function event_history_sort_summaries_desc(_summaries)
+/// @description Return summaries sorted newest-first by export timestamp.
+function event_history_sort_summaries_desc(_summaries) {
+    if (!is_array(_summaries)) return array_create(0);
+
+    var sorted = array_create(0);
+    for (var i = 0; i < array_length(_summaries); i++) {
+        array_push(sorted, _summaries[i]);
+    }
+
+    var n_sorted = array_length(sorted);
+    for (var a = 0; a < n_sorted - 1; a++) {
+        var best_idx = a;
+        var best_key = event_history_summary_timestamp_key(sorted[a]);
+        for (var b = a + 1; b < n_sorted; b++) {
+            var scan_key = event_history_summary_timestamp_key(sorted[b]);
+            if (scan_key > best_key) {
+                best_key = scan_key;
+                best_idx = b;
+            }
+        }
+
+        if (best_idx != a) {
+            var swap_item = sorted[a];
+            sorted[a] = sorted[best_idx];
+            sorted[best_idx] = swap_item;
+        }
+    }
+
+    return sorted;
+}
+
+/// @function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm, _match_swing)
+/// @description Load recent matching summary JSON files for review overlays.
+function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm = true, _match_swing = true) {
+    var results = array_create(0);
+    var clean_tune = string(_clean_tune ?? "");
+    var max_count = max(0, floor(real(_max_count)));
+    if (clean_tune == "" || max_count <= 0) {
+        return results;
+    }
+
+    var folder = "datafiles/performances/" + clean_tune;
+    if (!directory_exists(folder)) {
+        return results;
+    }
+    if (string_copy(folder, string_length(folder), 1) != "/") {
+        folder += "/";
+    }
+
+    var target_bpm = real(_bpm);
+    var target_swing = string(_swing ?? "");
+
+    var entry = file_find_first(folder + "*_summary.json", 0);
+    if (entry == "") {
+        return results;
+    }
+
+    while (entry != "") {
+        if (string_copy(entry, 1, 1) != ".") {
+            var filepath = folder + entry;
+            if (!directory_exists(filepath)) {
+                var summary = scr_tune_parse_json_file(filepath);
+                if (is_struct(summary)
+                    && variable_struct_exists(summary, "player_spans")
+                    && is_array(event_history_struct_get(summary, "player_spans", []))
+                    && array_length(event_history_struct_get(summary, "player_spans", [])) > 0) {
+                    var bpm_ok = !_match_bpm || abs(real(event_history_struct_get(summary, "bpm", -1)) - target_bpm) <= 0.001;
+                    var swing_ok = !_match_swing || string(event_history_struct_get(summary, "swing", "")) == target_swing;
+                    if (bpm_ok && swing_ok) {
+                        array_push(results, summary);
+                    }
+                }
+            }
+        }
+
+        entry = file_find_next();
+    }
+    file_find_close();
+
+    results = event_history_sort_summaries_desc(results);
+    if (array_length(results) <= max_count) {
+        return results;
+    }
+
+    var trimmed = array_create(0);
+    for (var i = 0; i < max_count; i++) {
+        array_push(trimmed, results[i]);
+    }
+    return trimmed;
 }
 
 /// @function event_history_enrich(_events)

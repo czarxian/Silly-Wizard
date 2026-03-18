@@ -12,6 +12,11 @@ global.timeline_cfg = {
     measures_behind: 1.0,       // played
     show_countin: true,
     tune_channel: 2,
+    tune_show_other_parts_ghost: true,
+    tune_other_parts_alpha: 0.18,
+    // Player MIDI input channels to visualize in tune canvas + notebeam.
+    // Keep as array so channel 1 can be enabled later with [0, 1].
+    player_channels: [0],
     player_channel: -1,         // -1 = accept all incoming channels
     playhead_audio_lag_ms: 0,  // Delay visual playhead to better match audible MIDI output latency
     player_time_offset_ms: 0,
@@ -53,6 +58,18 @@ global.timeline_cfg = {
     player_short_text_color: c_green,
     player_note_text_scale: 1.10,
     player_label_min_px: 12,
+    tune_structure_current_base_color: make_color_rgb(104, 100, 76),
+    tune_structure_current_base_alpha: 0.55,
+    tune_structure_current_overlay_color: make_color_rgb(224, 206, 92),
+    tune_structure_current_overlay_alpha: 0.35,
+    tune_structure_played_fill_color: make_color_rgb(48, 48, 54),
+    tune_structure_played_fill_alpha: 0.72,
+    tune_structure_border_color: make_color_rgb(176, 176, 186),
+    tune_structure_border_alpha: 0.58,
+    tune_structure_current_border_color: make_color_rgb(255, 230, 96),
+    tune_structure_current_border_alpha: 1.00,
+    tune_structure_part_separator_color: make_color_rgb(200, 202, 220),
+    tune_structure_part_separator_alpha: 0.50,
     notebeam_enabled: true,
     notebeam_draw_from_timeline: true,
     notebeam_show_now_line: true,
@@ -84,13 +101,41 @@ global.timeline_cfg = {
     notebeam_player_timing_slack_ms: 50,
     notebeam_player_bleed_alpha: 0.38,
     notebeam_player_alpha: 0.88,
+    notebeam_review_split_beams: false,
+    notebeam_history_enabled: true,
+    notebeam_history_use_gap_band: true,
+    notebeam_history_run_count: 10,
+    notebeam_history_require_same_bpm: true,
+    notebeam_history_require_same_swing: true,
+    notebeam_history_start_color: make_color_rgb(255, 235, 70),
+    notebeam_history_end_color: make_color_rgb(255, 218, 40),
+    notebeam_history_band_color: make_color_rgb(220, 220, 220),
+    notebeam_history_band_alpha: 0.20,
+    notebeam_history_start_alpha: 0.52,
+    notebeam_history_end_alpha: 0.95,
     notebeam_debug_log: true,
     notebeam_show_debug_outline: false,
     notebeam_debug_outline_color: make_color_rgb(80, 80, 88),
     notebeam_debug_outline_alpha: 0.65,
+    notebeam_beat_box_even_color: make_color_rgb(245, 245, 245),
+    notebeam_beat_box_odd_color: make_color_rgb(35, 35, 35),
+    notebeam_beat_box_even_alpha: 0.06,
+    notebeam_beat_box_odd_alpha: 0.14,
+    notebeam_emb_box_enabled: true,
+    notebeam_emb_box_review_only: true,
+    notebeam_emb_box_fill_color: make_color_rgb(60, 155, 70),
+    notebeam_emb_box_fill_alpha: 0.14,
+    notebeam_emb_box_border_color: make_color_rgb(60, 155, 70),
+    notebeam_emb_box_border_alpha: 0.90,
+    notebeam_emb_box_lane_padding_px: 3,
+    notebeam_emb_box_time_padding_ms: 0,
     debug_planned_sequence: false,
     debug_sequence_max_notes: 24
 };
+
+if (!variable_global_exists("selected_player_tune_channel")) {
+    global.selected_player_tune_channel = global.timeline_cfg.tune_channel;
+}
 
 global.enable_current_note_layer = false;
 
@@ -121,5 +166,16 @@ global.timeline_state = {
     planned_i1: -1,
     planned_span_i0: 0,
     planned_span_i1: -1,
+
+    // Tune-structure panel state
+    measure_nav_entries: [],
+    measure_nav_parts: [],
+    measure_nav_pickup_by_part: [],
+    measure_nav_tile_hitboxes: [],
+    measure_nav_scroll_row: 0,
+    measure_nav_total_rows: 0,
+    measure_nav_view_rows: 0,
+    measure_nav_controls: {},
+
     anchor_id: noone
 };

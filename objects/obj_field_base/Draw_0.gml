@@ -1,9 +1,14 @@
-if (variable_instance_exists(self, "ui_name") && string(ui_name) == "timeline_canvas_anchor") {
+var ui_name_value = "";
+if (variable_instance_exists(id, "ui_name")) {
+	ui_name_value = string(variable_instance_get(id, "ui_name"));
+}
+
+if (ui_name_value == "timeline_canvas_anchor") {
 	gv_draw_timeline_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
 	exit;
 }
 
-if (variable_instance_exists(self, "ui_name") && string(ui_name) == "notebeam_canvas_anchor") {
+if (ui_name_value == "notebeam_canvas_anchor") {
 	var draw_direct = true;
 	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
 		if (variable_struct_exists(global.timeline_cfg, "notebeam_draw_from_timeline")
@@ -17,22 +22,37 @@ if (variable_instance_exists(self, "ui_name") && string(ui_name) == "notebeam_ca
 	exit;
 }
 
+if (ui_name_value == "tunestructure_canvas_anchor") {
+	gv_draw_tune_structure_panel(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	exit;
+}
+
+
+if (ui_name_value == "gameviz_canvas_anchor") {
+	if (sprite_index == noone) {
+		sprite_index = spr_field_item;
+		mask_index = spr_field_item;
+	}
+	gv_draw_gameviz_controls_panel(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	exit;
+}
+
 draw_self();
 
-var display_text = string(field_contents);
+var display_text = "";
+if (variable_instance_exists(id, "field_contents")) {
+	display_text = string(variable_instance_get(id, "field_contents"));
+}
 var draw_x = x + 10;
 var draw_y = y;
 
 var is_current_note_field = false;
-if (variable_instance_exists(self, "ui_name")) {
-	var name = string(ui_name);
-	is_current_note_field = (name == "obj_last_measure_tune_notes"
-		|| name == "obj_current_measure_tune_notes"
-		|| name == "obj_next_measure_tune_notes"
-		|| name == "obj_last_measure_player_notes"
-		|| name == "obj_current_measure_player_notes"
-		|| name == "obj_next_measure_player_notes");
-}
+is_current_note_field = (ui_name_value == "obj_last_measure_tune_notes"
+	|| ui_name_value == "obj_current_measure_tune_notes"
+	|| ui_name_value == "obj_next_measure_tune_notes"
+	|| ui_name_value == "obj_last_measure_player_notes"
+	|| ui_name_value == "obj_current_measure_player_notes"
+	|| ui_name_value == "obj_next_measure_player_notes");
 
 if (is_current_note_field) draw_set_font(fnt_measure);
 else draw_set_font(fnt_setting);
@@ -54,7 +74,7 @@ var has_token_map = false;
 var token_list = [];
 if (is_current_note_field && variable_global_exists("current_note_panel") && is_struct(global.current_note_panel)) {
 	if (is_struct(global.current_note_panel.render_tokens)) {
-		token_list = global.current_note_panel.render_tokens[$ string(ui_name)];
+		token_list = global.current_note_panel.render_tokens[$ ui_name_value];
 		has_token_map = is_array(token_list);
 	}
 }

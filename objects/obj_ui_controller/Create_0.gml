@@ -37,14 +37,7 @@ if (!variable_global_exists("ui_fields")) {
 //Tune variables
 	global.tune_selection = -1;
 	global.selected_tune_time_sig = ""; // Time signature of tune currently selected in picker (before OK clicked)
-	global.tune_library = array_create(5);
-	global.tune_library[0]="Tune Not Set";
-	global.tune_library[1]="ScotlandTheBrave.csv";
-	global.tune_library[2]="Tune 2";
-	global.tune_library[3]="Tune 3";
-	global.tune_library[4]="Tune 4";
-	global.tune_library[5]="It's Sheffield Wednesday and I'm in Love";
-	global.tune_library[6]="Not set";
+	global.tune_library = { tunes: [] };
 
 //global.tune_library = ["Tune A", "Tune B", "Tune C", "Tune D", "Tune E", "Tune F","Tune G"];
 global.tune_page = 0;

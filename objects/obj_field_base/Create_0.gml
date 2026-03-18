@@ -8,9 +8,12 @@ event_inherited();
 image_index = 0;
 image_speed = 0;
 
-if (variable_instance_exists(self, "ui_name")) {
-	var anchor_name = string(ui_name);
-	if (anchor_name == "timeline_canvas_anchor" || anchor_name == "notebeam_canvas_anchor") {
+if (variable_instance_exists(id, "ui_name")) {
+	var anchor_name = string(variable_instance_get(id, "ui_name"));
+	if (anchor_name == "timeline_canvas_anchor"
+		|| anchor_name == "notebeam_canvas_anchor"
+		|| anchor_name == "tunestructure_canvas_anchor"
+		|| anchor_name == "gameviz_canvas_anchor") {
 		if (sprite_index == noone) {
 			sprite_index = spr_field_item;
 			mask_index = spr_field_item;

@@ -296,13 +296,17 @@ function MIDI_show_input_devices() {
 }
 
 function MIDI_scan_input_devices() {
-	for(i=0; i<midi_input_device_count(); i++)  {
+	global.midi_input_devices = [];
+	var device_count = midi_input_device_count();
+	for (var i = 0; i < device_count; i++) {
 		global.midi_input_devices[i] = midi_input_device_name(i);
 	}
 }
 
 function MIDI_scan_output_devices() {
-	for(i=0; i<midi_output_device_count(); i++)  {
+	global.midi_output_devices = [];
+	var device_count = midi_output_device_count();
+	for (var i = 0; i < device_count; i++) {
 		global.midi_output_devices[i] = midi_output_device_name(i);
 	}
 }

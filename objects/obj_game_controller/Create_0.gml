@@ -15,6 +15,29 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 	scr_build_tune_library("tunes/");
 	global.emb_library = load_embellishment_library("embellishments.json");
 
+	// Initialize game visualization controls
+	if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) {
+		global.timeline_cfg = {
+			enabled: true,
+			tune_channel: 2,
+			tune_show_other_parts_ghost: false,
+			tune_other_parts_alpha: 0.18
+		};
+	} else {
+		if (!variable_struct_exists(global.timeline_cfg, "enabled")) {
+			global.timeline_cfg.enabled = true;
+		}
+		if (!variable_struct_exists(global.timeline_cfg, "tune_channel")) {
+			global.timeline_cfg.tune_channel = 2;
+		}
+		if (!variable_struct_exists(global.timeline_cfg, "tune_show_other_parts_ghost")) {
+			global.timeline_cfg.tune_show_other_parts_ghost = false;
+		}
+		if (!variable_struct_exists(global.timeline_cfg, "tune_other_parts_alpha")) {
+			global.timeline_cfg.tune_other_parts_alpha = 0.18;
+		}
+	}
+
 /// ============ EMBELLISHMENT & GRACENOTE TIMING CONFIGURATION ============
 /// BPM-aware gracenote timing with safety constraints
 	global.EMBELLISHMENT_CONFIG = {
@@ -61,6 +84,16 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 
 //Game State
 	global.game_state="menu";
+
+// Review overlay toggles
+	// Master switches for post-play notebeam overlays.
+	// These live in obj_game_controller so UI can toggle them later without touching timeline config.
+	if (!variable_global_exists("show_review_beat_bands")) {
+		global.show_review_beat_bands = true;
+	}
+	if (!variable_global_exists("show_review_emb_boxes")) {
+		global.show_review_emb_boxes = true;
+	}
 		
 //MIDI globals
   //MIDI Input 
