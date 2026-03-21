@@ -1,5 +1,6 @@
 /// @description Timeline initial draw pass (planned row + now bar) - Draw GUI
 
+if (variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW") && global.DIAG_DISABLE_TIMELINE_DRAW) exit;
 if (!variable_global_exists("timeline_cfg_debug_gui") || !global.timeline_cfg_debug_gui) exit;
 
 if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) exit;

@@ -6,8 +6,24 @@
 //  - Initializes MIDI device lists and MIDI event counters used by scr_MIDI and scr_button_scripts.
 // Related scripts: scripts/scr_tune_library/, scripts/scr_MIDI/, scripts/scr_button_scripts/
 
-// Set high step rate for precise MIDI timing (callbacks fire with ~1ms precision)
-room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh rate)
+// Set step rate for gameplay/update loop.
+// Higher FPS lowers frame-quantized scheduler jitter (at CPU cost).
+if (!variable_global_exists("GAME_STEP_FPS")) {
+	global.GAME_STEP_FPS = 500;
+}
+var _game_step_fps = max(30, floor(real(global.GAME_STEP_FPS)));
+game_set_speed(_game_step_fps, gamespeed_fps);
+
+// Playback scheduler mode: "step" (per-step due-group pump) or "timesource".
+if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
+	global.PLAYBACK_SCHEDULER_MODE = "step";
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
+	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
+	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 32;
+}
 
 //Create Globals
 	//old_scr_tune_library();
@@ -84,6 +100,16 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 
 //Game State
 	global.game_state="menu";
+	if (!variable_global_exists("pending_layer_mode")) {
+		global.pending_layer_mode = "";
+	}
+	if (!variable_global_exists("pending_layer_room")) {
+		global.pending_layer_room = -1;
+	}
+	if (room == Room_main_menu) {
+		global.pending_layer_mode = "main";
+		global.pending_layer_room = Room_main_menu;
+	}
 
 // Review overlay toggles
 	// Master switches for post-play notebeam overlays.

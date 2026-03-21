@@ -259,23 +259,9 @@
 		}
 		
 		global.enable_current_note_layer = false;
+		global.pending_layer_mode = "play";
+		global.pending_layer_room = Room_play;
 		room_goto(Room_play);
-
-		// Explicit layer visibility for play room (no toggle behavior)
-		var _main_layer_id = layer_get_id("main_menu_layer");
-		if (_main_layer_id != -1) layer_set_visible(_main_layer_id, false);
-
-		var _settings_layer_id = layer_get_id("settings_window_layer");
-		if (_settings_layer_id != -1) layer_set_visible(_settings_layer_id, false);
-
-		var _tune_layer_id = layer_get_id("tune_window_layer");
-		if (_tune_layer_id != -1) layer_set_visible(_tune_layer_id, false);
-
-		var _gameplay_layer_id = layer_get_id("gameplay_layer");
-		if (_gameplay_layer_id != -1) layer_set_visible(_gameplay_layer_id, true);
-
-		var _current_note_layer_id = layer_get_id("current_note_layer");
-		if (_current_note_layer_id != -1) layer_set_visible(_current_note_layer_id, false);
 	}
 
 	//CASE 2 Clicked Checkbox
@@ -404,12 +390,20 @@
 			for (var i = 1; i < array_length(global.ui_assets); i++) {
 					var cur_layer_name = GetLayerNameFromIndex(i);
 					var cur_layer_id = layer_get_id(cur_layer_name);
-					layer_set_visible(cur_layer_id, false);
+					if (cur_layer_id != -1) {
+						layer_set_visible(cur_layer_id, false);
+						instance_deactivate_layer(cur_layer_id);
+					}
 			}
 		}
 		layer_set_visible(layer_id, !current_visibility); // Toggle visibility
 
 		var new_visibility = layer_get_visible(layer_id);
+		if (new_visibility) {
+			instance_activate_layer(layer_id);
+		} else {
+			instance_deactivate_layer(layer_id);
+		}
 		// If we just opened the tune window, populate the picker
 		if (new_visibility && layer_name == "tune_window_layer") {
 			scr_tune_picker_populate();
@@ -541,16 +535,9 @@
 		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
 			global.timeline_state.active = false;
 		}
+		global.pending_layer_mode = "main";
+		global.pending_layer_room = Room_main_menu;
 		room_goto(Room_main_menu);
-
-		var _main_layer_id = layer_get_id("main_menu_layer");
-		if (_main_layer_id != -1) layer_set_visible(_main_layer_id, true);
-
-		var _gameplay_layer_id = layer_get_id("gameplay_layer");
-		if (_gameplay_layer_id != -1) layer_set_visible(_gameplay_layer_id, false);
-
-		var _current_note_layer_id = layer_get_id("current_note_layer");
-		if (_current_note_layer_id != -1) layer_set_visible(_current_note_layer_id, false);
 	}
 	
 	//CASE 6

@@ -1,9 +1,11 @@
 /// @description Timeline initial draw pass (planned row + now bar)
 
-if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) exit;
-if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) exit;
-if (!variable_struct_exists(global.timeline_cfg, "enabled") || !global.timeline_cfg.enabled) exit;
-if (!global.timeline_state.active) exit;
+var _draw_t0_us = get_timer();
+if (variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW") && global.DIAG_DISABLE_TIMELINE_DRAW) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_struct_exists(global.timeline_cfg, "enabled") || !global.timeline_cfg.enabled) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!global.timeline_state.active) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
 
 var rect = gv_get_timeline_anchor_rect();
 if (is_struct(rect)) {
@@ -71,3 +73,5 @@ if (!ts_ok) {
 		gv_draw_tune_structure_panel(panel_x1, panel_y1, panel_x2, panel_y2);
 	}
 }
+
+tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000);

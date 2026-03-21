@@ -1,4 +1,4 @@
-// Script assets have changed for v2.3.0 see
+﻿// Script assets have changed for v2.3.0 see
 // https://help.yoyogames.com/hc/en-us/articles/360005277377 for more information
 
 function gv_parse_meter(_meter_text) {
@@ -67,6 +67,84 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_beat_box_odd_alpha")) {
         variable_struct_set(global.timeline_cfg, "notebeam_beat_box_odd_alpha", 0.14);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_postplay_overlay_mode")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_postplay_overlay_mode", 1);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_enabled")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_enabled", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_log_interval_frames")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_log_interval_frames", 45);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_planned")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_planned", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_player")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_player", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_pending")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_pending", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_history")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_history", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_beat_boxes")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_beat_boxes", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_emb_boxes")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_emb_boxes", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_popup_hitboxes")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_popup_hitboxes", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_popup_draw")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_popup_draw", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_overlap_compare")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_diag_disable_overlap_compare", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_planned_min_visible_px")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_planned_min_visible_px", 1.0);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_planned_view_pad_px")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_planned_view_pad_px", 0.5);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_player_history_window_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_player_history_window_ms", 6000);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_live_player_color")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_live_player_color", make_color_rgb(78, 210, 255));
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_live_player_alpha")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_live_player_alpha", 0.96);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_history_window_pad_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_history_window_pad_ms", 250);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_visual_throttle_enabled")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_visual_throttle_enabled", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_visual_target_hz")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_visual_target_hz", 60);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_maintenance_enabled")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_maintenance_enabled", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_maintenance_budget_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_maintenance_budget_ms", 0.35);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_maintenance_stride_steps")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_maintenance_stride_steps", 1);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_prune_scan_per_tick")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_prune_scan_per_tick", 64);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_prune_compact_min_prefix")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_prune_compact_min_prefix", 128);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_prune_compact_interval_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_prune_compact_interval_ms", 750);
+    }
 
     return global.timeline_cfg;
 }
@@ -108,12 +186,23 @@ function gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2) {
     var panel_h = max(1, _y2 - _y1);
     var btn_h = clamp(round(panel_h * 0.30), 18, 56);
 
-    var btn_y1 = _y1 + floor((panel_h - btn_h) * 0.5);
-    var btn_y2 = min(_y2 - pad, btn_y1 + btn_h);
+    // Row 1: ghost toggle â€” centered in upper half, full width
+    var row1_cy = _y1 + floor(panel_h * 0.25);
+    var btn_y1 = max(_y1 + 2, row1_cy - floor(btn_h * 0.5));
+    var btn_y2 = min(_y2 - 2, btn_y1 + btn_h);
     if (btn_y2 <= btn_y1) btn_y2 = btn_y1 + 1;
 
+    // Row 2: overlay mode toggle â€” centered in lower half, ~48% width
+    var row2_cy = _y1 + floor(panel_h * 0.75);
+    var btn2_y1 = max(_y1 + 2, row2_cy - floor(btn_h * 0.5));
+    var btn2_y2 = min(_y2 - 2, btn2_y1 + btn_h);
+    if (btn2_y2 <= btn2_y1) btn2_y2 = btn2_y1 + 1;
+    var btn2_w = floor((right - left) * 0.48);
+    var btn2_x2 = left + btn2_w;
+
     return {
-        btn_toggle: [left, btn_y1, right, btn_y2]
+        btn_toggle:       [left, btn_y1,  right,    btn_y2],
+        btn_overlay_mode: [left, btn2_y1, btn2_x2,  btn2_y2]
     };
 }
 
@@ -136,6 +225,12 @@ function gv_is_gameviz_anchor(_inst) {
     if (!instance_exists(_inst)) return false;
     if (!variable_instance_exists(_inst, "ui_name")) return false;
     return string(variable_instance_get(_inst, "ui_name")) == "gameviz_canvas_anchor";
+}
+
+function gv_is_notebeam_anchor(_inst) {
+    if (!instance_exists(_inst)) return false;
+    if (!variable_instance_exists(_inst, "ui_name")) return false;
+    return string(variable_instance_get(_inst, "ui_name")) == "notebeam_canvas_anchor";
 }
 
 function gv_gameviz_draw_toggle_button(_rect, _label, _selected, _enabled = true) {
@@ -179,17 +274,39 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
 
     draw_set_font(fnt_setting);
     gv_gameviz_draw_toggle_button(layout.btn_toggle, label, ghost_mode, can_interact);
+
+    // Overlay mode button — only visible once playback is complete
+    var review_active = variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "playback_complete")
+        && global.timeline_state.playback_complete;
+    if (review_active) {
+        var cfg = gv_ensure_timeline_cfg_defaults();
+        var cur_mode = floor(real(cfg.notebeam_postplay_overlay_mode ?? 1));
+        var mode_labels = ["None", "History", "Planned", "Best M."];
+        var mode_label = (cur_mode >= 0 && cur_mode < array_length(mode_labels))
+            ? mode_labels[cur_mode] : "History";
+        gv_gameviz_draw_toggle_button(layout.btn_overlay_mode, mode_label, cur_mode > 0, true);
+    }
 }
 
 function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
     var layout = gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2);
-    if (!gv_gameviz_controls_can_interact()) return false;
 
     if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_toggle)) {
+        if (!gv_gameviz_controls_can_interact()) return false;
         var cfg = gv_ensure_timeline_cfg_defaults();
-
         var ghost_mode = gv_use_tune_ghost_parts();
         variable_struct_set(cfg, "tune_show_other_parts_ghost", !ghost_mode);
+        return true;
+    }
+
+    if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_overlay_mode)) {
+        if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+        if (!variable_struct_exists(global.timeline_state, "playback_complete")
+            || !global.timeline_state.playback_complete) return false;
+        var cfg = gv_ensure_timeline_cfg_defaults();
+        var cur_mode = floor(real(cfg.notebeam_postplay_overlay_mode ?? 1));
+        variable_struct_set(cfg, "notebeam_postplay_overlay_mode", (cur_mode + 1) mod 4);
         return true;
     }
 
@@ -211,19 +328,176 @@ function scr_gameviz_init_config() {
     gv_ensure_timeline_cfg_defaults();
 }
 
+function gv_timeline_run_maintenance(_now_ms) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+    if (!global.timeline_state.active) return;
+
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var maintenance_enabled = true;
+    if (variable_struct_exists(cfg, "notebeam_maintenance_enabled")) {
+        maintenance_enabled = bool(variable_struct_get(cfg, "notebeam_maintenance_enabled"));
+    }
+    if (!maintenance_enabled) return;
+
+    var stride = variable_struct_exists(cfg, "notebeam_maintenance_stride_steps")
+        ? max(1, floor(real(variable_struct_get(cfg, "notebeam_maintenance_stride_steps"))))
+        : 1;
+    if (!variable_struct_exists(global.timeline_state, "maintenance_tick_count")) {
+        global.timeline_state.maintenance_tick_count = 0;
+    }
+    global.timeline_state.maintenance_tick_count += 1;
+    if ((global.timeline_state.maintenance_tick_count mod stride) != 0) return;
+
+    var budget_ms = variable_struct_exists(cfg, "notebeam_maintenance_budget_ms")
+        ? max(0.05, real(variable_struct_get(cfg, "notebeam_maintenance_budget_ms")))
+        : 0.35;
+    var maintenance_start_ms = timing_get_engine_now_ms();
+
+    gv_timeline_prune_player_history_slice(_now_ms, budget_ms, maintenance_start_ms);
+}
+
+function gv_timeline_prune_player_history_slice(_now_ms, _budget_ms, _start_ms) {
+    if (!variable_struct_exists(global.timeline_state, "player_in") || !is_array(global.timeline_state.player_in)) return;
+
+    var hist = global.timeline_state.player_in;
+    var n_hist = array_length(hist);
+    if (n_hist <= 0) {
+        global.timeline_state.player_prune_cursor = 0;
+        return;
+    }
+
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var keep_window_ms = variable_struct_exists(cfg, "notebeam_player_history_window_ms")
+        ? max(1000, real(variable_struct_get(cfg, "notebeam_player_history_window_ms")))
+        : 12000;
+    var playhead_ms = real(global.timeline_state.playhead_ms ?? 0);
+    var trim_before_ms = playhead_ms - keep_window_ms;
+    var scan_limit = variable_struct_exists(cfg, "notebeam_prune_scan_per_tick")
+        ? max(8, floor(real(variable_struct_get(cfg, "notebeam_prune_scan_per_tick"))))
+        : 64;
+
+    var cursor = floor(real(global.timeline_state.player_prune_cursor ?? 0));
+    cursor = clamp(cursor, 0, n_hist);
+    var scanned = 0;
+
+    while (cursor < n_hist && scanned < scan_limit) {
+        if ((timing_get_engine_now_ms() - _start_ms) >= _budget_ms) break;
+
+        var old_s = hist[cursor];
+        if (!is_struct(old_s)) {
+            cursor += 1;
+            scanned += 1;
+            continue;
+        }
+
+        var old_end = real(old_s.end_ms ?? 0);
+        if (old_end >= trim_before_ms) break;
+
+        cursor += 1;
+        scanned += 1;
+    }
+
+    global.timeline_state.player_prune_cursor = cursor;
+
+    var compact_min_prefix = variable_struct_exists(cfg, "notebeam_prune_compact_min_prefix")
+        ? max(32, floor(real(variable_struct_get(cfg, "notebeam_prune_compact_min_prefix"))))
+        : 128;
+    var compact_interval_ms = variable_struct_exists(cfg, "notebeam_prune_compact_interval_ms")
+        ? max(100, real(variable_struct_get(cfg, "notebeam_prune_compact_interval_ms")))
+        : 750;
+    var last_compact_ms = real(global.timeline_state.player_prune_last_compact_ms ?? 0);
+    var should_compact = (cursor >= compact_min_prefix) && ((_now_ms - last_compact_ms) >= compact_interval_ms || cursor >= n_hist);
+    if (!should_compact) return;
+    if ((timing_get_engine_now_ms() - _start_ms) >= _budget_ms) return;
+
+    var new_n = n_hist - cursor;
+    if (new_n <= 0) {
+        global.timeline_state.player_in = [];
+        global.timeline_state.player_prune_cursor = 0;
+        global.timeline_state.player_prune_last_compact_ms = _now_ms;
+        return;
+    }
+
+    var new_hist = array_create(new_n);
+    for (var i = 0; i < new_n; i++) {
+        if ((timing_get_engine_now_ms() - _start_ms) >= _budget_ms) {
+            // Defer compaction if budget is exceeded mid-copy.
+            return;
+        }
+        new_hist[i] = hist[cursor + i];
+    }
+
+    global.timeline_state.player_in = new_hist;
+    global.timeline_state.player_prune_cursor = 0;
+    global.timeline_state.player_prune_last_compact_ms = _now_ms;
+}
+
+function gv_rt_budget_diag_record_visual_alignment_ms(_abs_delta_ms) {
+    if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN") && !global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN) return;
+
+    if (!variable_global_exists("rt_budget_visual_align_buf") || !is_array(global.rt_budget_visual_align_buf)) {
+        global.rt_budget_visual_align_buf = array_create(128, 0);
+        global.rt_budget_visual_align_head = 0;
+        global.rt_budget_visual_align_count = 0;
+        global.rt_budget_visual_diag_last_log_ms = timing_get_engine_now_ms();
+    }
+
+    var buf = global.rt_budget_visual_align_buf;
+    var n_buf = array_length(buf);
+    if (n_buf <= 0) return;
+
+    var head = floor(real(global.rt_budget_visual_align_head ?? 0));
+    head = ((head mod n_buf) + n_buf) mod n_buf;
+    buf[head] = abs(real(_abs_delta_ms));
+
+    global.rt_budget_visual_align_buf = buf;
+    global.rt_budget_visual_align_head = (head + 1) mod n_buf;
+    global.rt_budget_visual_align_count = min(n_buf, floor(real(global.rt_budget_visual_align_count ?? 0)) + 1);
+
+    var now_ms = timing_get_engine_now_ms();
+    var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
+    if ((now_ms - real(global.rt_budget_visual_diag_last_log_ms ?? 0)) < interval_ms) return;
+
+    var count = floor(real(global.rt_budget_visual_align_count ?? 0));
+    if (count < 8) return;
+
+    var vals = array_create(count, 0);
+    for (var i = 0; i < count; i++) {
+        vals[i] = real(buf[i]);
+    }
+    array_sort(vals, function(a, b) { return real(a) - real(b); });
+
+    var i50 = floor((count - 1) * 0.50);
+    var i95 = floor((count - 1) * 0.95);
+    var i99 = floor((count - 1) * 0.99);
+    var p50 = vals[i50];
+    var p95 = vals[i95];
+    var p99 = vals[i99];
+
+    show_debug_message("[RT_BUDGET] visual_vs_dispatch_abs_ms p50=" + string_format(p50, 0, 3)
+        + " p95=" + string_format(p95, 0, 3)
+        + " p99=" + string_format(p99, 0, 3)
+        + " n=" + string(count));
+
+    global.rt_budget_visual_diag_last_log_ms = now_ms;
+}
+
 // Shared timeline tick so playhead/review input still work when timeline is drawn
 // from RoomUI anchors without an obj_game_viz instance in the room.
 function gv_timeline_step_tick() {
     if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) return false;
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
 
+    var now_ms = timing_get_engine_now_ms();
+
     // Avoid duplicate processing when multiple instances call this in one frame.
     if (variable_global_exists("TIMELINE_STEP_LAST_MS")) {
-        if (real(global.TIMELINE_STEP_LAST_MS) == current_time) {
+        if (real(global.TIMELINE_STEP_LAST_MS) == now_ms) {
             return false;
         }
     }
-    global.TIMELINE_STEP_LAST_MS = current_time;
+    global.TIMELINE_STEP_LAST_MS = now_ms;
 
     var cfg = gv_ensure_timeline_cfg_defaults();
 
@@ -243,13 +517,22 @@ function gv_timeline_step_tick() {
     }
 
     if (variable_global_exists("tune_start_real")) {
-        global.timeline_state.playhead_ms = max(0, current_time - real(global.tune_start_real) - playhead_lag_ms);
+        global.timeline_state.playhead_ms = max(0, now_ms - real(global.tune_start_real) - playhead_lag_ms);
     } else {
         if (!variable_struct_exists(global.timeline_state, "start_clock_ms")) {
-            global.timeline_state.start_clock_ms = current_time;
+            global.timeline_state.start_clock_ms = now_ms;
         }
-        global.timeline_state.playhead_ms = max(0, current_time - real(global.timeline_state.start_clock_ms) - playhead_lag_ms);
+        global.timeline_state.playhead_ms = max(0, now_ms - real(global.timeline_state.start_clock_ms) - playhead_lag_ms);
     }
+
+    if (variable_struct_exists(global.timeline_state, "last_dispatched_expected_ms")) {
+        var last_dispatched_expected = max(0, real(global.timeline_state.last_dispatched_expected_ms));
+        var visual_unlagged = real(global.timeline_state.playhead_ms) + playhead_lag_ms;
+        gv_rt_budget_diag_record_visual_alignment_ms(visual_unlagged - last_dispatched_expected);
+    }
+
+    // Amortize non-critical timeline maintenance across steps.
+    gv_timeline_run_maintenance(now_ms);
 
     return true;
 }
@@ -312,6 +595,7 @@ function gv_build_planned_spans(_events) {
         var _eid = variable_struct_exists(e, "event_id") ? e.event_id : "";
         var _is_emb = variable_struct_exists(e, "is_embellishment") && e.is_embellishment;
         var _canonical = chanter_midi_to_canonical(_note, global.MIDI_chanter ?? "default", _ch);
+        var _lane_idx = gv_note_to_lane_index(_canonical, _note, _ch);
 
         var _k = gv_note_key(_ch, _note);
 
@@ -321,6 +605,7 @@ function gv_build_planned_spans(_events) {
                 note_midi: _note,
                 note_canonical: _canonical,
                 note_letter: chanter_canonical_to_display(_canonical),
+                lane_idx: _lane_idx,
                 is_embellishment: _is_emb,
                 channel: _ch,
                 measure: _measure,
@@ -354,6 +639,7 @@ function gv_build_planned_spans(_events) {
                 note_midi: _on2.note_midi,
                 note_canonical: _on2.note_canonical,
                 note_letter: _on2.note_letter,
+                lane_idx: real(_on2.lane_idx ?? -1),
                 is_embellishment: _on2.is_embellishment,
                 channel: _on2.channel,
                 measure: _on2.measure,
@@ -421,11 +707,21 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.player_in = [];
     global.timeline_state.pending_tune = {};
     global.timeline_state.pending_player = {};
+    // Two-buffer model: full-trace for complete post-play review, realtime buffer for fast draw
+    global.timeline_state.review_full_trace = [];
 
     global.timeline_state.planned_i0 = 0;
     global.timeline_state.planned_i1 = -1;
     global.timeline_state.planned_span_i0 = 0;
     global.timeline_state.planned_span_i1 = -1;
+    // Explicit window cursors for scalable active-window rendering.
+    global.timeline_state.planned_window_i0 = 0;
+    global.timeline_state.planned_window_i1 = -1;
+    global.timeline_state.player_window_i0 = 0;
+    global.timeline_state.player_window_i1 = -1;
+    global.timeline_state.player_prune_cursor = 0;
+    global.timeline_state.player_prune_last_compact_ms = timing_get_engine_now_ms();
+    global.timeline_state.maintenance_tick_count = 0;
     global.timeline_state.start_clock_ms = current_time;
     global.timeline_state.anchor_id = noone;
 
@@ -443,11 +739,14 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.playback_complete = false;
     global.timeline_state.review_mode = false;
     global.timeline_state.review_end_ms = _end_ms;
+    global.timeline_state.last_dispatched_expected_ms = 0;
     global.timeline_state.review_measure_offset = 0;
     global.timeline_state.review_buttons = [];
     global.timeline_state.review_history_runs = [];
     global.timeline_state.review_history_loaded = false;
     global.timeline_state.review_history_count = 0;
+    global.timeline_state.notebeam_player_hitboxes = [];
+    global.timeline_state.notebeam_note_popup = { visible: false };
 }
 
 
@@ -809,7 +1108,7 @@ function gv_build_emb_groups(_planned_spans) {
             continue;
         }
 
-        // No target found – seal group at last grace end.
+        // No target found â€“ seal group at last grace end.
         var ls = (last_emb_index >= 0) ? _planned_spans[last_emb_index] : s;
         array_push(groups, {
             window_start_ms: window_start,
@@ -1258,7 +1557,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     var part_gap_rows = 1;
 
     // Section grouping: every 2 rows (= 8 measures at 4-wide) is a repeat section,
-    // every 4 rows (= 16 measures) is a part (A→B) boundary.
+    // every 4 rows (= 16 measures) is a part (Aâ†’B) boundary.
     var section_rows    = 2;
     var repeat_sep_h    = max(2, floor(tile_h * 0.12));  // space between repeat groups
     var part_sep_h      = max(6, floor(tile_h * 0.30));  // space + line between tune parts
@@ -1266,7 +1565,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     var y_top = y1 + 2;
     var y_bottom = y2 - 2;
     // view_rows: conservative estimate accounting for separator overhead.
-    // Average separator overhead ≈ repeat_sep_h / section_rows per row.
+    // Average separator overhead â‰ˆ repeat_sep_h / section_rows per row.
     var _avg_sep_per_row = repeat_sep_h / section_rows;
     var view_rows = max(1, floor(((y_bottom - y_top) + row_gap) / (row_step + _avg_sep_per_row)));
 
@@ -1398,9 +1697,10 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
     var playhead_ms = real(global.timeline_state.playhead_ms ?? 0);
     var current_measure = gv_get_current_planned_measure(playhead_ms);
-    // No forced fallback — current_measure=-1 means pickup/pre-tune phase; no tile highlighted.
+    // No forced fallback â€” current_measure=-1 means pickup/pre-tune phase; no tile highlighted.
 
-    // Auto-scroll to keep the current measure in view during active playback.
+    // Keep the current measure visible during playback without snapping the
+    // panel back to center on every measure transition.
     if (!playback_complete && current_measure >= 1 && max_scroll > 0) {
         var ags_count = 0;
         var ags_target_row = -1;
@@ -1422,8 +1722,17 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             if (ags_pi < n_parts - 1) ags_count += part_gap_rows;
         }
         if (ags_target_row >= 0) {
-            scroll_row = clamp(max(0, ags_target_row - floor(view_rows / 2)), 0, max_scroll);
-            global.timeline_state.measure_nav_scroll_row = scroll_row;
+            var follow_margin = clamp(floor(view_rows * 0.25), 1, max(1, view_rows - 1));
+            var view_top = scroll_row + follow_margin;
+            var view_bottom = scroll_row + max(0, view_rows - 1 - follow_margin);
+
+            if (ags_target_row < view_top) {
+                scroll_row = clamp(ags_target_row - follow_margin, 0, max_scroll);
+                global.timeline_state.measure_nav_scroll_row = scroll_row;
+            } else if (ags_target_row > view_bottom) {
+                scroll_row = clamp(ags_target_row - max(0, view_rows - 1 - follow_margin), 0, max_scroll);
+                global.timeline_state.measure_nav_scroll_row = scroll_row;
+            }
         }
     }
 
@@ -1466,7 +1775,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                 var _line_y = row_y - floor(part_sep_h * 0.55);
                 if (_line_y > y_top && _line_y < y_bottom) {
                     var _line_cx = (content_x1 + x2) * 0.5;
-                    var _line_hw = tile_w;  // half-width = 1 tile → total line = 2 tiles wide
+                    var _line_hw = tile_w;  // half-width = 1 tile â†’ total line = 2 tiles wide
                     draw_set_alpha(ts_part_sep_alpha);
                     draw_set_color(ts_part_sep_color);
                     draw_line(_line_cx - _line_hw, _line_y, _line_cx + _line_hw, _line_y);
@@ -1612,6 +1921,174 @@ function gv_review_handle_click(_mx, _my) {
     }
 
     return false;
+}
+
+function gv_notebeam_note_label(_span) {
+    if (!is_struct(_span)) return "?";
+
+    var label = string(_span.note_letter ?? "");
+    if (string_length(label) > 0 && label != "?") return label;
+
+    if (variable_struct_exists(_span, "note_canonical")) {
+        label = chanter_canonical_to_display(string(_span.note_canonical));
+        if (string_length(label) > 0 && label != "?") return label;
+    }
+
+    if (variable_struct_exists(_span, "note_midi")) {
+        var channel = real(_span.channel ?? -1);
+        label = midi_to_letter(real(_span.note_midi), channel);
+        if (string_length(label) > 0 && label != "?") return label;
+        return gv_note_label_from_midi(real(_span.note_midi));
+    }
+
+    return "?";
+}
+
+function gv_find_best_planned_overlap(_planned_spans, _player_span) {
+    if (!is_array(_planned_spans) || !is_struct(_player_span)) return undefined;
+
+    var player_start = real(_player_span.start_ms ?? 0);
+    var player_end = max(player_start, real(_player_span.end_ms ?? player_start));
+    var player_lane = gv_note_to_lane_index(_player_span.note_canonical ?? "", _player_span.note_midi ?? -1, _player_span.channel ?? -1);
+    if (player_lane < 0) return undefined;
+
+    var best_span = undefined;
+    var best_overlap = 0;
+    var n = array_length(_planned_spans);
+    for (var i = 0; i < n; i++) {
+        var planned = _planned_spans[i];
+        if (!is_struct(planned)) continue;
+
+        var planned_lane = gv_note_to_lane_index(planned.note_canonical ?? "", planned.note_midi ?? -1, planned.channel ?? -1);
+        if (planned_lane != player_lane) continue;
+
+        var planned_start = real(planned.start_ms ?? 0);
+        var planned_end = max(planned_start, real(planned.end_ms ?? planned_start));
+        var overlap_ms = min(player_end, planned_end) - max(player_start, planned_start);
+        if (overlap_ms <= 0) continue;
+
+        if (is_undefined(best_span) || overlap_ms > best_overlap) {
+            best_span = planned;
+            best_overlap = overlap_ms;
+        }
+    }
+
+    return best_span;
+}
+
+function gv_handle_notebeam_click(_mx, _my, _x1, _y1, _x2, _y2) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "playback_complete") || !global.timeline_state.playback_complete) return false;
+
+    if (!variable_struct_exists(global.timeline_state, "notebeam_player_hitboxes")
+        || !is_array(global.timeline_state.notebeam_player_hitboxes)) {
+        global.timeline_state.notebeam_player_hitboxes = [];
+    }
+
+    var hits = global.timeline_state.notebeam_player_hitboxes;
+    var n_hits = array_length(hits);
+    for (var i = 0; i < n_hits; i++) {
+        var hit = hits[i];
+        if (!is_struct(hit)) continue;
+
+        var hx1 = real(hit.x1 ?? 0);
+        var hy1 = real(hit.y1 ?? 0);
+        var hx2 = real(hit.x2 ?? 0);
+        var hy2 = real(hit.y2 ?? 0);
+        if (_mx < hx1 || _mx > hx2 || _my < hy1 || _my > hy2) continue;
+
+        var player_span = hit.player_span;
+        if (!is_struct(player_span)) break;
+
+        var planned_span = undefined;
+        if (variable_struct_exists(global.timeline_state, "planned_spans") && is_array(global.timeline_state.planned_spans)) {
+            planned_span = gv_find_best_planned_overlap(global.timeline_state.planned_spans, player_span);
+        }
+
+        global.timeline_state.notebeam_note_popup = {
+            visible: true,
+            anchor_x: _mx,
+            anchor_y: _my,
+            player_span: player_span,
+            planned_span: planned_span
+        };
+        return true;
+    }
+
+    global.timeline_state.notebeam_note_popup = { visible: false };
+    return false;
+}
+
+function gv_draw_notebeam_note_popup(_canvas_x1, _canvas_y1, _canvas_x2, _canvas_y2) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+    if (!variable_struct_exists(global.timeline_state, "notebeam_note_popup") || !is_struct(global.timeline_state.notebeam_note_popup)) return;
+
+    var popup = global.timeline_state.notebeam_note_popup;
+    if (!variable_struct_exists(popup, "visible") || !popup.visible) return;
+
+    var player_span = popup.player_span;
+    if (!is_struct(player_span)) return;
+
+    var planned_span = variable_struct_exists(popup, "planned_span") ? popup.planned_span : undefined;
+    var player_label = gv_notebeam_note_label(player_span);
+    var player_start = floor(real(player_span.start_ms ?? 0));
+    var player_end = floor(real(player_span.end_ms ?? player_start));
+    var player_duration = max(0, player_end - player_start);
+
+    var line1 = "note: no overlap";
+    var line2 = "duration: --";
+    var line3 = "player dur.: " + string(player_duration) + " ms";
+    var line4 = "start/end: --";
+    var line5 = "player s/e: " + string(player_start) + " / " + string(player_end);
+    var has_planned = is_struct(planned_span);
+    if (has_planned) {
+        var planned_label = gv_notebeam_note_label(planned_span);
+        var planned_start = floor(real(variable_struct_exists(planned_span, "start_ms") ? variable_struct_get(planned_span, "start_ms") : 0));
+        var planned_end = floor(real(variable_struct_exists(planned_span, "end_ms") ? variable_struct_get(planned_span, "end_ms") : planned_start));
+        var planned_duration = max(0, planned_end - planned_start);
+        line1 = "note: " + planned_label + " (player " + player_label + ")";
+        line2 = "duration: " + string(planned_duration) + " ms";
+        line4 = "start/end: " + string(planned_start) + " / " + string(planned_end);
+    }
+
+    draw_set_font(fnt_setting);
+    var lines = [line1, line2, line3, line4, line5];
+    var text_scale = 0.5;
+    var text_w = 0;
+    var line_h = max(8, (string_height("Ag") * text_scale) + 2);
+    for (var i = 0; i < array_length(lines); i++) {
+        text_w = max(text_w, string_width(lines[i]) * text_scale);
+    }
+
+    var pad = 8;
+    var box_w = text_w + (pad * 2);
+    var box_h = (array_length(lines) * line_h) + (pad * 2);
+    var px1 = real(popup.anchor_x ?? ((_canvas_x1 + _canvas_x2) * 0.5)) + 12;
+    var py1 = real(popup.anchor_y ?? ((_canvas_y1 + _canvas_y2) * 0.5)) - box_h - 12;
+
+    if (py1 < (_canvas_y1 + 4)) {
+        py1 = real(popup.anchor_y ?? _canvas_y1) + 12;
+    }
+
+    px1 = clamp(px1, _canvas_x1 + 4, _canvas_x2 - box_w - 4);
+    py1 = clamp(py1, _canvas_y1 + 4, _canvas_y2 - box_h - 4);
+
+    var px2 = px1 + box_w;
+    var py2 = py1 + box_h;
+
+    draw_set_alpha(0.94);
+    draw_set_color(make_color_rgb(24, 24, 28));
+    draw_rectangle(px1, py1, px2, py2, false);
+    draw_set_alpha(1);
+    draw_set_color(make_color_rgb(210, 210, 216));
+    draw_rectangle(px1, py1, px2, py2, true);
+
+    draw_set_color(make_color_rgb(188, 188, 196));
+    draw_set_halign(fa_left);
+    draw_set_valign(fa_top);
+    for (var li = 0; li < array_length(lines); li++) {
+        draw_text_transformed(px1 + pad, py1 + pad + (li * line_h), lines[li], text_scale, text_scale, 0);
+    }
 }
 
 function gv_refresh_review_history_cache() {
@@ -1906,12 +2383,16 @@ function gv_player_span_timing_state(_planned_spans, _start_ms, _end_ms, _lane_i
         if (!is_struct(ps)) continue;
         if (!gv_is_tune_focus_channel(real(ps.channel ?? -999))) continue;
 
-        var lane = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+        var lane = real(ps.lane_idx ?? -999);
+        if (lane == -999) {
+            lane = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+        }
         if (lane != _lane_idx) continue;
 
         var b1 = min(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
         var b2 = max(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
 
+        if (b1 > a2 + slack) break; // planned_spans sorted by time; no later span can overlap
         // Must actually overlap
         if (b2 <= a1 || b1 >= a2) continue;
 
@@ -1942,11 +2423,15 @@ function gv_collect_lane_overlap_segments(_planned_spans, _start_ms, _end_ms, _l
         if (!is_struct(ps)) continue;
         if (!gv_is_tune_focus_channel(real(ps.channel ?? -999))) continue;
 
-        var lane = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+        var lane = real(ps.lane_idx ?? -999);
+        if (lane == -999) {
+            lane = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+        }
         if (lane != _lane_idx) continue;
 
         var b1 = min(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
         var b2 = max(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
+        if (b1 > a2) break; // planned_spans sorted by time; no later span can overlap
         if (b2 <= a1 || b1 >= a2) continue;
 
         var s = max(a1, b1);
@@ -2048,6 +2533,140 @@ function gv_draw_split_normal_player_beam(_planned_spans, _start_ms, _end_ms, _l
             draw_line_width(tl, _y, tr, _y, _line_width);
         }
     }
+}
+
+// Combined single-pass classify + draw for player spans.
+// Replaces separate calls to gv_player_span_timing_state + gv_draw_split_normal_player_beam.
+// Returns: 0=miss, 1=bleed, 2=match
+function gv_player_span_classify_and_draw(
+    _planned_spans, _start_ms, _end_ms, _lane_idx, _slack_ms,
+    _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead,
+    _y, _line_width, _match_color, _miss_color, _alpha) {
+
+    var a1 = min(real(_start_ms), real(_end_ms));
+    var a2 = max(real(_start_ms), real(_end_ms));
+    var miss_alpha = clamp(real(_alpha) * 0.72, 0, 1);
+
+    if (a2 <= a1 || !is_array(_planned_spans)) {
+        var fx1 = gv_time_to_x(a1, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var fx2 = gv_time_to_x(a2, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var fl = clamp(min(fx1, fx2), _x1, _x2);
+        var fr = clamp(max(fx1, fx2), _x1, _x2);
+        if (fr > fl) {
+            draw_set_alpha(miss_alpha);
+            draw_set_color(_miss_color);
+            draw_line_width(fl, _y, fr, _y, _line_width);
+        }
+        return 0;
+    }
+
+    var slack = max(0, real(_slack_ms));
+    var n = array_length(_planned_spans);
+    var overlaps = [];
+    var best_state = 0;
+
+    // Binary search: skip planned spans whose end is before the player window (minus slack)
+    var _bs_lo = 0; var _bs_hi = n; var _bs_thresh = a1 - slack;
+    while (_bs_lo < _bs_hi) {
+        var _bs_mid = (_bs_lo + _bs_hi) >> 1;
+        var _bs_sub = _planned_spans[_bs_mid];
+        if (max(real(_bs_sub.start_ms ?? 0), real(_bs_sub.end_ms ?? 0)) < _bs_thresh) _bs_lo = _bs_mid + 1;
+        else _bs_hi = _bs_mid;
+    }
+    for (var i = _bs_lo; i < n; i++) {
+        var ps = _planned_spans[i];
+        if (!is_struct(ps)) continue;
+        if (!gv_is_tune_focus_channel(real(ps.channel ?? -999))) continue;
+
+        var lane = real(ps.lane_idx ?? -999);
+        if (lane == -999) {
+            lane = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+        }
+        if (lane != _lane_idx) continue;
+
+        var b1 = min(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
+        var b2 = max(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
+
+        if (b1 > a2 + slack) break; // planned_spans sorted by time; no later span can overlap
+        if (b2 <= a1 || b1 >= a2) continue;
+
+        if (best_state < 2) {
+            if ((a1 >= b1 - slack) && (a2 <= b2 + slack)) {
+                best_state = 2;
+            } else {
+                best_state = max(best_state, 1);
+            }
+        }
+
+        var seg_s = max(a1, b1);
+        var seg_e = min(a2, b2);
+        if (seg_e > seg_s) {
+            array_push(overlaps, { start_ms: seg_s, end_ms: seg_e });
+        }
+    }
+
+    var n_ov = array_length(overlaps);
+    if (n_ov > 1) {
+        array_sort(overlaps, function(x, y) { return real(x.start_ms) - real(y.start_ms); });
+        var merged = [];
+        var cs = real(overlaps[0].start_ms);
+        var ce = real(overlaps[0].end_ms);
+        for (var mi = 1; mi < n_ov; mi++) {
+            var ms2 = real(overlaps[mi].start_ms);
+            var me2 = real(overlaps[mi].end_ms);
+            if (ms2 <= ce) { ce = max(ce, me2); }
+            else { array_push(merged, { start_ms: cs, end_ms: ce }); cs = ms2; ce = me2; }
+        }
+        array_push(merged, { start_ms: cs, end_ms: ce });
+        overlaps = merged;
+        n_ov = array_length(overlaps);
+    }
+
+    var cursor = a1;
+    for (var di = 0; di < n_ov; di++) {
+        var dseg = overlaps[di];
+        var ds = max(cursor, real(dseg.start_ms ?? cursor));
+        var de = min(a2, real(dseg.end_ms ?? ds));
+        if (de <= ds) continue;
+
+        if (ds > cursor) {
+            var mx1 = gv_time_to_x(cursor, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+            var mx2 = gv_time_to_x(ds, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+            var ml = clamp(min(mx1, mx2), _x1, _x2);
+            var mr = clamp(max(mx1, mx2), _x1, _x2);
+            if (mr > ml) {
+                draw_set_alpha(miss_alpha);
+                draw_set_color(_miss_color);
+                draw_line_width(ml, _y, mr, _y, _line_width);
+            }
+        }
+
+        var yx1 = gv_time_to_x(ds, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var yx2 = gv_time_to_x(de, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var yl = clamp(min(yx1, yx2), _x1, _x2);
+        var yr = clamp(max(yx1, yx2), _x1, _x2);
+        if (yr > yl) {
+            draw_set_alpha(_alpha);
+            draw_set_color(_match_color);
+            draw_line_width(yl, _y, yr, _y, _line_width);
+        }
+
+        cursor = max(cursor, de);
+    }
+
+    if (cursor < a2) {
+        var tx1 = gv_time_to_x(cursor, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var tx2 = gv_time_to_x(a2, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var tl = clamp(min(tx1, tx2), _x1, _x2);
+        var tr = clamp(max(tx1, tx2), _x1, _x2);
+        if (tr > tl) {
+            draw_set_alpha(miss_alpha);
+            draw_set_color(_miss_color);
+            draw_line_width(tl, _y, tr, _y, _line_width);
+        }
+    }
+
+    return best_state;
 }
 
 function gv_compact_note_label(_label) {
@@ -2162,7 +2781,7 @@ function gv_get_planned_sequence_for_measure(_measure, _max_notes = 24) {
                 seq += "}";
                 in_emb_group = false;
             }
-            seq += "…";
+            seq += "â€¦";
             break;
         }
     }
@@ -2332,13 +2951,15 @@ function gv_on_player_note_on(_note_midi, _channel, _time_ms, _velocity = 0, _no
 
     var key_note = (string_length(canonical) > 0) ? canonical : string(note);
     var key = gv_note_key(_channel, key_note);
+    var lane_idx_cached = gv_note_to_lane_index(canonical, note, _channel);
     global.timeline_state.pending_player[$ key] = {
         start_ms: real(_time_ms),
         note_midi: note,
         note_canonical: canonical,
         note_letter: chanter_canonical_to_display(canonical),
         channel: real(_channel),
-        velocity: real(_velocity)
+        velocity: real(_velocity),
+        lane_idx: lane_idx_cached
     };
 }
 
@@ -2532,7 +3153,8 @@ function gv_on_player_note_off(_note_midi, _channel, _time_ms, _note_canonical =
         global.timeline_state.player_in = [];
     }
 
-    array_push(global.timeline_state.player_in, {
+    var final_lane_idx = real(pending.lane_idx ?? gv_note_to_lane_index(final_canonical, note, _channel));
+    var full_span = {
         source: "player_midi_in",
         start_ms: start_ms,
         end_ms: end_ms,
@@ -2540,14 +3162,66 @@ function gv_on_player_note_off(_note_midi, _channel, _time_ms, _note_canonical =
         note_midi: note,
         note_canonical: final_canonical,
         note_letter: chanter_canonical_to_display(final_canonical),
-        channel: real(_channel)
-    });
+        channel: real(_channel),
+        lane_idx: final_lane_idx
+    };
+
+    array_push(global.timeline_state.player_in, full_span);
+    
+    // Invalidate surface cache when new spans are added (pending changes are visible)
+    if (variable_global_exists("player_surface_cache_valid")) {
+        global.player_surface_cache_valid = false;
+    }
+    
+    // Two-buffer: append lightweight trace record for complete post-play review
+    // (realtime player_in buffer is pruned aggressively for speed)
+    if (variable_struct_exists(global.timeline_state, "review_full_trace") && is_array(global.timeline_state.review_full_trace)) {
+        array_push(global.timeline_state.review_full_trace, {
+            channel: real(_channel),
+            note_canonical: final_canonical,
+            lane_idx: final_lane_idx,
+            start_ms: start_ms,
+            end_ms: end_ms
+        });
+    }
 }
 
-function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
-    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
-    var cfg = gv_ensure_timeline_cfg_defaults();
+// Surface-cache helpers are kept in this script so calls are always resolvable,
+// even if separate script assets are not registered in the project file yet.
+function gv_invalidate_player_surface_cache() {
+    if (variable_global_exists("player_surface_cache") && surface_exists(global.player_surface_cache)) {
+        surface_free(global.player_surface_cache);
+    }
+    global.player_surface_cache = noone;
+    global.player_surface_cache_valid = false;
+}
 
+function gv_ensure_player_surface_cache(_width, _height) {
+    if (surface_exists(global.player_surface_cache)) {
+        var surf_w = surface_get_width(global.player_surface_cache);
+        var surf_h = surface_get_height(global.player_surface_cache);
+        if (surf_w == _width && surf_h == _height) {
+            return global.player_surface_cache;
+        }
+        surface_free(global.player_surface_cache);
+    }
+
+    global.player_surface_cache = surface_create(_width, _height);
+    return global.player_surface_cache;
+}
+
+function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1, _ry1, _rx2, _ry2, _playhead_ms) {
+    if (!surface_exists(_surface)) return;
+
+    surface_set_target(_surface);
+    draw_clear_alpha(c_black, 0);
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) {
+        surface_reset_target();
+        return;
+    }
+
+    var cfg = gv_ensure_timeline_cfg_defaults();
     var t_min = _playhead_ms - global.timeline_state.ms_behind;
     var t_max = _playhead_ms + global.timeline_state.ms_ahead;
 
@@ -2596,7 +3270,6 @@ function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
 
             var s_start = real(s.start_ms ?? 0) + player_offset_ms;
             var s_end = real(s.end_ms ?? s_start) + player_offset_ms;
-
             if (s_end < t_min) continue;
             if (s_start > t_max) continue;
 
@@ -2613,9 +3286,7 @@ function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
             draw_set_alpha(1);
 
             if (rx - lx >= label_min_px) {
-                var label = variable_struct_exists(s, "note_letter")
-                    ? string(s.note_letter)
-                    : "";
+                var label = variable_struct_exists(s, "note_letter") ? string(s.note_letter) : "";
                 if ((label == "?" || string_length(label) <= 0) && variable_struct_exists(s, "note_canonical")) {
                     label = chanter_canonical_to_display(string(s.note_canonical));
                 }
@@ -2640,7 +3311,6 @@ function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
         }
     }
 
-    // Draw currently-held notes (note_on without note_off yet)
     if (variable_struct_exists(global.timeline_state, "pending_player") && is_struct(global.timeline_state.pending_player)) {
         var names = variable_struct_get_names(global.timeline_state.pending_player);
         for (var ni = 0; ni < array_length(names); ni++) {
@@ -2666,9 +3336,7 @@ function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
             draw_set_alpha(1);
 
             if (prx - plx >= label_min_px) {
-                var p_label = variable_struct_exists(p, "note_letter")
-                    ? string(p.note_letter)
-                    : "";
+                var p_label = variable_struct_exists(p, "note_letter") ? string(p.note_letter) : "";
                 if ((p_label == "?" || string_length(p_label) <= 0) && variable_struct_exists(p, "note_canonical")) {
                     p_label = chanter_canonical_to_display(string(p.note_canonical));
                 }
@@ -2689,6 +3357,126 @@ function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
                 draw_text_transformed(plx + 2, p_text_y, p_label, note_text_scale, note_text_scale, 0);
             }
         }
+    }
+
+    surface_reset_target();
+}
+
+function gv_blit_player_surface_cache(_surface, _screen_x1, _screen_y1) {
+    if (!surface_exists(_surface)) return false;
+
+    draw_set_color(c_white);
+    draw_set_alpha(1);
+    draw_surface(_surface, _screen_x1, _screen_y1);
+    return true;
+}
+
+function gv_invalidate_notebeam_live_player_surface_cache() {
+    if (variable_global_exists("notebeam_live_player_surface") && surface_exists(global.notebeam_live_player_surface)) {
+        surface_free(global.notebeam_live_player_surface);
+    }
+    global.notebeam_live_player_surface = noone;
+    global.notebeam_live_player_surface_valid = false;
+    global.notebeam_live_player_surface_last_span_count = -1;
+}
+
+function gv_ensure_notebeam_live_player_surface_cache(_width, _height) {
+    if (surface_exists(global.notebeam_live_player_surface)) {
+        var surf_w = surface_get_width(global.notebeam_live_player_surface);
+        var surf_h = surface_get_height(global.notebeam_live_player_surface);
+        if (surf_w == _width && surf_h == _height) {
+            return global.notebeam_live_player_surface;
+        }
+        surface_free(global.notebeam_live_player_surface);
+    }
+
+    global.notebeam_live_player_surface = surface_create(_width, _height);
+    return global.notebeam_live_player_surface;
+}
+
+function gv_render_notebeam_live_player_surface(_surface, _player_spans, _x1, _y1, _x2, _y2,
+    _playhead_ms, _t_min, _t_max, _player_offset_ms, _now_ratio, _ms_behind, _ms_ahead,
+    _lane_count, _lane_center_y, _lane_beam_w, _player_beam_color, _player_beam_alpha) {
+    if (!surface_exists(_surface)) return;
+    if (!is_array(_player_spans)) return;
+
+    var w = max(1, _x2 - _x1);
+    var h = max(1, _y2 - _y1);
+
+    surface_set_target(_surface);
+    draw_clear_alpha(c_black, 0);
+    draw_set_alpha(_player_beam_alpha);
+    draw_set_color(_player_beam_color);
+
+    var n_player = array_length(_player_spans);
+    var _qbs_raw_tmin = _t_min - _player_offset_ms;
+    var _qbs_lo = 0; var _qbs_hi = n_player;
+    while (_qbs_lo < _qbs_hi) {
+        var _qbs_mid = (_qbs_lo + _qbs_hi) >> 1;
+        if (real(_player_spans[_qbs_mid].end_ms ?? 0) < _qbs_raw_tmin) _qbs_lo = _qbs_mid + 1;
+        else _qbs_hi = _qbs_mid;
+    }
+
+    for (var j = _qbs_lo; j < n_player; j++) {
+        var ps2 = _player_spans[j];
+        if (!is_struct(ps2)) continue;
+        var q_start = real(ps2.start_ms ?? 0) + _player_offset_ms;
+        var q_end = real(ps2.end_ms ?? q_start) + _player_offset_ms;
+        if (q_start > _t_max) break;
+
+        var lane_idx2 = real(ps2.lane_idx ?? -999);
+        if (lane_idx2 == -999) {
+            lane_idx2 = gv_note_to_lane_index(ps2.note_canonical ?? "", ps2.note_midi ?? -1, ps2.channel ?? -1);
+        }
+        if (lane_idx2 < 0 || lane_idx2 >= _lane_count) continue;
+
+        var qx1 = gv_time_to_x(q_start, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var qx2 = gv_time_to_x(q_end, _playhead_ms, _x1, _x2, _now_ratio, _ms_behind, _ms_ahead);
+        var qlx = clamp(min(qx1, qx2), _x1, _x2) - _x1;
+        var qrx = clamp(max(qx1, qx2), _x1, _x2) - _x1;
+        if (qrx <= qlx) continue;
+
+        var qy = _lane_center_y[lane_idx2] - _y1;
+        var lane_beam_width2 = _lane_beam_w[lane_idx2];
+        qy = clamp(qy, 1, max(1, h - 1));
+
+        draw_line_width(qlx, qy, qrx, qy, lane_beam_width2);
+    }
+
+    draw_set_alpha(1);
+    surface_reset_target();
+}
+
+function gv_draw_player_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+
+    if (!variable_global_exists("player_surface_cache")) global.player_surface_cache = noone;
+    if (!variable_global_exists("player_surface_cache_valid")) global.player_surface_cache_valid = false;
+    if (!variable_global_exists("player_surface_cache_last_playhead_ms")) global.player_surface_cache_last_playhead_ms = -9999;
+    if (!variable_global_exists("player_surface_cache_invalidation_threshold_ms")) global.player_surface_cache_invalidation_threshold_ms = 200;
+    
+    var row_width = max(1, _rx2 - _rx1);
+    var row_height = max(1, _ry2 - _ry1);
+    
+    // Check if cache needs invalidation (playhead moved significantly)
+    var playhead_delta = abs(_playhead_ms - global.player_surface_cache_last_playhead_ms);
+    var needs_redraw = !global.player_surface_cache_valid 
+        || playhead_delta >= global.player_surface_cache_invalidation_threshold_ms;
+    
+    if (needs_redraw) {
+        // Render to surface (replaces full per-frame drawing logic)
+        var surf = gv_ensure_player_surface_cache(row_width, row_height);
+        gv_draw_player_row_to_surface(surf, row_width, row_height, _rx1, _ry1, _rx2, _ry2, _playhead_ms);
+        global.player_surface_cache_valid = true;
+        global.player_surface_cache_last_playhead_ms = _playhead_ms;
+    }
+    
+    // Fast blit cached surface to screen
+    if (surface_exists(global.player_surface_cache)) {
+        gv_blit_player_surface_cache(global.player_surface_cache, _rx1, _ry1);
+    } else {
+        // Fallback: surface invalid, redraw directly (safety)
+        gv_invalidate_player_surface_cache();
     }
 }
 
@@ -2894,7 +3682,8 @@ function gv_draw_notebeam_emb_group_boxes(_x1, _y1, _x2, _y2, _playhead_ms, _ms_
                 _using_lane_anchors, _lane_anchor_y, _lane_anchor_h,
                 _beam_width_px, _match_label_width, _match_label_width_scale,
                 _lane_flip, _use_label_lane_layout, _lane_top_spacer_ratio, _lane_top_spacer_px,
-                _lane_row_height_px, _lane_row_gap_px, _lane_y_offset_px
+                _lane_row_height_px, _lane_row_gap_px, _lane_y_offset_px,
+                false
             );
             if (!is_struct(lane_metrics)) continue;
 
@@ -3248,6 +4037,33 @@ function gv_draw_timeline_canvas(_x1, _y1, _x2, _y2) {
 
 function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) return;
+    gv_ensure_timeline_cfg_defaults();
+
+    var enabled = !variable_struct_exists(global.timeline_cfg, "notebeam_enabled") || global.timeline_cfg.notebeam_enabled;
+    if (!enabled) return;
+
+    var throttle_enabled = !variable_struct_exists(global.timeline_cfg, "notebeam_visual_throttle_enabled")
+        || global.timeline_cfg.notebeam_visual_throttle_enabled;
+    if (throttle_enabled) {
+        var target_hz = variable_struct_exists(global.timeline_cfg, "notebeam_visual_target_hz")
+            ? max(1, real(global.timeline_cfg.notebeam_visual_target_hz))
+            : 60;
+        var min_dt_ms = 1000.0 / target_hz;
+        if (!variable_global_exists("NOTEBEAM_THROTTLE_LAST_MS")) {
+            global.NOTEBEAM_THROTTLE_LAST_MS = -1;
+        }
+        var dt = current_time - real(global.NOTEBEAM_THROTTLE_LAST_MS);
+        if (global.NOTEBEAM_THROTTLE_LAST_MS >= 0 && dt < min_dt_ms) {
+            return;
+        }
+        global.NOTEBEAM_THROTTLE_LAST_MS = current_time;
+    }
+
+    gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2);
+}
+
+function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
+    if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) return;
 
     gv_ensure_timeline_cfg_defaults();
 
@@ -3261,10 +4077,64 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     if (x2 <= x1 || y2 <= y1) return;
 
     var is_active = variable_global_exists("timeline_state") && is_struct(global.timeline_state) && global.timeline_state.active;
-    if (is_active) {
-        // Keep notebeam motion alive when this canvas is drawn directly
-        // (without timeline canvas or object Step participation).
-        gv_timeline_step_tick();
+
+    var popup_clicks_enabled = variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "playback_complete")
+        && global.timeline_state.playback_complete;
+
+    var diag_enabled = variable_struct_exists(global.timeline_cfg, "notebeam_diag_enabled")
+        && global.timeline_cfg.notebeam_diag_enabled;
+    var diag_log_every = variable_struct_exists(global.timeline_cfg, "notebeam_diag_log_interval_frames")
+        ? max(1, floor(real(global.timeline_cfg.notebeam_diag_log_interval_frames)))
+        : 45;
+    var diag_disable_planned = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_planned")
+        && global.timeline_cfg.notebeam_diag_disable_planned;
+    var diag_disable_player = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_player")
+        && global.timeline_cfg.notebeam_diag_disable_player;
+    var diag_disable_pending = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_pending")
+        && global.timeline_cfg.notebeam_diag_disable_pending;
+    var diag_disable_history = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_history")
+        && global.timeline_cfg.notebeam_diag_disable_history;
+    var diag_disable_beat_boxes = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_beat_boxes")
+        && global.timeline_cfg.notebeam_diag_disable_beat_boxes;
+    var diag_disable_emb_boxes = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_emb_boxes")
+        && global.timeline_cfg.notebeam_diag_disable_emb_boxes;
+    var diag_disable_popup_hitboxes = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_popup_hitboxes")
+        && global.timeline_cfg.notebeam_diag_disable_popup_hitboxes;
+    var diag_disable_popup_draw = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_popup_draw")
+        && global.timeline_cfg.notebeam_diag_disable_popup_draw;
+    var diag_disable_overlap_compare = diag_enabled
+        && variable_struct_exists(global.timeline_cfg, "notebeam_diag_disable_overlap_compare")
+        && global.timeline_cfg.notebeam_diag_disable_overlap_compare;
+
+    if (diag_disable_popup_hitboxes) {
+        popup_clicks_enabled = false;
+    }
+
+    var diag_frame_start_us = diag_enabled ? get_timer() : 0;
+    var diag_ms_anchor_lookup = 0;
+    var diag_ms_overlap = 0;
+    var diag_ms_beat_boxes = 0;
+    var diag_ms_emb_boxes = 0;
+    var diag_ms_planned = 0;
+    var diag_ms_player = 0;
+    var diag_ms_pending = 0;
+    var diag_ms_history = 0;
+    var diag_ms_popup = 0;
+
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.notebeam_player_hitboxes = [];
+        if (!popup_clicks_enabled) {
+            global.timeline_state.notebeam_note_popup = { visible: false };
+        }
     }
 
     var base_now_ratio = variable_struct_exists(global.timeline_cfg, "now_ratio")
@@ -3315,6 +4185,7 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     var lane_anchor_y = array_create(lane_count, -1);
     var lane_anchor_h = array_create(lane_count, -1);
     var lane_anchor_found = 0;
+    var diag_anchor_start_us = diag_enabled ? get_timer() : 0;
     if (use_lane_anchors) {
         for (var lane_scan_idx = 0; lane_scan_idx < lane_count; lane_scan_idx++) {
             var anchor_name = gv_get_notebeam_anchor_name_for_lane(lane_scan_idx, lane_flip);
@@ -3328,6 +4199,9 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
             lane_anchor_found += 1;
         }
     }
+    if (diag_enabled) {
+        diag_ms_anchor_lookup = (get_timer() - diag_anchor_start_us) * 0.001;
+    }
     var using_lane_anchors = use_lane_anchors && (lane_anchor_found > 0);
 
     var notebeam_line_width = variable_struct_exists(global.timeline_cfg, "notebeam_line_width")
@@ -3336,6 +4210,30 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     var beam_width_px = notebeam_line_width;
     if (!using_lane_anchors && use_label_lane_layout && match_label_width) {
         beam_width_px = lane_row_height_px * match_label_width_scale;
+    }
+    var lane_center_y = array_create(lane_count, y1 + 1);
+    var lane_beam_w = array_create(lane_count, beam_width_px);
+    for (var lane_cfg_idx = 0; lane_cfg_idx < lane_count; lane_cfg_idx++) {
+        var lane_center = -1;
+        var lane_width = beam_width_px;
+        if (using_lane_anchors && lane_anchor_y[lane_cfg_idx] >= 0) {
+            lane_center = lane_anchor_y[lane_cfg_idx];
+            if (lane_anchor_h[lane_cfg_idx] > 0) {
+                lane_width = lane_anchor_h[lane_cfg_idx];
+            }
+        } else {
+            var lane_visual_idx_cfg = lane_flip ? (lane_count - 1 - lane_cfg_idx) : lane_cfg_idx;
+            lane_center = y1 + ((lane_visual_idx_cfg + 0.5) * lane_h);
+            if (use_label_lane_layout) {
+                var spacer_px_cfg = ((y2 - y1) * lane_top_spacer_ratio) + lane_top_spacer_px;
+                lane_center = y1 + spacer_px_cfg + lane_row_gap_px
+                    + (lane_visual_idx_cfg * (lane_row_height_px + lane_row_gap_px))
+                    + (lane_row_height_px * 0.5);
+            }
+        }
+        lane_center += lane_y_offset_px;
+        lane_center_y[lane_cfg_idx] = clamp(lane_center, y1 + 1, y2 - 1);
+        lane_beam_w[lane_cfg_idx] = lane_width;
     }
     var planned_beam_color = variable_struct_exists(global.timeline_cfg, "notebeam_planned_color")
         ? global.timeline_cfg.notebeam_planned_color
@@ -3349,6 +4247,12 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     var player_beam_alpha = variable_struct_exists(global.timeline_cfg, "notebeam_player_alpha")
         ? clamp(real(global.timeline_cfg.notebeam_player_alpha), 0, 1)
         : 0.88;
+    var live_player_beam_color = variable_struct_exists(global.timeline_cfg, "notebeam_live_player_color")
+        ? variable_struct_get(global.timeline_cfg, "notebeam_live_player_color")
+        : make_color_rgb(78, 210, 255);
+    var live_player_beam_alpha = variable_struct_exists(global.timeline_cfg, "notebeam_live_player_alpha")
+        ? clamp(real(variable_struct_get(global.timeline_cfg, "notebeam_live_player_alpha")), 0, 1)
+        : 0.96;
     var player_overlap_colorize = !variable_struct_exists(global.timeline_cfg, "notebeam_player_overlap_colorize")
         || global.timeline_cfg.notebeam_player_overlap_colorize;
     var compare_version = variable_struct_exists(global.timeline_cfg, "notebeam_compare_version")
@@ -3390,16 +4294,16 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
     var history_gap_band_active = false;
     var history_start_color = variable_struct_exists(global.timeline_cfg, "notebeam_history_start_color")
         ? global.timeline_cfg.notebeam_history_start_color
-        : make_color_rgb(176, 198, 208);
+        : make_color_rgb(255, 248, 153);
     var history_end_color = variable_struct_exists(global.timeline_cfg, "notebeam_history_end_color")
         ? global.timeline_cfg.notebeam_history_end_color
-        : make_color_rgb(238, 220, 150);
+        : make_color_rgb(255, 248, 153);
     var history_start_alpha = variable_struct_exists(global.timeline_cfg, "notebeam_history_start_alpha")
         ? clamp(real(global.timeline_cfg.notebeam_history_start_alpha), 0, 1)
         : 0.26;
     var history_end_alpha = variable_struct_exists(global.timeline_cfg, "notebeam_history_end_alpha")
         ? clamp(real(global.timeline_cfg.notebeam_history_end_alpha), 0, 1)
-        : 0.50;
+        : 0.72;
     var history_band_color = variable_struct_exists(global.timeline_cfg, "notebeam_history_band_color")
         ? global.timeline_cfg.notebeam_history_band_color
         : make_color_rgb(220, 220, 220);
@@ -3423,9 +4327,15 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
             && global.timeline_cfg.notebeam_review_split_beams;
         history_markers_enabled = review_mode_active
             && (!variable_struct_exists(global.timeline_cfg, "notebeam_history_enabled") || global.timeline_cfg.notebeam_history_enabled)
+            && !diag_disable_history
             && variable_struct_exists(global.timeline_state, "review_history_runs")
             && is_array(global.timeline_state.review_history_runs)
             && array_length(global.timeline_state.review_history_runs) > 0;
+            var postplay_overlay_mode = variable_struct_exists(global.timeline_cfg, "notebeam_postplay_overlay_mode")
+                ? floor(real(global.timeline_cfg.notebeam_postplay_overlay_mode))
+                : 1;
+            // Mode 0=none, 1=history, 2=planned, 3=best measure
+            if (postplay_overlay_mode != 1) history_markers_enabled = false;
         history_gap_band_active = history_markers_enabled && history_use_gap_band && !review_split_beams;
         history_run_count = history_markers_enabled
             ? array_length(global.timeline_state.review_history_runs)
@@ -3439,8 +4349,10 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
         if (variable_struct_exists(global.timeline_state, "planned_spans") && is_array(global.timeline_state.planned_spans)) {
             planned_spans = global.timeline_state.planned_spans;
         }
-        var can_compare_overlap = use_segmented_compare
+        var can_compare_overlap = review_mode_active
+            && use_segmented_compare
             && player_overlap_colorize
+            && !diag_disable_overlap_compare
             && is_array(planned_spans)
             && array_length(planned_spans) > 0
             && gv_planned_spans_have_focus_channel(planned_spans);
@@ -3452,10 +4364,12 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
         var player_emb_classify = undefined;
         if (use_embellishment_mode
             && can_compare_overlap
+            && review_mode_active
             && variable_struct_exists(global.timeline_state, "emb_groups")
             && is_array(global.timeline_state.emb_groups)
             && array_length(global.timeline_state.emb_groups) > 0) {
             use_emb_classify = true;
+            var diag_overlap_start_us = diag_enabled ? get_timer() : 0;
             player_emb_classify = gv_classify_player_spans_for_emb(
                 global.timeline_state.emb_groups,
                 variable_struct_exists(global.timeline_state, "player_in") ? global.timeline_state.player_in : [],
@@ -3463,35 +4377,79 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                 playhead_ms,
                 player_offset_ms
             );
+            if (diag_enabled) {
+                diag_ms_overlap += (get_timer() - diag_overlap_start_us) * 0.001;
+            }
         }
 
         // Draw alternating beat bands behind all beams, only in post-play review.
         if (review_mode_active) {
-            gv_draw_notebeam_beat_boxes(x1, y1, x2, y2, playhead_ms, ms_behind, ms_ahead, now_ratio);
+            if (!diag_disable_beat_boxes) {
+                var diag_beat_start_us = diag_enabled ? get_timer() : 0;
+                gv_draw_notebeam_beat_boxes(x1, y1, x2, y2, playhead_ms, ms_behind, ms_ahead, now_ratio);
+                if (diag_enabled) {
+                    diag_ms_beat_boxes += (get_timer() - diag_beat_start_us) * 0.001;
+                }
+            }
         }
 
-        gv_draw_notebeam_emb_group_boxes(
-            x1, y1, x2, y2, playhead_ms, ms_behind, ms_ahead, now_ratio,
-            lane_count, lane_h,
-            using_lane_anchors, lane_anchor_y, lane_anchor_h,
-            beam_width_px, match_label_width, match_label_width_scale,
-            lane_flip, use_label_lane_layout, lane_top_spacer_ratio, lane_top_spacer_px,
-            lane_row_height_px, lane_row_gap_px, lane_y_offset_px
-        );
+        if (!diag_disable_emb_boxes) {
+            var diag_emb_start_us = diag_enabled ? get_timer() : 0;
+            gv_draw_notebeam_emb_group_boxes(
+                x1, y1, x2, y2, playhead_ms, ms_behind, ms_ahead, now_ratio,
+                lane_count, lane_h,
+                using_lane_anchors, lane_anchor_y, lane_anchor_h,
+                beam_width_px, match_label_width, match_label_width_scale,
+                lane_flip, use_label_lane_layout, lane_top_spacer_ratio, lane_top_spacer_px,
+                lane_row_height_px, lane_row_gap_px, lane_y_offset_px
+            );
+            if (diag_enabled) {
+                diag_ms_emb_boxes += (get_timer() - diag_emb_start_us) * 0.001;
+            }
+        }
 
-        if (is_array(planned_spans) && array_length(planned_spans) > 0) {
+        if (!diag_disable_planned && is_array(planned_spans) && array_length(planned_spans) > 0) {
+            var diag_planned_start_us = diag_enabled ? get_timer() : 0;
             var ghost_parts_enabled = gv_use_tune_ghost_parts();
             var ghost_parts_alpha = gv_get_tune_other_parts_alpha();
             var planned_pass_count = ghost_parts_enabled ? 2 : 1;
+                var nb_target_ch = gv_get_target_tune_channel();
+            var planned_min_visible_px = variable_struct_exists(global.timeline_cfg, "notebeam_planned_min_visible_px")
+                ? max(0, real(global.timeline_cfg.notebeam_planned_min_visible_px))
+                : 1.0;
+            var planned_view_pad_px = variable_struct_exists(global.timeline_cfg, "notebeam_planned_view_pad_px")
+                ? max(0, real(global.timeline_cfg.notebeam_planned_view_pad_px))
+                : 0.5;
+            var planned_draw_x_min = x1 - planned_view_pad_px;
+            var planned_draw_x_max = x2 + planned_view_pad_px;
 
             var n_planned = array_length(planned_spans);
+            // Binary search: first planned span whose end reaches t_min
+            var _pbs_lo = 0; var _pbs_hi = n_planned;
+            while (_pbs_lo < _pbs_hi) {
+                var _pbs_mid = (_pbs_lo + _pbs_hi) >> 1;
+                var _pbs_sub = planned_spans[_pbs_mid];
+                if (max(real(_pbs_sub.start_ms ?? 0), real(_pbs_sub.end_ms ?? 0)) < t_min) _pbs_lo = _pbs_mid + 1;
+                else _pbs_hi = _pbs_mid;
+            }
+            var planned_first_i = _pbs_lo;
             for (var pass_planned = 0; pass_planned < planned_pass_count; pass_planned++) {
-                for (var i = 0; i < n_planned; i++) {
+                    var pass_alpha_scale = (ghost_parts_enabled && pass_planned == 0) ? ghost_parts_alpha : 1.0;
+                    draw_set_alpha(planned_beam_alpha * pass_alpha_scale);
+                    draw_set_color(planned_beam_color);
+                for (var i = planned_first_i; i < n_planned; i++) {
                     var ps = planned_spans[i];
                     if (!is_struct(ps)) continue;
 
-                    var planned_channel = real(ps.channel ?? -999);
-                    var vis_state = gv_get_tune_span_visibility_state(planned_channel);
+                    var planned_channel = floor(real(ps.channel ?? -999));
+                    var vis_state = 0;
+                    if (planned_channel >= 2 && planned_channel <= 5) {
+                        if (planned_channel == nb_target_ch) {
+                            vis_state = 2;
+                        } else if (ghost_parts_enabled) {
+                            vis_state = 1;
+                        }
+                    }
                     if (vis_state <= 0) continue;
 
                     if (ghost_parts_enabled) {
@@ -3503,36 +4461,28 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
 
                     var p_start = real(ps.start_ms ?? 0);
                     var p_end = real(ps.end_ms ?? p_start);
-                    if (p_end < t_min || p_start > t_max) continue;
+                    if (p_end < t_min) continue;       // span entirely left of viewport
+                    if (p_start > t_max) break;        // span (and all after) entirely right of viewport
 
-                    var lane_idx = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+                    var lane_idx = real(ps.lane_idx ?? -999);
+                    if (lane_idx == -999) {
+                        lane_idx = gv_note_to_lane_index(ps.note_canonical ?? "", ps.note_midi ?? -1, ps.channel ?? -1);
+                    }
                     if (lane_idx < 0 || lane_idx >= lane_count) continue;
 
                     var px1 = gv_time_to_x(p_start, playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead);
                     var px2 = gv_time_to_x(p_end, playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead);
-                    var plx = clamp(min(px1, px2), x1, x2);
-                    var prx = clamp(max(px1, px2), x1, x2);
-                    if (prx <= plx) continue;
+                    var px_left = min(px1, px2);
+                    var px_right = max(px1, px2);
+                    if (px_right < planned_draw_x_min) continue;
+                    if (px_left > planned_draw_x_max) break;
 
-                    var py = -1;
-                    var lane_beam_width = beam_width_px;
-                    if (using_lane_anchors && lane_anchor_y[lane_idx] >= 0) {
-                        py = lane_anchor_y[lane_idx];
-                        if (lane_anchor_h[lane_idx] > 0) {
-                            lane_beam_width = lane_anchor_h[lane_idx];
-                        }
-                    } else {
-                        var lane_visual_idx = lane_flip ? (lane_count - 1 - lane_idx) : lane_idx;
-                        py = y1 + ((lane_visual_idx + 0.5) * lane_h);
-                        if (use_label_lane_layout) {
-                            var spacer_px = ((y2 - y1) * lane_top_spacer_ratio) + lane_top_spacer_px;
-                            py = y1 + spacer_px + lane_row_gap_px
-                                + (lane_visual_idx * (lane_row_height_px + lane_row_gap_px))
-                                + (lane_row_height_px * 0.5);
-                        }
-                    }
-                    py += lane_y_offset_px;
-                    py = clamp(py, y1 + 1, y2 - 1);
+                    var plx = clamp(px_left, x1, x2);
+                    var prx = clamp(px_right, x1, x2);
+                    if ((prx - plx) < planned_min_visible_px) continue;
+
+                    var py = lane_center_y[lane_idx];
+                    var lane_beam_width = lane_beam_w[lane_idx];
 
                     var py_draw = py;
                     var lane_beam_draw_width = lane_beam_width;
@@ -3541,28 +4491,97 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                         lane_beam_draw_width = max(1, lane_beam_width * 0.5);
                     }
 
-                    var alpha_scale = (vis_state == 1) ? ghost_parts_alpha : 1;
-                    draw_set_alpha(planned_beam_alpha * alpha_scale);
-                    draw_set_color(planned_beam_color);
                     draw_line_width(plx, py_draw, prx, py_draw, lane_beam_draw_width);
                 }
             }
             draw_set_alpha(1);
+            if (diag_enabled) {
+                diag_ms_planned += (get_timer() - diag_planned_start_us) * 0.001;
+            }
         }
 
-        if (variable_struct_exists(global.timeline_state, "player_in") && is_array(global.timeline_state.player_in)) {
+        if (!diag_disable_player
+            && variable_struct_exists(global.timeline_state, "player_in")
+            && is_array(global.timeline_state.player_in)) {
+            var diag_player_start_us = diag_enabled ? get_timer() : 0;
             var player_spans = global.timeline_state.player_in;
-            draw_set_alpha(player_beam_alpha);
+            // In review mode, prefer review_full_trace: it preserves all completed notes
+            // without live pruning. Guard: emb_classify uses player_in indices, and popup
+            // hitboxes expect full span structs, so only switch when neither is active.
+            if (review_mode_active
+                && !use_emb_classify
+                && !popup_clicks_enabled
+                && variable_struct_exists(global.timeline_state, "review_full_trace")
+                && is_array(global.timeline_state.review_full_trace)
+                && array_length(global.timeline_state.review_full_trace) > 0) {
+                player_spans = global.timeline_state.review_full_trace;
+            }
+            var live_player_cache_ok = !review_mode_active
+                && !popup_clicks_enabled
+                && !can_compare_overlap
+                && !use_emb_classify;
 
-            var n_player = array_length(player_spans);
-            for (var j = 0; j < n_player; j++) {
-                var ps2 = player_spans[j];
-                if (!is_struct(ps2)) continue;
-                var q_start = real(ps2.start_ms ?? 0) + player_offset_ms;
-                var q_end = real(ps2.end_ms ?? q_start) + player_offset_ms;
-                if (q_end < t_min || q_start > t_max) continue;
+            if (!variable_global_exists("notebeam_live_player_surface")) global.notebeam_live_player_surface = noone;
+            if (!variable_global_exists("notebeam_live_player_surface_valid")) global.notebeam_live_player_surface_valid = false;
+            if (!variable_global_exists("notebeam_live_player_surface_last_playhead_ms")) global.notebeam_live_player_surface_last_playhead_ms = -9999;
+            if (!variable_global_exists("notebeam_live_player_surface_last_span_count")) global.notebeam_live_player_surface_last_span_count = -1;
+            if (!variable_global_exists("notebeam_live_player_surface_invalidation_threshold_ms")) global.notebeam_live_player_surface_invalidation_threshold_ms = 16;
 
-                var lane_idx2 = gv_note_to_lane_index(ps2.note_canonical ?? "", ps2.note_midi ?? -1, ps2.channel ?? -1);
+            if (live_player_cache_ok) {
+                var cache_w = max(1, x2 - x1);
+                var cache_h = max(1, y2 - y1);
+                var cache_span_count = array_length(player_spans);
+                var cache_playhead_delta = abs(playhead_ms - real(global.notebeam_live_player_surface_last_playhead_ms));
+                var cache_surface_missing = !surface_exists(global.notebeam_live_player_surface);
+                var cache_needs_redraw = cache_surface_missing
+                    || !global.notebeam_live_player_surface_valid
+                    || cache_span_count != floor(real(global.notebeam_live_player_surface_last_span_count))
+                    || cache_playhead_delta >= real(global.notebeam_live_player_surface_invalidation_threshold_ms);
+
+                if (cache_needs_redraw) {
+                    var live_surf = gv_ensure_notebeam_live_player_surface_cache(cache_w, cache_h);
+                    gv_render_notebeam_live_player_surface(
+                        live_surf,
+                        player_spans,
+                        x1, y1, x2, y2,
+                        playhead_ms, t_min, t_max, player_offset_ms, now_ratio, ms_behind, ms_ahead,
+                        lane_count, lane_center_y, lane_beam_w,
+                        live_player_beam_color, live_player_beam_alpha
+                    );
+                    global.notebeam_live_player_surface_valid = true;
+                    global.notebeam_live_player_surface_last_playhead_ms = playhead_ms;
+                    global.notebeam_live_player_surface_last_span_count = cache_span_count;
+                }
+
+                if (surface_exists(global.notebeam_live_player_surface)) {
+                    draw_set_color(c_white);
+                    draw_set_alpha(1);
+                    draw_surface(global.notebeam_live_player_surface, x1, y1);
+                }
+            } else {
+                draw_set_alpha(player_beam_alpha);
+
+                var n_player = array_length(player_spans);
+                // Binary search: skip player spans that completed before t_min
+                var _qbs_raw_tmin = t_min - player_offset_ms;
+                var _qbs_lo = 0; var _qbs_hi = n_player;
+                while (_qbs_lo < _qbs_hi) {
+                    var _qbs_mid = (_qbs_lo + _qbs_hi) >> 1;
+                    if (real(player_spans[_qbs_mid].end_ms ?? 0) < _qbs_raw_tmin) _qbs_lo = _qbs_mid + 1;
+                    else _qbs_hi = _qbs_mid;
+                }
+                var player_first_j = _qbs_lo;
+                for (var j = player_first_j; j < n_player; j++) {
+                    var ps2 = player_spans[j];
+                    if (!is_struct(ps2)) continue;
+                    var q_start = real(ps2.start_ms ?? 0) + player_offset_ms;
+                    var q_end = real(ps2.end_ms ?? q_start) + player_offset_ms;
+                    if (q_start > t_max) break; // player_in is time-sorted; all later spans are future
+
+                var lane_idx2 = real(ps2.lane_idx ?? -999);
+                if (lane_idx2 == -999) {
+                    lane_idx2 = gv_note_to_lane_index(ps2.note_canonical ?? "", ps2.note_midi ?? -1, ps2.channel ?? -1);
+                }
                 if (lane_idx2 < 0 || lane_idx2 >= lane_count) continue;
 
                 var qx1 = gv_time_to_x(q_start, playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead);
@@ -3571,25 +4590,8 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                 var qrx = clamp(max(qx1, qx2), x1, x2);
                 if (qrx <= qlx) continue;
 
-                var qy = -1;
-                var lane_beam_width2 = beam_width_px;
-                if (using_lane_anchors && lane_anchor_y[lane_idx2] >= 0) {
-                    qy = lane_anchor_y[lane_idx2];
-                    if (lane_anchor_h[lane_idx2] > 0) {
-                        lane_beam_width2 = lane_anchor_h[lane_idx2];
-                    }
-                } else {
-                    var lane_visual_idx2 = lane_flip ? (lane_count - 1 - lane_idx2) : lane_idx2;
-                    qy = y1 + ((lane_visual_idx2 + 0.5) * lane_h);
-                    if (use_label_lane_layout) {
-                        var spacer_px2 = ((y2 - y1) * lane_top_spacer_ratio) + lane_top_spacer_px;
-                        qy = y1 + spacer_px2 + lane_row_gap_px
-                            + (lane_visual_idx2 * (lane_row_height_px + lane_row_gap_px))
-                            + (lane_row_height_px * 0.5);
-                    }
-                }
-                qy += lane_y_offset_px;
-                qy = clamp(qy, y1 + 1, y2 - 1);
+                var qy = lane_center_y[lane_idx2];
+                var lane_beam_width2 = lane_beam_w[lane_idx2];
 
                 var qy_draw = qy;
                 var lane_beam_draw_width2 = lane_beam_width2;
@@ -3614,20 +4616,15 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                     draw_set_color(player_beam_emb_match_color);
                     draw_line_width(qlx, qy_draw, qrx, qy_draw, lane_beam_draw_width2);
                 } else {
-                    var player_tstate = can_compare_overlap
-                        ? gv_player_span_timing_state(planned_spans, q_start, q_end, lane_idx2, player_timing_slack_ms)
-                        : -1;
                     if (can_compare_overlap) {
-                        if (player_tstate == 2) overlap_match_count += 1;
-                        else if (player_tstate == 1) overlap_bleed_count += 1;
-                        else overlap_miss_count += 1;
-                    }
-                    if (can_compare_overlap) {
-                        gv_draw_split_normal_player_beam(
-                            planned_spans, q_start, q_end, lane_idx2,
+                        var player_tstate = gv_player_span_classify_and_draw(
+                            planned_spans, q_start, q_end, lane_idx2, player_timing_slack_ms,
                             playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead,
                             qy_draw, lane_beam_draw_width2, player_beam_segment_match_color, player_beam_miss_color, player_beam_alpha
                         );
+                        if (player_tstate == 2) overlap_match_count += 1;
+                        else if (player_tstate == 1) overlap_bleed_count += 1;
+                        else overlap_miss_count += 1;
                     } else {
                         draw_set_alpha(player_beam_alpha);
                         draw_set_color(player_beam_color);
@@ -3635,11 +4632,30 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                     }
                 }
                 draw_set_alpha(player_beam_alpha);
+
+                    if (popup_clicks_enabled) {
+                        var hit_pad_y = max(4, lane_beam_draw_width2 * 0.5);
+                        array_push(global.timeline_state.notebeam_player_hitboxes, {
+                            x1: qlx,
+                            y1: max(y1, qy_draw - hit_pad_y),
+                            x2: qrx,
+                            y2: min(y2, qy_draw + hit_pad_y),
+                            player_span: ps2
+                        });
+                    }
+                }
+                draw_set_alpha(1);
             }
-            draw_set_alpha(1);
+
+            if (diag_enabled) {
+                diag_ms_player += (get_timer() - diag_player_start_us) * 0.001;
+            }
         }
 
-        if (variable_struct_exists(global.timeline_state, "pending_player") && is_struct(global.timeline_state.pending_player)) {
+        if (!diag_disable_pending
+            && variable_struct_exists(global.timeline_state, "pending_player")
+            && is_struct(global.timeline_state.pending_player)) {
+            var diag_pending_start_us = diag_enabled ? get_timer() : 0;
             var pending_keys = variable_struct_get_names(global.timeline_state.pending_player);
             if (is_array(pending_keys) && array_length(pending_keys) > 0) {
                 draw_set_alpha(player_beam_alpha);
@@ -3654,7 +4670,10 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                     var r_end = max(r_start, playhead_ms + player_offset_ms);
                     if (r_end < t_min || r_start > t_max) continue;
 
-                    var lane_idx3 = gv_note_to_lane_index(pp.note_canonical ?? "", pp.note_midi ?? -1, pp.channel ?? -1);
+                    var lane_idx3 = real(pp.lane_idx ?? -999);
+                    if (lane_idx3 == -999) {
+                        lane_idx3 = gv_note_to_lane_index(pp.note_canonical ?? "", pp.note_midi ?? -1, pp.channel ?? -1);
+                    }
                     if (lane_idx3 < 0 || lane_idx3 >= lane_count) continue;
 
                     var rx1 = gv_time_to_x(r_start, playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead);
@@ -3663,25 +4682,8 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                     var rrx = clamp(max(rx1, rx2), x1, x2);
                     if (rrx <= rlx) continue;
 
-                    var ry = -1;
-                    var lane_beam_width3 = beam_width_px;
-                    if (using_lane_anchors && lane_anchor_y[lane_idx3] >= 0) {
-                        ry = lane_anchor_y[lane_idx3];
-                        if (lane_anchor_h[lane_idx3] > 0) {
-                            lane_beam_width3 = lane_anchor_h[lane_idx3];
-                        }
-                    } else {
-                        var lane_visual_idx3 = lane_flip ? (lane_count - 1 - lane_idx3) : lane_idx3;
-                        ry = y1 + ((lane_visual_idx3 + 0.5) * lane_h);
-                        if (use_label_lane_layout) {
-                            var spacer_px3 = ((y2 - y1) * lane_top_spacer_ratio) + lane_top_spacer_px;
-                            ry = y1 + spacer_px3 + lane_row_gap_px
-                                + (lane_visual_idx3 * (lane_row_height_px + lane_row_gap_px))
-                                + (lane_row_height_px * 0.5);
-                        }
-                    }
-                    ry += lane_y_offset_px;
-                    ry = clamp(ry, y1 + 1, y2 - 1);
+                    var ry = lane_center_y[lane_idx3];
+                    var lane_beam_width3 = lane_beam_w[lane_idx3];
 
                     var ry_draw = ry;
                     var lane_beam_draw_width3 = lane_beam_width3;
@@ -3708,20 +4710,15 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
                         draw_set_color(player_beam_emb_match_color);
                         draw_line_width(rlx, ry_draw, rrx, ry_draw, lane_beam_draw_width3);
                     } else {
-                        var pending_tstate = can_compare_overlap
-                            ? gv_player_span_timing_state(planned_spans, r_start, r_end, lane_idx3, player_timing_slack_ms)
-                            : -1;
                         if (can_compare_overlap) {
-                            if (pending_tstate == 2) overlap_match_count += 1;
-                            else if (pending_tstate == 1) overlap_bleed_count += 1;
-                            else overlap_miss_count += 1;
-                        }
-                        if (can_compare_overlap) {
-                            gv_draw_split_normal_player_beam(
-                                planned_spans, r_start, r_end, lane_idx3,
+                            var pending_tstate = gv_player_span_classify_and_draw(
+                                planned_spans, r_start, r_end, lane_idx3, player_timing_slack_ms,
                                 playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead,
                                 ry_draw, lane_beam_draw_width3, player_beam_segment_match_color, player_beam_miss_color, player_beam_alpha
                             );
+                            if (pending_tstate == 2) overlap_match_count += 1;
+                            else if (pending_tstate == 1) overlap_bleed_count += 1;
+                            else overlap_miss_count += 1;
                         } else {
                             draw_set_alpha(player_beam_alpha);
                             draw_set_color(player_beam_color);
@@ -3733,11 +4730,20 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
 
                 draw_set_alpha(1);
             }
+            if (diag_enabled) {
+                diag_ms_pending += (get_timer() - diag_pending_start_us) * 0.001;
+            }
         }
 
+        var diag_history_start_us = diag_enabled ? get_timer() : 0;
         if (history_markers_enabled) {
             var history_runs = global.timeline_state.review_history_runs;
             var n_history_runs = array_length(history_runs);
+            var history_pad_ms = variable_struct_exists(global.timeline_cfg, "notebeam_history_window_pad_ms")
+                ? max(0, real(variable_struct_get(global.timeline_cfg, "notebeam_history_window_pad_ms")))
+                : 250;
+            var history_raw_min = t_min - player_offset_ms - history_pad_ms;
+            var history_raw_max = t_max - player_offset_ms + history_pad_ms;
                 // Background band across the bottom half of every lane
                 draw_set_alpha(history_band_alpha);
                 draw_set_color(history_band_color);
@@ -3771,12 +4777,27 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
 
                 var history_spans = history_run.player_spans;
                 var n_history_spans = array_length(history_spans);
-                for (var hs = 0; hs < n_history_spans; hs++) {
+                var hs_lo = 0;
+                var hs_hi = n_history_spans;
+                while (hs_lo < hs_hi) {
+                    var hs_mid = (hs_lo + hs_hi) >> 1;
+                    var hs_span = history_spans[hs_mid];
+                    if (!is_struct(hs_span)) {
+                        hs_lo = hs_mid + 1;
+                        continue;
+                    }
+                    var hs_end = max(real(hs_span.start_ms ?? 0), real(hs_span.end_ms ?? 0));
+                    if (hs_end < history_raw_min) hs_lo = hs_mid + 1;
+                    else hs_hi = hs_mid;
+                }
+
+                for (var hs = hs_lo; hs < n_history_spans; hs++) {
                     var hspan = history_spans[hs];
                     if (!is_struct(hspan)) continue;
 
                     var h_start_raw = real(hspan.start_ms ?? 0);
                     var h_end_raw = real(hspan.end_ms ?? h_start_raw);
+                    if (h_start_raw > history_raw_max) break;
                     var h_start = h_start_raw + player_offset_ms;
                     var h_end = max(h_start, h_end_raw + player_offset_ms);
                     if (h_end < t_min || h_start > t_max) continue;
@@ -3815,7 +4836,77 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
 
             draw_set_alpha(1);
         }
+        else if (review_mode_active && postplay_overlay_mode == 2) {
+            // Mode 2: Planned notes â€” render planned spans in the history sub-row
+            var _pov_n = array_length(planned_spans);
+            for (var _pov_i = 0; _pov_i < _pov_n; _pov_i++) {
+                var _pov_span = planned_spans[_pov_i];
+                if (!is_struct(_pov_span)) continue;
+                var _pov_ch = real(_pov_span.channel ?? -1);
+                if (!gv_is_tune_focus_channel(_pov_ch)) continue;
+                var _pov_start = real(_pov_span.start_ms ?? 0);
+                var _pov_end   = real(_pov_span.end_ms ?? _pov_start);
+                if (_pov_end < t_min || _pov_start > t_max) continue;
+                var _pov_note  = real(_pov_span.note_midi ?? -1);
+                var _pov_canon = _pov_span.note_canonical ?? "";
+                var _pov_lane  = gv_note_to_lane_index(_pov_canon, _pov_note, _pov_ch);
+                if (_pov_lane < 0 || _pov_lane >= lane_count) continue;
+                var _pov_m = gv_get_notebeam_lane_metrics(
+                    _pov_lane, lane_count, y1, y2, lane_h,
+                    using_lane_anchors, lane_anchor_y, lane_anchor_h,
+                    beam_width_px, match_label_width, match_label_width_scale,
+                    lane_flip, use_label_lane_layout, lane_top_spacer_ratio, lane_top_spacer_px,
+                    lane_row_height_px, lane_row_gap_px, lane_y_offset_px, false
+                );
+                if (!is_struct(_pov_m)) continue;
+                var _pov_x1 = clamp(gv_time_to_x(_pov_start, playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead), x1, x2);
+                var _pov_x2 = clamp(gv_time_to_x(_pov_end,   playhead_ms, x1, x2, now_ratio, ms_behind, ms_ahead), x1, x2);
+                var _pov_lx = clamp(min(_pov_x1, _pov_x2), x1, x2);
+                var _pov_rx = clamp(max(_pov_x1, _pov_x2), x1, x2);
+                if (_pov_rx <= _pov_lx) continue;
+                var _pov_y1 = clamp(real(_pov_m.history_y1), y1 + 1, y2 - 1);
+                var _pov_y2 = clamp(real(_pov_m.history_y2), y1 + 1, y2 - 1);
+                if (_pov_y2 < _pov_y1) _pov_y2 = _pov_y1;
+                var _pov_mid_y = clamp(real(_pov_m.history_mid_y), y1 + 1, y2 - 1);
+                var _pov_w = max(1, _pov_y2 - _pov_y1);
+                draw_set_alpha(history_end_alpha);
+                draw_set_color(history_end_color);
+                draw_line_width(_pov_lx, _pov_mid_y, _pov_rx, _pov_mid_y, _pov_w);
+            }
+            draw_set_alpha(1);
+        }
+        else if (review_mode_active && postplay_overlay_mode == 3) {
+            // Mode 3: Best measure â€” placeholder label only
+            var _bm_text_y = -1;
+            for (var _bm_bl = 0; _bm_bl < lane_count; _bm_bl++) {
+                var _bm_band = gv_get_notebeam_lane_metrics(
+                    _bm_bl, lane_count, y1, y2, lane_h,
+                    using_lane_anchors, lane_anchor_y, lane_anchor_h,
+                    beam_width_px, match_label_width, match_label_width_scale,
+                    lane_flip, use_label_lane_layout, lane_top_spacer_ratio, lane_top_spacer_px,
+                    lane_row_height_px, lane_row_gap_px, lane_y_offset_px, false
+                );
+                if (!is_struct(_bm_band)) continue;
+                var _bm_by1 = clamp(real(_bm_band.history_y1), y1, y2);
+                var _bm_by2 = clamp(real(_bm_band.history_y2), y1, y2);
+                if (_bm_by2 > _bm_by1 && _bm_text_y < 0) _bm_text_y = (_bm_by1 + _bm_by2) * 0.5;
+            }
+            draw_set_alpha(0.55);
+            draw_set_color(history_end_color);
+            draw_set_font(fnt_setting);
+            draw_set_halign(fa_center);
+            draw_set_valign(fa_middle);
+            if (_bm_text_y < 0) _bm_text_y = (y1 + y2) * 0.5;
+            draw_text((x1 + x2) * 0.5, _bm_text_y, "Best measure: N/A");
+            draw_set_halign(fa_left);
+            draw_set_valign(fa_top);
+            draw_set_alpha(1);
+        }
+        if (diag_enabled) {
+            diag_ms_history += (get_timer() - diag_history_start_us) * 0.001;
+        }
     }
+
 
     var show_outline = variable_struct_exists(global.timeline_cfg, "notebeam_show_debug_outline")
         && global.timeline_cfg.notebeam_show_debug_outline;
@@ -3901,6 +4992,81 @@ function gv_draw_notebeam_canvas(_x1, _y1, _x2, _y2) {
 
         draw_set_color(now_line_color);
         draw_line_width(now_x, y1, now_x, y2, now_line_width);
+    }
+
+    if (!diag_disable_popup_draw) {
+        var diag_popup_start_us = diag_enabled ? get_timer() : 0;
+        gv_draw_notebeam_note_popup(x1, y1, x2, y2);
+        if (diag_enabled) {
+            diag_ms_popup += (get_timer() - diag_popup_start_us) * 0.001;
+        }
+    }
+
+    if (diag_enabled) {
+        var diag_total_ms = (get_timer() - diag_frame_start_us) * 0.001;
+        if (!variable_global_exists("NOTEBEAM_DIAG") || !is_struct(global.NOTEBEAM_DIAG)) {
+            global.NOTEBEAM_DIAG = {
+                frames: 0,
+                sum_total_ms: 0,
+                max_total_ms: 0,
+                sum_anchor_ms: 0,
+                sum_overlap_ms: 0,
+                sum_beat_ms: 0,
+                sum_emb_ms: 0,
+                sum_planned_ms: 0,
+                sum_player_ms: 0,
+                sum_pending_ms: 0,
+                sum_history_ms: 0,
+                sum_popup_ms: 0
+            };
+        }
+
+        global.NOTEBEAM_DIAG.frames += 1;
+        global.NOTEBEAM_DIAG.sum_total_ms += diag_total_ms;
+        global.NOTEBEAM_DIAG.max_total_ms = max(global.NOTEBEAM_DIAG.max_total_ms, diag_total_ms);
+        global.NOTEBEAM_DIAG.sum_anchor_ms += diag_ms_anchor_lookup;
+        global.NOTEBEAM_DIAG.sum_overlap_ms += diag_ms_overlap;
+        global.NOTEBEAM_DIAG.sum_beat_ms += diag_ms_beat_boxes;
+        global.NOTEBEAM_DIAG.sum_emb_ms += diag_ms_emb_boxes;
+        global.NOTEBEAM_DIAG.sum_planned_ms += diag_ms_planned;
+        global.NOTEBEAM_DIAG.sum_player_ms += diag_ms_player;
+        global.NOTEBEAM_DIAG.sum_pending_ms += diag_ms_pending;
+        global.NOTEBEAM_DIAG.sum_history_ms += diag_ms_history;
+        global.NOTEBEAM_DIAG.sum_popup_ms += diag_ms_popup;
+
+        if (global.NOTEBEAM_DIAG.frames >= diag_log_every) {
+            var diag_frames = max(1, global.NOTEBEAM_DIAG.frames);
+            show_debug_message("[NB_DIAG] avg=" + string_format(global.NOTEBEAM_DIAG.sum_total_ms / diag_frames, 0, 3)
+                + "ms max=" + string_format(global.NOTEBEAM_DIAG.max_total_ms, 0, 3)
+                + " anchor=" + string_format(global.NOTEBEAM_DIAG.sum_anchor_ms / diag_frames, 0, 3)
+                + " overlap=" + string_format(global.NOTEBEAM_DIAG.sum_overlap_ms / diag_frames, 0, 3)
+                + " beat=" + string_format(global.NOTEBEAM_DIAG.sum_beat_ms / diag_frames, 0, 3)
+                + " emb=" + string_format(global.NOTEBEAM_DIAG.sum_emb_ms / diag_frames, 0, 3)
+                + " planned=" + string_format(global.NOTEBEAM_DIAG.sum_planned_ms / diag_frames, 0, 3)
+                + " player=" + string_format(global.NOTEBEAM_DIAG.sum_player_ms / diag_frames, 0, 3)
+                + " pending=" + string_format(global.NOTEBEAM_DIAG.sum_pending_ms / diag_frames, 0, 3)
+                + " history=" + string_format(global.NOTEBEAM_DIAG.sum_history_ms / diag_frames, 0, 3)
+                + " popup=" + string_format(global.NOTEBEAM_DIAG.sum_popup_ms / diag_frames, 0, 3)
+                + " off=[P" + string(diag_disable_planned)
+                + " R" + string(diag_disable_player)
+                + " H" + string(diag_disable_history)
+                + " E" + string(diag_disable_emb_boxes)
+                + " O" + string(diag_disable_overlap_compare)
+                + "]");
+
+            global.NOTEBEAM_DIAG.frames = 0;
+            global.NOTEBEAM_DIAG.sum_total_ms = 0;
+            global.NOTEBEAM_DIAG.max_total_ms = 0;
+            global.NOTEBEAM_DIAG.sum_anchor_ms = 0;
+            global.NOTEBEAM_DIAG.sum_overlap_ms = 0;
+            global.NOTEBEAM_DIAG.sum_beat_ms = 0;
+            global.NOTEBEAM_DIAG.sum_emb_ms = 0;
+            global.NOTEBEAM_DIAG.sum_planned_ms = 0;
+            global.NOTEBEAM_DIAG.sum_player_ms = 0;
+            global.NOTEBEAM_DIAG.sum_pending_ms = 0;
+            global.NOTEBEAM_DIAG.sum_history_ms = 0;
+            global.NOTEBEAM_DIAG.sum_popup_ms = 0;
+        }
     }
 }
 

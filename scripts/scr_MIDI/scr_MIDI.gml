@@ -58,6 +58,20 @@
 		midi_input_message_manual_checking(1);//Enables manual checking of MIDI Messages
 		midi_error_manual_checking(1);//Enables manual checking of MIDI errors
 		show_debug_message("starting to check MIDI input");
+
+			// Timing diagnostics (off by default). Enable with: global.MIDI_TIMING_DIAG_ENABLED = true;
+			if (!variable_global_exists("MIDI_TIMING_DIAG_ENABLED")) global.MIDI_TIMING_DIAG_ENABLED = false;
+			if (!variable_global_exists("MIDI_TIMING_DIAG_LOG_INTERVAL_MS")) global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS = 1000;
+			global.midi_input_clock_offset_ms = undefined;
+			global.midi_timing_delay_buf = array_create(128, 0);
+			global.midi_timing_skew_buf = array_create(128, 0);
+			global.midi_timing_delay_head = 0;
+			global.midi_timing_delay_count = 0;
+			global.midi_timing_diag_last_log_ms = timing_get_engine_now_ms();
+			global.midi_timing_diag_zero_count = 0;
+			global.midi_timing_diag_negative_raw_count = 0;
+			global.midi_timing_diag_source_midi_count = 0;
+			global.midi_timing_diag_source_wall_count = 0;
 	
 	//```
 		//Play an initial E using the construct method... otherwise it doesnt seem to work for some reason
@@ -76,6 +90,80 @@
 		show_debug_message("stop playing initial E");
 	}
 
+function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_source = "") {
+	if (!variable_global_exists("MIDI_TIMING_DIAG_ENABLED") || !global.MIDI_TIMING_DIAG_ENABLED) return;
+	if (!variable_global_exists("midi_timing_delay_buf") || !is_array(global.midi_timing_delay_buf)) return;
+	if (!variable_global_exists("midi_timing_skew_buf") || !is_array(global.midi_timing_skew_buf)) return;
+
+	var buf = global.midi_timing_delay_buf;
+	var skew_buf = global.midi_timing_skew_buf;
+	var n_buf = array_length(buf);
+	if (n_buf <= 0) return;
+
+	var head = floor(real(global.midi_timing_delay_head ?? 0));
+	head = ((head mod n_buf) + n_buf) mod n_buf;
+	var delay_ms = max(0, real(_delay_ms));
+	var raw_skew_ms = real(_raw_skew_ms);
+	buf[head] = delay_ms;
+	skew_buf[head] = raw_skew_ms;
+	if (delay_ms <= 0.0001) global.midi_timing_diag_zero_count += 1;
+	if (raw_skew_ms < 0) global.midi_timing_diag_negative_raw_count += 1;
+	if (string(_clock_source) == "midi_input_message_time") global.midi_timing_diag_source_midi_count += 1;
+	else global.midi_timing_diag_source_wall_count += 1;
+
+	global.midi_timing_delay_buf = buf;
+	global.midi_timing_skew_buf = skew_buf;
+	global.midi_timing_delay_head = (head + 1) mod n_buf;
+	global.midi_timing_delay_count = min(n_buf, floor(real(global.midi_timing_delay_count ?? 0)) + 1);
+
+	var now_ms = timing_get_engine_now_ms();
+	var interval_ms = max(250, real(global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS ?? 1000));
+	if ((now_ms - real(global.midi_timing_diag_last_log_ms ?? 0)) < interval_ms) return;
+
+	var count = floor(real(global.midi_timing_delay_count ?? 0));
+	if (count < 8) return;
+
+	var vals = array_create(count, 0);
+	var skew_vals = array_create(count, 0);
+	for (var i = 0; i < count; i++) {
+		vals[i] = real(buf[i]);
+		skew_vals[i] = real(skew_buf[i]);
+	}
+	array_sort(vals, function(a, b) { return real(a) - real(b); });
+	array_sort(skew_vals, function(a, b) { return real(a) - real(b); });
+
+	var i50 = floor((count - 1) * 0.50);
+	var i95 = floor((count - 1) * 0.95);
+	var i99 = floor((count - 1) * 0.99);
+	var p50 = vals[i50];
+	var p95 = vals[i95];
+	var p99 = vals[i99];
+	var s50 = skew_vals[i50];
+	var s95 = skew_vals[i95];
+	var s99 = skew_vals[i99];
+	var zero_pct = (real(global.midi_timing_diag_zero_count ?? 0) * 100.0) / max(1, count);
+	var neg_pct = (real(global.midi_timing_diag_negative_raw_count ?? 0) * 100.0) / max(1, count);
+	var src_midi = floor(real(global.midi_timing_diag_source_midi_count ?? 0));
+	var src_wall = floor(real(global.midi_timing_diag_source_wall_count ?? 0));
+
+	show_debug_message("[MIDI_TIMING] poll_delay_ms p50=" + string_format(p50, 0, 3)
+		+ " p95=" + string_format(p95, 0, 3)
+		+ " p99=" + string_format(p99, 0, 3)
+		+ " | raw_skew_ms p50=" + string_format(s50, 0, 3)
+		+ " p95=" + string_format(s95, 0, 3)
+		+ " p99=" + string_format(s99, 0, 3)
+		+ " | zero%=" + string_format(zero_pct, 0, 1)
+		+ " neg%=" + string_format(neg_pct, 0, 1)
+		+ " src[midi/wall]=" + string(src_midi) + "/" + string(src_wall)
+		+ " n=" + string(count));
+
+	global.midi_timing_diag_zero_count = 0;
+	global.midi_timing_diag_negative_raw_count = 0;
+	global.midi_timing_diag_source_midi_count = 0;
+	global.midi_timing_diag_source_wall_count = 0;
+	global.midi_timing_diag_last_log_ms = now_ms;
+}
+
 //```
 
 function MIDI_process_messages()
@@ -91,7 +179,7 @@ function MIDI_process_messages()
 		_MIDI_input_device = global.midi_input_device;
 		_MIDI_output_device = global.midi_output_device;
 		_chanter_channel = global.chanter_channel;
-		// Use realtime clock since metronome timing may not be initialized.
+		// Prefer MIDI device message timestamp when available; fallback to realtime.
 		
 //		```
 			for (m = 0; m < messages; m++)	{
@@ -100,8 +188,31 @@ function MIDI_process_messages()
 		
 //		```
 		
-		//			time = midi_input_message_time(_MIDI_input_device, m);   //This uses MIDI time. Probably should be logged somewhere.
-		time = current_time;
+		var wall_now = timing_get_engine_now_ms();
+		var raw_abs_time = wall_now;
+		var clock_source = "current_time";
+		var msg_time = midi_input_message_time(_MIDI_input_device, m);
+		if (!is_undefined(msg_time)) {
+			var msg_time_real = real(msg_time);
+			if (msg_time_real >= 0) {
+				if (!variable_global_exists("midi_input_clock_offset_ms") || is_undefined(global.midi_input_clock_offset_ms)) {
+					global.midi_input_clock_offset_ms = wall_now - msg_time_real;
+				}
+
+				raw_abs_time = msg_time_real + real(global.midi_input_clock_offset_ms);
+				// Re-anchor if clock offset becomes clearly invalid.
+				if (abs(raw_abs_time - wall_now) > 10000) {
+					global.midi_input_clock_offset_ms = wall_now - msg_time_real;
+					raw_abs_time = msg_time_real + real(global.midi_input_clock_offset_ms);
+				}
+				clock_source = "midi_input_message_time";
+			}
+		}
+
+		time = raw_abs_time;
+		var raw_poll_skew_ms = wall_now - raw_abs_time;
+		var processing_delay_ms = max(0, raw_poll_skew_ms);
+		MIDI_timing_diag_record_poll_delay(processing_delay_ms, raw_poll_skew_ms, clock_source);
 		
 //		```
 		_MIDI_event_number = global.Midi_event_number;
@@ -193,6 +304,10 @@ function MIDI_process_messages()
 			// Raw log for player MIDI input (minimal fields)
 			event_history_add({
 				timestamp_ms: normalized_time,
+				raw_timestamp_ms: raw_abs_time,
+				normalized_time_ms: normalized_time,
+				processing_delay_ms: processing_delay_ms,
+				clock_source: clock_source,
 				expected_time_ms: 0,
 				actual_time_ms: normalized_time,
 				delta_ms: 0,
@@ -203,7 +318,7 @@ function MIDI_process_messages()
 				note_canonical: canonical_note,
 				velocity: byte3,
 				channel: log_channel,
-				tune_name: global.current_tune_name ?? "unknown",
+				tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
 				event_id: 0,
 				marker_type: "",
 				measure: 0,

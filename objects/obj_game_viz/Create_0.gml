@@ -71,7 +71,7 @@ global.timeline_cfg = {
     tune_structure_part_separator_color: make_color_rgb(200, 202, 220),
     tune_structure_part_separator_alpha: 0.50,
     notebeam_enabled: true,
-    notebeam_draw_from_timeline: true,
+    notebeam_draw_from_timeline: false,
     notebeam_show_now_line: true,
     notebeam_now_ratio: -1,
     notebeam_now_x_offset_px: 0,
@@ -107,13 +107,14 @@ global.timeline_cfg = {
     notebeam_history_run_count: 10,
     notebeam_history_require_same_bpm: true,
     notebeam_history_require_same_swing: true,
-    notebeam_history_start_color: make_color_rgb(255, 235, 70),
-    notebeam_history_end_color: make_color_rgb(255, 218, 40),
+    notebeam_history_start_color: make_color_rgb(255, 248, 153),
+    notebeam_history_end_color: make_color_rgb(255, 248, 153),
     notebeam_history_band_color: make_color_rgb(220, 220, 220),
     notebeam_history_band_alpha: 0.20,
     notebeam_history_start_alpha: 0.52,
-    notebeam_history_end_alpha: 0.95,
-    notebeam_debug_log: true,
+    notebeam_history_end_alpha: 0.72,
+        notebeam_postplay_overlay_mode: 1,
+        notebeam_debug_log: false,
     notebeam_show_debug_outline: false,
     notebeam_debug_outline_color: make_color_rgb(80, 80, 88),
     notebeam_debug_outline_alpha: 0.65,
@@ -129,9 +130,78 @@ global.timeline_cfg = {
     notebeam_emb_box_border_alpha: 0.90,
     notebeam_emb_box_lane_padding_px: 3,
     notebeam_emb_box_time_padding_ms: 0,
+    notebeam_planned_min_visible_px: 1.0,
+    notebeam_planned_view_pad_px: 0.5,
+    notebeam_visual_throttle_enabled: true,
+    notebeam_visual_target_hz: 90,
+    // Temporary notebeam jitter diagnostics (all off by default)
+    notebeam_diag_enabled: true,
+    notebeam_diag_log_interval_frames: 45,
+    notebeam_diag_disable_planned: false,
+    notebeam_diag_disable_player: false,
+    notebeam_diag_disable_pending: false,
+    notebeam_diag_disable_history: false,
+    notebeam_diag_disable_beat_boxes: false,
+    notebeam_diag_disable_emb_boxes: false,
+    notebeam_diag_disable_popup_hitboxes: false,
+    notebeam_diag_disable_popup_draw: false,
+    notebeam_diag_disable_overlap_compare: false,
     debug_planned_sequence: false,
     debug_sequence_max_notes: 24
 };
+
+// MIDI timing diagnostics (consumed by scr_MIDI)
+global.MIDI_TIMING_DIAG_ENABLED = true;
+global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS = 1000;
+
+// Realtime timing budget diagnostics (scheduler + visual alignment)
+global.RT_BUDGET_DIAG_ENABLED = true;
+global.RT_BUDGET_DIAG_LOG_INTERVAL_MS = 1000;
+global.RT_BUDGET_SCHED_WARMUP_MS = 1000;
+global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = true;
+global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = true;
+global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+global.PLAYBACK_DEBUG_GROUP_TIMING = true;
+if (!variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW")) {
+    global.DIAG_DISABLE_TIMELINE_DRAW = false;
+}
+if (!variable_global_exists("GV_VISUAL_CACHE_ENABLED")) {
+    global.GV_VISUAL_CACHE_ENABLED = true;
+}
+if (!variable_global_exists("GV_VISUAL_CACHE_REFRESH_MS")) {
+    global.GV_VISUAL_CACHE_REFRESH_MS = 16;
+}
+
+// Compact diagnostics mode: keep scheduler-focused telemetry only.
+if (!variable_global_exists("DIAG_SCHEDULER_FOCUS_MODE")) {
+    global.DIAG_SCHEDULER_FOCUS_MODE = true;
+}
+if (global.DIAG_SCHEDULER_FOCUS_MODE) {
+    global.timeline_cfg.notebeam_diag_enabled = false;
+    global.MIDI_TIMING_DIAG_ENABLED = false;
+    global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
+    global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;
+    global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+    global.PLAYBACK_DEBUG_GROUP_TIMING = false;
+}
+
+if (!variable_global_exists("timeline_anchor_surface_cache") || !is_struct(global.timeline_anchor_surface_cache)) {
+    global.timeline_anchor_surface_cache = {};
+}
+
+// Surface cache for player notebeam rendering
+// Invalidate cache when playhead moves or spans change; blit cached surface each frame
+global.player_surface_cache = noone;
+global.player_surface_cache_valid = false;
+global.player_surface_cache_last_playhead_ms = -9999;
+global.player_surface_cache_invalidation_threshold_ms = 200;  // Invalidate if playhead moves >200ms
+
+// Live notebeam player beam cache (heavy draw path in scr_game_viz)
+global.notebeam_live_player_surface = noone;
+global.notebeam_live_player_surface_valid = false;
+global.notebeam_live_player_surface_last_playhead_ms = -9999;
+global.notebeam_live_player_surface_last_span_count = -1;
+global.notebeam_live_player_surface_invalidation_threshold_ms = 16;
 
 if (!variable_global_exists("selected_player_tune_channel")) {
     global.selected_player_tune_channel = global.timeline_cfg.tune_channel;

@@ -1961,10 +1961,11 @@ function scr_tune_picker_populate()
     // Also attach the library to the picker instance and reset selection
     var picker = instance_find(obj_tune_picker, 0);
     var previous_selected_id = "";
+    var previous_selected_part_channel = -1;
     if (picker != noone)
     {
         previous_selected_id = string_lower(string_trim(string(scr_tune_picker_get_instance_var(picker, "selected_tune_id", ""))));
-        var previous_selected_part_channel = floor(real(scr_tune_picker_get_instance_var(picker, "selected_part_channel", -1)));
+        previous_selected_part_channel = floor(real(scr_tune_picker_get_instance_var(picker, "selected_part_channel", -1)));
 
         if (string_length(previous_selected_id) <= 0
             && is_array(scr_tune_library_get_tunes(scr_tune_picker_get_library(picker)))) {
