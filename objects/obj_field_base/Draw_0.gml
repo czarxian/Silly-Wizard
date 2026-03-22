@@ -77,10 +77,14 @@ if (ui_name_value == "notebeam_canvas_anchor") {
 		}
 		var _now_ms = timing_get_engine_now_ms();
 		if ((_now_ms - _cache.last_ms) >= cache_refresh_ms) {
+			global.GV_ANCHOR_RECT_X_OFFSET = -bbox_left;
+			global.GV_ANCHOR_RECT_Y_OFFSET = -bbox_top;
 			surface_set_target(_cache.surf);
 			draw_clear_alpha(c_black, 0);
 			gv_draw_notebeam_canvas(0, 0, _w - 1, _h - 1);
 			surface_reset_target();
+			global.GV_ANCHOR_RECT_X_OFFSET = 0;
+			global.GV_ANCHOR_RECT_Y_OFFSET = 0;
 			_cache.last_ms = _now_ms;
 		}
 		draw_surface(_cache.surf, bbox_left, bbox_top);

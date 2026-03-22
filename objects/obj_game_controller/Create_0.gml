@@ -16,13 +16,16 @@ game_set_speed(_game_step_fps, gamespeed_fps);
 
 // Playback scheduler mode: "step" (per-step due-group pump) or "timesource".
 if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
-	global.PLAYBACK_SCHEDULER_MODE = "step";
+	global.PLAYBACK_SCHEDULER_MODE = "timesource";
 }
 if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
-	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0;
+	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0.0;
 }
 if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
-	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 32;
+	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 8;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
+	global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1000;
 }
 
 //Create Globals

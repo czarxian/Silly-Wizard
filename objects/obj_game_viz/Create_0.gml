@@ -45,7 +45,7 @@ global.timeline_cfg = {
     structure_label_every_beat: true,
     structure_label_spacing_px: 26,
     planned_bar_color: make_color_rgb(86, 86, 92),
-    planned_bar_alpha: 0.82,
+    planned_bar_alpha: 0.94,
     planned_melody_text_color: c_white,
     planned_embellishment_text_color: c_green,
     planned_note_text_scale: 1.15,
@@ -89,7 +89,7 @@ global.timeline_cfg = {
     notebeam_lane_row_gap_px: 20,
     notebeam_lane_y_offset_px: 0,
     notebeam_planned_color: make_color_rgb(132, 168, 196),
-    notebeam_planned_alpha: 0.75,
+    notebeam_planned_alpha: 0.94,
     notebeam_player_color: make_color_rgb(190, 190, 196),
     notebeam_compare_version: 2,
     notebeam_player_overlap_colorize: true,
@@ -134,6 +134,8 @@ global.timeline_cfg = {
     notebeam_planned_view_pad_px: 0.5,
     notebeam_visual_throttle_enabled: true,
     notebeam_visual_target_hz: 90,
+    notebeam_underlay_cache_enabled: true,
+    notebeam_underlay_invalidation_ms: 33,
     // Temporary notebeam jitter diagnostics (all off by default)
     notebeam_diag_enabled: true,
     notebeam_diag_log_interval_frames: 45,
@@ -171,6 +173,9 @@ if (!variable_global_exists("GV_VISUAL_CACHE_ENABLED")) {
 if (!variable_global_exists("GV_VISUAL_CACHE_REFRESH_MS")) {
     global.GV_VISUAL_CACHE_REFRESH_MS = 16;
 }
+if (!variable_global_exists("GV_ANCHOR_RENDER_ONLY")) {
+    global.GV_ANCHOR_RENDER_ONLY = true;
+}
 
 // Compact diagnostics mode: keep scheduler-focused telemetry only.
 if (!variable_global_exists("DIAG_SCHEDULER_FOCUS_MODE")) {
@@ -202,6 +207,11 @@ global.notebeam_live_player_surface_valid = false;
 global.notebeam_live_player_surface_last_playhead_ms = -9999;
 global.notebeam_live_player_surface_last_span_count = -1;
 global.notebeam_live_player_surface_invalidation_threshold_ms = 16;
+
+global.notebeam_underlay_surface = noone;
+global.notebeam_underlay_surface_valid = false;
+global.notebeam_underlay_surface_last_playhead_ms = -9999;
+global.notebeam_underlay_surface_signature = "";
 
 if (!variable_global_exists("selected_player_tune_channel")) {
     global.selected_player_tune_channel = global.timeline_cfg.tune_channel;

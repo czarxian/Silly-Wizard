@@ -9,6 +9,11 @@ if (variable_global_exists("notebeam_live_player_surface") && surface_exists(glo
 	global.notebeam_live_player_surface = noone;
 }
 
+if (variable_global_exists("notebeam_underlay_surface") && surface_exists(global.notebeam_underlay_surface)) {
+	surface_free(global.notebeam_underlay_surface);
+	global.notebeam_underlay_surface = noone;
+}
+
 if (variable_global_exists("timeline_anchor_surface_cache") && is_struct(global.timeline_anchor_surface_cache)) {
 	var _keys = variable_struct_get_names(global.timeline_anchor_surface_cache);
 	for (var i = 0; i < array_length(_keys); i++) {

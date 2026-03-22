@@ -744,13 +744,16 @@ function tune_start(_tune_events) {
         global.PLAYBACK_SCHEDULER_CATCHUP = true;
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
-        global.PLAYBACK_SCHEDULER_MODE = "step";
+        global.PLAYBACK_SCHEDULER_MODE = "timesource";
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
-        global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0;
+        global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0.0;
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
-        global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 32;
+        global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 8;
+    }
+    if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
+        global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1000;
     }
     if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP")) {
         global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP = 128;
@@ -991,11 +994,14 @@ function tune_scheduler_step_tick() {
     var elapsed_ms = timing_get_engine_now_ms() - real(global.tune_start_real ?? 0);
     var lookahead_ms = max(0, real(global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS ?? 0));
     var max_groups = max(1, floor(real(global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP ?? 32)));
+    var max_pump_us = max(100, real(global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US ?? 1000));
+    var pump_start_us = get_timer();
 
     var dispatched = 0;
     var max_overdue_ms = -1000000000;
     var min_overdue_ms = 1000000000;
     while (dispatched < max_groups && global.tune_group_index < n_groups) {
+        if (get_timer() - pump_start_us >= max_pump_us) break;
         var due_time_ms = real(global.tune_event_groups[global.tune_group_index].time ?? 0);
         if (due_time_ms > elapsed_ms + lookahead_ms) break;
         var overdue_ms = elapsed_ms - due_time_ms;
