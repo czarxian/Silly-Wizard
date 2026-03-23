@@ -55,6 +55,15 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "now_ratio")) {
         variable_struct_set(global.timeline_cfg, "now_ratio", 0.33);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "player_time_offset_ms")) {
+        variable_struct_set(global.timeline_cfg, "player_time_offset_ms", 0);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "timing_calibration_match_window_ms")) {
+        variable_struct_set(global.timeline_cfg, "timing_calibration_match_window_ms", 350);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "timing_calibration_min_matches")) {
+        variable_struct_set(global.timeline_cfg, "timing_calibration_min_matches", 8);
+    }
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_beat_box_even_color")) {
         variable_struct_set(global.timeline_cfg, "notebeam_beat_box_even_color", make_color_rgb(245, 245, 245));
     }
@@ -910,6 +919,89 @@ function gv_get_anchor_rect_by_name(_ui_name) {
     };
 }
 
+/// @description Draw the notebeam "now" position marker (yellow vertical line) in GUI space.
+/// Called exclusively from obj_game_viz Draw GUI (Draw_64) so it renders above all world-space
+/// content regardless of depth ordering.
+///
+/// Reads from global.timeline_cfg:
+///   notebeam_show_now_line     — bool, default true
+///   now_ratio                  — fallback horizontal position ratio, default 0.33
+///   notebeam_now_ratio         — overrides now_ratio when >= 0
+///   notebeam_now_x_offset_px   — pixel nudge applied after ratio, default 0
+///   notebeam_now_line_color    — line color, default c_yellow
+///   notebeam_now_line_width    — line width in px, default 2
+///   notebeam_lane_flip         — bool, reverses lane order for y-span scan
+///
+/// Requires global.NOTEBEAM_OVERLAY_NOWLINE_ENABLED == true to draw.
+function gv_draw_notebeam_nowline_overlay_gui() {
+    // -- Guard checks --
+    if (!variable_global_exists("NOTEBEAM_OVERLAY_NOWLINE_ENABLED") || !global.NOTEBEAM_OVERLAY_NOWLINE_ENABLED) return;
+    if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) return;
+
+    var show_now_line = !variable_struct_exists(global.timeline_cfg, "notebeam_show_now_line")
+        || global.timeline_cfg.notebeam_show_now_line;
+    if (!show_now_line) return;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+
+    var rect = gv_get_anchor_rect_by_name("notebeam_canvas_anchor");
+    if (!is_struct(rect)) return;
+
+    // -- Compute X position --
+    // Prefer notebeam_now_ratio; fall back to shared now_ratio.
+    var base_now_ratio = variable_struct_exists(global.timeline_cfg, "now_ratio")
+        ? real(global.timeline_cfg.now_ratio)
+        : 0.33;
+    var beam_now_ratio = variable_struct_exists(global.timeline_cfg, "notebeam_now_ratio")
+        ? real(global.timeline_cfg.notebeam_now_ratio)
+        : -1;
+    var now_ratio = (beam_now_ratio >= 0) ? beam_now_ratio : base_now_ratio;
+    now_ratio = clamp(now_ratio, 0.0, 1.0);
+    var now_offset_px = variable_struct_exists(global.timeline_cfg, "notebeam_now_x_offset_px")
+        ? real(global.timeline_cfg.notebeam_now_x_offset_px)
+        : 0;
+
+    var gui_x = real(rect.x1) + ((real(rect.x2) - real(rect.x1)) * now_ratio) + now_offset_px;
+
+    // -- Compute Y span from lane anchors --
+    // Scan all 9 note-lane anchors to get the exact pixel band the notebeam rows occupy,
+    // rather than using the full notebeam panel height.
+    var gui_y1 = real(rect.y1); // fallback: full panel
+    var gui_y2 = real(rect.y2);
+    var lane_count = 9;
+    var lane_flip = variable_struct_exists(global.timeline_cfg, "notebeam_lane_flip")
+        && global.timeline_cfg.notebeam_lane_flip;
+    var lane_min = 1000000000;
+    var lane_max = -1000000000;
+    for (var li = 0; li < lane_count; li++) {
+        var anchor_name = gv_get_notebeam_anchor_name_for_lane(li, lane_flip);
+        if (string_length(anchor_name) <= 0) continue;
+        var lane_rect = gv_get_anchor_rect_by_name(anchor_name);
+        if (!is_struct(lane_rect)) continue;
+        var ly1 = real(variable_struct_get(lane_rect, "y1"));
+        var ly2 = real(variable_struct_get(lane_rect, "y2"));
+        lane_min = min(lane_min, min(ly1, ly2));
+        lane_max = max(lane_max, max(ly1, ly2));
+    }
+    if (lane_max > lane_min) {
+        gui_y1 = lane_min;
+        gui_y2 = lane_max;
+    }
+
+    // -- Draw now-line --
+    var now_line_color = variable_struct_exists(global.timeline_cfg, "notebeam_now_line_color")
+        ? global.timeline_cfg.notebeam_now_line_color
+        : c_yellow;
+    var now_line_width = variable_struct_exists(global.timeline_cfg, "notebeam_now_line_width")
+        ? max(1, real(global.timeline_cfg.notebeam_now_line_width))
+        : 2;
+
+    draw_set_alpha(1);
+    draw_set_color(now_line_color);
+    draw_line_width(gui_x, gui_y1, gui_x, gui_y2, now_line_width);
+    draw_set_alpha(1);
+}
+
 function gv_get_timeline_anchor_rect() {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return undefined;
 
@@ -989,6 +1081,11 @@ function gv_on_tune_playback_finished(_final_time_ms = -1) {
     global.timeline_state.review_measure_offset = 0;
     global.timeline_state.playhead_ms = end_ms;
     gv_refresh_review_history_cache();
+
+    // Show diagnostic timing offset for this run
+    if (is_undefined(timing_calibration_probe_from_current_run) == false) {
+        timing_calibration_probe_from_current_run();
+    }
 }
 
 function gv_review_nudge_measures(_delta_measures) {
@@ -1735,13 +1832,33 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             var follow_margin = clamp(floor(view_rows * 0.25), 1, max(1, view_rows - 1));
             var view_top = scroll_row + follow_margin;
             var view_bottom = scroll_row + max(0, view_rows - 1 - follow_margin);
+            var desired_scroll = scroll_row;
 
             if (ags_target_row < view_top) {
-                scroll_row = clamp(ags_target_row - follow_margin, 0, max_scroll);
-                global.timeline_state.measure_nav_scroll_row = scroll_row;
+                desired_scroll = clamp(ags_target_row - follow_margin, 0, max_scroll);
             } else if (ags_target_row > view_bottom) {
-                scroll_row = clamp(ags_target_row - max(0, view_rows - 1 - follow_margin), 0, max_scroll);
-                global.timeline_state.measure_nav_scroll_row = scroll_row;
+                desired_scroll = clamp(ags_target_row - max(0, view_rows - 1 - follow_margin), 0, max_scroll);
+            }
+
+            if (desired_scroll != scroll_row) {
+                var follow_cfg_ms = (is_struct(ts_cfg) && variable_struct_exists(ts_cfg, "tune_structure_auto_follow_interval_ms"))
+                    ? max(0, real(ts_cfg.tune_structure_auto_follow_interval_ms))
+                    : 90;
+                var follow_cfg_max_rows = (is_struct(ts_cfg) && variable_struct_exists(ts_cfg, "tune_structure_auto_follow_max_rows_per_step"))
+                    ? max(1, floor(real(ts_cfg.tune_structure_auto_follow_max_rows_per_step)))
+                    : 1;
+                var follow_now_ms = timing_get_engine_now_ms();
+                var follow_last_ms = variable_struct_exists(global.timeline_state, "measure_nav_auto_follow_last_ms")
+                    ? real(global.timeline_state.measure_nav_auto_follow_last_ms)
+                    : -1000000000;
+
+                if ((follow_now_ms - follow_last_ms) >= follow_cfg_ms) {
+                    var row_delta = desired_scroll - scroll_row;
+                    var clamped_delta = clamp(row_delta, -follow_cfg_max_rows, follow_cfg_max_rows);
+                    scroll_row = clamp(scroll_row + clamped_delta, 0, max_scroll);
+                    global.timeline_state.measure_nav_scroll_row = scroll_row;
+                    global.timeline_state.measure_nav_auto_follow_last_ms = follow_now_ms;
+                }
             }
         }
     }
@@ -1829,9 +1946,13 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
                 var border_color = is_current ? ts_current_border_color : ts_border_color;
                 var border_alpha = is_current ? ts_current_border_alpha : ts_border_alpha;
+                var border_width = 3;
                 draw_set_alpha(border_alpha);
                 draw_set_color(border_color);
-                draw_rectangle(tx1, ty1, tx2, ty2, true);
+                draw_line_width(tx1, ty1, tx2, ty1, border_width);
+                draw_line_width(tx2, ty1, tx2, ty2, border_width);
+                draw_line_width(tx2, ty2, tx1, ty2, border_width);
+                draw_line_width(tx1, ty2, tx1, ty1, border_width);
 
                 draw_set_alpha(1);
 
@@ -4117,7 +4238,9 @@ function gv_draw_timeline_canvas(_x1, _y1, _x2, _y2) {
         gv_draw_beat_guides(x1, y1, x2, y2, global.timeline_state.playhead_ms);
     }
 
+    // Draw timeline now-line.
     var now_x = x1 + ((x2 - x1) * now_ratio);
+    draw_set_alpha(1);
     draw_set_color(c_yellow);
     draw_line_width(now_x, y1, now_x, y2, 2);
 
@@ -4557,7 +4680,10 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
         var emb_group_count = (variable_struct_exists(global.timeline_state, "emb_groups") && is_array(global.timeline_state.emb_groups))
             ? array_length(global.timeline_state.emb_groups)
             : 0;
+        // Cache only in review mode (static playhead). Live mode scrolls every frame,
+        // so drawing underlay directly avoids stale-step jitter from cached invalidation.
         var use_underlay_cache = (!diag_enabled)
+            && review_mode_active
             && (!variable_struct_exists(global.timeline_cfg, "notebeam_underlay_cache_enabled")
                 || global.timeline_cfg.notebeam_underlay_cache_enabled);
 
@@ -5181,20 +5307,6 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
             show_debug_message("[NOTEBEAM] " + dbg_line);
             global.NOTEBEAM_DEBUG_LOG_MS = current_time;
         }
-    }
-
-    var show_now_line = !variable_struct_exists(global.timeline_cfg, "notebeam_show_now_line")
-        || global.timeline_cfg.notebeam_show_now_line;
-    if (show_now_line) {
-        var now_line_color = variable_struct_exists(global.timeline_cfg, "notebeam_now_line_color")
-            ? global.timeline_cfg.notebeam_now_line_color
-            : c_yellow;
-        var now_line_width = variable_struct_exists(global.timeline_cfg, "notebeam_now_line_width")
-            ? max(1, real(global.timeline_cfg.notebeam_now_line_width))
-            : 2;
-
-        draw_set_color(now_line_color);
-        draw_line_width(now_x, y1, now_x, y2, now_line_width);
     }
 
     if (!diag_disable_popup_draw) {

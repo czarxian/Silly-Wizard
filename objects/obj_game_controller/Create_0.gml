@@ -109,6 +109,9 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
 	if (!variable_global_exists("pending_layer_room")) {
 		global.pending_layer_room = -1;
 	}
+	if (!variable_global_exists("pending_auto_start_play")) {
+		global.pending_auto_start_play = false;
+	}
 	if (room == Room_main_menu) {
 		global.pending_layer_mode = "main";
 		global.pending_layer_room = Room_main_menu;

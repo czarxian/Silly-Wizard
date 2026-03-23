@@ -532,8 +532,14 @@
 	function scr_goto_mainmenu(){
 		MIDI_send_off();
 		MIDI_stop_checking_messages_and_errors();
+		if (is_undefined(timing_calibration_cancel) == false) {
+			timing_calibration_cancel("cancelled");
+		}
 		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
 			global.timeline_state.active = false;
+		}
+		if (variable_global_exists("pending_auto_start_play")) {
+			global.pending_auto_start_play = false;
 		}
 		global.pending_layer_mode = "main";
 		global.pending_layer_room = Room_main_menu;

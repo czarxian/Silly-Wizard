@@ -62,14 +62,16 @@ global.timeline_cfg = {
     tune_structure_current_base_alpha: 0.55,
     tune_structure_current_overlay_color: make_color_rgb(224, 206, 92),
     tune_structure_current_overlay_alpha: 0.35,
-    tune_structure_played_fill_color: make_color_rgb(48, 48, 54),
-    tune_structure_played_fill_alpha: 0.72,
-    tune_structure_border_color: make_color_rgb(176, 176, 186),
-    tune_structure_border_alpha: 0.58,
+    tune_structure_played_fill_color: make_color_rgb(112, 112, 112),
+    tune_structure_played_fill_alpha: 0.82,
+    tune_structure_border_color: make_color_rgb(84, 121, 112),
+    tune_structure_border_alpha: 0.88,
     tune_structure_current_border_color: make_color_rgb(255, 230, 96),
     tune_structure_current_border_alpha: 1.00,
     tune_structure_part_separator_color: make_color_rgb(200, 202, 220),
     tune_structure_part_separator_alpha: 0.50,
+    tune_structure_auto_follow_interval_ms: 90,
+    tune_structure_auto_follow_max_rows_per_step: 1,
     notebeam_enabled: true,
     notebeam_draw_from_timeline: false,
     notebeam_show_now_line: true,
@@ -167,14 +169,34 @@ global.PLAYBACK_DEBUG_GROUP_TIMING = true;
 if (!variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW")) {
     global.DIAG_DISABLE_TIMELINE_DRAW = false;
 }
+if (!variable_global_exists("DIAG_DISABLE_TIMELINE_ANCHOR")) {
+    // Diagnostic toggle: disable only timeline anchor rendering to isolate
+    // its impact on scheduler/step jitter without disabling notebeam/panels.
+    global.DIAG_DISABLE_TIMELINE_ANCHOR = false;
+}
+if (!variable_global_exists("TIMELINE_HIDE_DURING_PLAY")) {
+    // Production mode: hide timeline placeholder while live playback is running,
+    // and restore it automatically in review mode.
+    global.TIMELINE_HIDE_DURING_PLAY = true;
+}
 if (!variable_global_exists("GV_VISUAL_CACHE_ENABLED")) {
     global.GV_VISUAL_CACHE_ENABLED = true;
 }
 if (!variable_global_exists("GV_VISUAL_CACHE_REFRESH_MS")) {
     global.GV_VISUAL_CACHE_REFRESH_MS = 16;
 }
+if (!variable_global_exists("GV_TUNESTRUCTURE_PLAY_REFRESH_MS")) {
+    global.GV_TUNESTRUCTURE_PLAY_REFRESH_MS = 48;
+}
 if (!variable_global_exists("GV_ANCHOR_RENDER_ONLY")) {
     global.GV_ANCHOR_RENDER_ONLY = true;
+}
+if (!variable_global_exists("NOTEBEAM_OVERLAY_NOWLINE_ENABLED")) {
+    global.NOTEBEAM_OVERLAY_NOWLINE_ENABLED = true;
+}
+if (!variable_global_exists("LEGACY_NOTEBEAM_NOWLINE_IN_ANCHOR")) {
+    // Legacy path kept only for rollback while overlay feature stabilizes.
+    global.LEGACY_NOTEBEAM_NOWLINE_IN_ANCHOR = false;
 }
 
 // Compact diagnostics mode: keep scheduler-focused telemetry only.

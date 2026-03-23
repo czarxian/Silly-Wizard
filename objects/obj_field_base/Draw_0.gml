@@ -15,9 +15,32 @@ if (use_visual_cache && (!variable_global_exists("timeline_anchor_surface_cache"
 }
 
 if (ui_name_value == "timeline_canvas_anchor") {
+	var _anchor_t0_us = get_timer();
+	var diag_disable_timeline_anchor = variable_global_exists("DIAG_DISABLE_TIMELINE_ANCHOR")
+		&& global.DIAG_DISABLE_TIMELINE_ANCHOR;
+	var timeline_hide_during_play = variable_global_exists("TIMELINE_HIDE_DURING_PLAY")
+		&& global.TIMELINE_HIDE_DURING_PLAY;
+	var playback_complete = variable_global_exists("timeline_state")
+		&& is_struct(global.timeline_state)
+		&& variable_struct_exists(global.timeline_state, "playback_complete")
+		&& global.timeline_state.playback_complete;
+	var suppress_timeline_anchor = diag_disable_timeline_anchor
+		|| (timeline_hide_during_play
+			&& variable_global_exists("timeline_state")
+			&& is_struct(global.timeline_state)
+			&& global.timeline_state.active
+			&& !playback_complete);
 	if (diag_disable_timeline_draw) exit;
+	if (suppress_timeline_anchor) {
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state) && global.timeline_state.active) {
+			gv_timeline_step_tick();
+		}
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
+		exit;
+	}
 	if (!use_visual_cache) {
 		gv_draw_timeline_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 		exit;
 	}
 
@@ -44,11 +67,12 @@ if (ui_name_value == "timeline_canvas_anchor") {
 	}
 	draw_surface(_cache.surf, bbox_left, bbox_top);
 	global.timeline_anchor_surface_cache[$ _key] = _cache;
+	tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
 }
 
 if (ui_name_value == "notebeam_canvas_anchor") {
-	if (diag_disable_timeline_draw) exit;
+	var _anchor_t0_us = get_timer();
 	var draw_direct = true;
 	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
 		if (variable_struct_exists(global.timeline_cfg, "notebeam_draw_from_timeline")
@@ -59,44 +83,48 @@ if (ui_name_value == "notebeam_canvas_anchor") {
 	if (draw_direct) {
 		if (!use_visual_cache) {
 			gv_draw_notebeam_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
-			exit;
+		} else {
+			var _key = "notebeam_" + string(id);
+			var _cache = variable_struct_exists(global.timeline_anchor_surface_cache, _key)
+				? global.timeline_anchor_surface_cache[$ _key]
+				: { surf: noone, w: 0, h: 0, last_ms: -1000000000 };
+			var _w = max(1, bbox_right - bbox_left + 1);
+			var _h = max(1, bbox_bottom - bbox_top + 1);
+			if (!surface_exists(_cache.surf) || _cache.w != _w || _cache.h != _h) {
+				if (surface_exists(_cache.surf)) surface_free(_cache.surf);
+				_cache.surf = surface_create(_w, _h);
+				_cache.w = _w;
+				_cache.h = _h;
+				_cache.last_ms = -1000000000;
+			}
+			var _now_ms = timing_get_engine_now_ms();
+			if ((_now_ms - _cache.last_ms) >= cache_refresh_ms) {
+				global.GV_ANCHOR_RECT_X_OFFSET = -bbox_left;
+				global.GV_ANCHOR_RECT_Y_OFFSET = -bbox_top;
+				surface_set_target(_cache.surf);
+				draw_clear_alpha(c_black, 0);
+				gv_draw_notebeam_canvas(0, 0, _w - 1, _h - 1);
+				surface_reset_target();
+				global.GV_ANCHOR_RECT_X_OFFSET = 0;
+				global.GV_ANCHOR_RECT_Y_OFFSET = 0;
+				_cache.last_ms = _now_ms;
+			}
+			draw_surface(_cache.surf, bbox_left, bbox_top);
+			global.timeline_anchor_surface_cache[$ _key] = _cache;
 		}
-
-		var _key = "notebeam_" + string(id);
-		var _cache = variable_struct_exists(global.timeline_anchor_surface_cache, _key)
-			? global.timeline_anchor_surface_cache[$ _key]
-			: { surf: noone, w: 0, h: 0, last_ms: -1000000000 };
-		var _w = max(1, bbox_right - bbox_left + 1);
-		var _h = max(1, bbox_bottom - bbox_top + 1);
-		if (!surface_exists(_cache.surf) || _cache.w != _w || _cache.h != _h) {
-			if (surface_exists(_cache.surf)) surface_free(_cache.surf);
-			_cache.surf = surface_create(_w, _h);
-			_cache.w = _w;
-			_cache.h = _h;
-			_cache.last_ms = -1000000000;
-		}
-		var _now_ms = timing_get_engine_now_ms();
-		if ((_now_ms - _cache.last_ms) >= cache_refresh_ms) {
-			global.GV_ANCHOR_RECT_X_OFFSET = -bbox_left;
-			global.GV_ANCHOR_RECT_Y_OFFSET = -bbox_top;
-			surface_set_target(_cache.surf);
-			draw_clear_alpha(c_black, 0);
-			gv_draw_notebeam_canvas(0, 0, _w - 1, _h - 1);
-			surface_reset_target();
-			global.GV_ANCHOR_RECT_X_OFFSET = 0;
-			global.GV_ANCHOR_RECT_Y_OFFSET = 0;
-			_cache.last_ms = _now_ms;
-		}
-		draw_surface(_cache.surf, bbox_left, bbox_top);
-		global.timeline_anchor_surface_cache[$ _key] = _cache;
 	}
+
+	// Notebeam now-line is drawn from Draw GUI for stable top-layer composition.
+
+	tune_rt_budget_diag_record_anchor_draw_ms("notebeam", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
 }
 
 if (ui_name_value == "tunestructure_canvas_anchor") {
-	if (diag_disable_timeline_draw) exit;
+	var _anchor_t0_us = get_timer();
 	if (!use_visual_cache) {
 		gv_draw_tune_structure_panel(bbox_left, bbox_top, bbox_right, bbox_bottom);
+		tune_rt_budget_diag_record_anchor_draw_ms("tunestructure", (get_timer() - _anchor_t0_us) / 1000);
 		exit;
 	}
 
@@ -113,8 +141,16 @@ if (ui_name_value == "tunestructure_canvas_anchor") {
 		_cache.h = _h;
 		_cache.last_ms = -1000000000;
 	}
+	var _structure_refresh_ms = cache_refresh_ms;
+	if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+		var _active = variable_struct_exists(global.timeline_state, "active") && global.timeline_state.active;
+		var _complete = variable_struct_exists(global.timeline_state, "playback_complete") && global.timeline_state.playback_complete;
+		if (_active && !_complete && variable_global_exists("GV_TUNESTRUCTURE_PLAY_REFRESH_MS")) {
+			_structure_refresh_ms = max(cache_refresh_ms, real(global.GV_TUNESTRUCTURE_PLAY_REFRESH_MS));
+		}
+	}
 	var _now_ms = timing_get_engine_now_ms();
-	if ((_now_ms - _cache.last_ms) >= cache_refresh_ms) {
+	if ((_now_ms - _cache.last_ms) >= _structure_refresh_ms) {
 		surface_set_target(_cache.surf);
 		draw_clear_alpha(c_black, 0);
 		gv_draw_tune_structure_panel(0, 0, _w - 1, _h - 1);
@@ -123,16 +159,19 @@ if (ui_name_value == "tunestructure_canvas_anchor") {
 	}
 	draw_surface(_cache.surf, bbox_left, bbox_top);
 	global.timeline_anchor_surface_cache[$ _key] = _cache;
+	tune_rt_budget_diag_record_anchor_draw_ms("tunestructure", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
 }
 
 
 if (ui_name_value == "gameviz_canvas_anchor") {
+	var _anchor_t0_us = get_timer();
 	if (sprite_index == noone) {
 		sprite_index = spr_field_item;
 		mask_index = spr_field_item;
 	}
 	gv_draw_gameviz_controls_panel(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	tune_rt_budget_diag_record_anchor_draw_ms("gameviz", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
 }
 

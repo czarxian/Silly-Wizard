@@ -13,6 +13,9 @@ global.rt_budget_controller_step_prev_start_ms = _controller_step_start_ms;
 
 // Step-driven playback scheduler mode dispatches all due tune event groups here.
 tune_scheduler_step_tick();
+// Keep timeline/playhead maintenance owned by the controller step so it does
+// not depend on any specific UI anchor instance being active.
+gv_timeline_step_tick();
 var _deferred_max_items = variable_global_exists("PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP")
 	? max(1, floor(real(global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP)))
 	: 128;
@@ -100,6 +103,14 @@ if (variable_global_exists("pending_layer_mode")) {
 			}
 		}
 	}
+}
+
+if (variable_global_exists("pending_auto_start_play")
+	&& global.pending_auto_start_play
+	&& room == Room_play
+	&& (!variable_global_exists("pending_layer_mode") || string(global.pending_layer_mode) == "")) {
+	global.pending_auto_start_play = false;
+	start_play();
 }
 
 if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME") || global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME) {
