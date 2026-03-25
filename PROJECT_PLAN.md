@@ -1,6 +1,6 @@
 🎯 Vision (End State)
 **1. Purpose — Why this exists**
-This project is a music‑training tool designed to give bagpipers objective, data‑driven feedback on timing, embellishment execution, and overall musical accuracy. Traditional practice relies heavily on subjective listening and instructor feedback; this tool provides measurable, repeatable analysis similar to rhythm‑game systems, but grounded in real bagpipe technique and musical structure. The goal is to help pipers improve faster, practice more effectively, and understand their playing with unprecedented clarity.
+This project is a music‑training tool designed to give bagpipers objective, data‑driven feedback on timing, embellishment execution, and overall musical accuracy in a game-like format. Traditional practice relies heavily on subjective listening and instructor feedback; this tool provides measurable, repeatable analysis similar to rhythm‑game systems, but grounded in real bagpipe technique and musical structure. The goal is to help pipers improve faster, practice more effectively, and understand their playing with unprecedented clarity.
 
 **2. High‑Level Experience**
 The finished system allows a player to:
