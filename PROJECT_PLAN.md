@@ -24,7 +24,7 @@ The system supports the full structure of pipe band music:
 • 	Multi‑tune sets with seamless linking and customized transitions
 
 
-**4. Tune Pipeline **
+**4. Tune Pipeline**
 Tunes originate from ABC notation, are edited in Excel, and exported as JSON containing metadata and event lists. Embellishments are represented as events and expanded into detailed timing sequences according to user‑configurable rules, which can be customized.
 • 	JSON includes metadata, parts, embellishments, and structural events
 • 	Embellishments expand according to tune type, user preferences, and style rules
