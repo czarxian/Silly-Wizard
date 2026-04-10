@@ -161,6 +161,42 @@ function scr_tune_extract_filename_base(_filepath) {
     return string_replace(base, ".json", "");
 }
 
+/// @function scr_tune_load_to_struct(_filename)
+/// @description Load and validate a tune JSON file, returning a lightweight struct
+///              compatible with scr_preprocess_tune and metronome_generate_events.
+///              Does NOT write to global.tune — safe to call for multiple tunes.
+/// @param _filename  Path to tune JSON (e.g. "tunes/Scotland_The_Brave.json")
+/// @returns struct { tune_data: { tune_metadata, performance, metronome, events, event_count, is_loaded, filename } }
+///          or undefined on failure.
 
+function scr_tune_load_to_struct(_filename) {
+    show_debug_message("=== scr_tune_load_to_struct: " + string(_filename) + " ===");
 
+    var raw_data = scr_tune_parse_json_file(_filename);
+    if (is_undefined(raw_data)) {
+        show_debug_message("  ERROR: Could not parse file");
+        return undefined;
+    }
 
+    var validation = scr_tune_validate_and_remediate(raw_data, _filename);
+    if (!validation.valid) {
+        show_debug_message("  ERROR: Validation failed");
+        for (var i = 0; i < array_length(validation.errors); i++) {
+            show_debug_message("    - " + validation.errors[i]);
+        }
+        return undefined;
+    }
+
+    var d = validation.data;
+    return {
+        tune_data: {
+            tune_metadata: d.tune_metadata,
+            performance:   d.performance,
+            metronome:     d.metronome,
+            events:        d.events,
+            event_count:   array_length(d.events),
+            is_loaded:     true,
+            filename:      _filename
+        }
+    };
+}

@@ -1,6 +1,6 @@
 🎯 Vision (End State)
 **1. Purpose — Why this exists**
-This project is a music‑training tool designed to give bagpipers objective, data‑driven feedback on timing, embellishment execution, and overall musical accuracy in a game-like format. Traditional practice relies heavily on subjective listening and instructor feedback; this tool provides measurable, repeatable analysis similar to rhythm‑game systems, but grounded in real bagpipe technique and musical structure. The goal is to help pipers improve faster, practice more effectively, and understand their playing with unprecedented clarity.
+This project is a music‑training tool designed to give bagpipers objective, data‑driven feedback on timing, embellishment execution, and overall musical accuracy. Traditional practice relies heavily on subjective listening and instructor feedback; this tool provides measurable, repeatable analysis similar to rhythm‑game systems, but grounded in real bagpipe technique and musical structure. The goal is to help pipers improve faster, practice more effectively, and understand their playing with unprecedented clarity.
 
 **2. High‑Level Experience**
 The finished system allows a player to:
@@ -24,7 +24,7 @@ The system supports the full structure of pipe band music:
 • 	Multi‑tune sets with seamless linking and customized transitions
 
 
-**4. Tune Pipeline**
+**4. Tune Pipeline **
 Tunes originate from ABC notation, are edited in Excel, and exported as JSON containing metadata and event lists. Embellishments are represented as events and expanded into detailed timing sequences according to user‑configurable rules, which can be customized.
 • 	JSON includes metadata, parts, embellishments, and structural events
 • 	Embellishments expand according to tune type, user preferences, and style rules
@@ -46,6 +46,493 @@ Before pressing **Run**:
 - [ ] New buttons have valid `button_script_index` and required `button_click_value`.
 - [ ] New fields have expected defaults (`field_contents`, IDs/targets if used).
 - [ ] Launch once and confirm no UI registration errors on Create.
+
+
+## Refactor Baseline Snapshot (2026-03-23)
+
+Captured from a full playthrough and post-play review run in Room_play.
+
+### Playback baseline (stable window)
+- controller_step_interval_ms: p50=2.000, p95=2.000, p99=2.000, max typically 2-4
+- draw_ms: p50=0.001, p95=0.002, p99=0.002
+- midi_process_ms: p50=0.004-0.005, p95=0.008-0.011
+- anchor_draw_ms kind=notebeam: p50 around 0.008-0.011, p95 around 0.65-1.16
+- anchor_draw_ms kind=tunestructure: p50 around 0.006-0.008, p95 around 0.009-0.017
+- scheduler_late_ms: p50=2.000, p95=2.000, p99=2.000 during active playback
+
+### Post-play / cleanup behavior (expected spikes)
+- timeline anchor draw can spike to ~9-12 ms while review history/export cleanup is running
+- controller_step_interval_ms can spike into ~12-16 ms during cleanup and export windows
+- rare isolated outliers were observed (for example one notebeam anchor max near 57 ms)
+
+### Refactor guardrails
+- Treat playback-window metrics as the non-regression baseline for refactor check-ins.
+- Cleanup/export spikes are acceptable if they do not bleed into active playback responsiveness.
+- Any sustained rise in playback p95 for draw_ms or controller_step_interval_ms above 10 percent triggers rollback/rework of the current batch.
+
+### Check-in Update (2026-03-23, after Batch 2)
+- Status: pass (no playback-window regression detected)
+
+Playback window summary:
+- controller_step_interval_ms: p50=2.000, p95=2.000-3.000, p99=3.000, max typically 3-4
+- draw_ms: p50=0.001, p95=0.001-0.002, p99=0.002-0.003
+- midi_process_ms: p50=0.004-0.005, p95=0.006-0.014
+- anchor_draw_ms kind=notebeam: p50 around 0.007-0.011, p95 around 0.63-1.00
+- anchor_draw_ms kind=tunestructure: p50 around 0.005-0.007, p95 around 0.008-0.014
+- scheduler_late_ms: p50=2.000, p95=2.000, p99=2.000-3.000
+
+Post-play / cleanup window summary:
+- timeline anchor draw still spikes around 10-12 ms (expected cleanup/export behavior)
+- controller_step_interval_ms spikes around 13-16 ms during cleanup windows (expected)
+- rare isolated outliers remain possible during cleanup (for example one tunestructure max around 95.9 ms)
+
+Conclusion:
+- Active playback remains stable and within guardrails.
+- Observed spikes are still concentrated in post-play cleanup/export phases.
+
+### Check-in Update (2026-03-23, after helper consolidations)
+- Status: pass (no playback-window regression detected)
+
+Playback window summary:
+- controller_step_interval_ms: p50=2.000, p95=2.000-3.000, p99=3.000, max typically 3-4
+- draw_ms: p50=0.001, p95=0.001-0.002, p99=0.002-0.003
+- midi_process_ms: p50=0.004-0.005, p95=0.007-0.012
+- anchor_draw_ms kind=notebeam: p50 around 0.008-0.013, p95 around 0.53-1.09
+- anchor_draw_ms kind=tunestructure: p50 around 0.006-0.009, p95 around 0.010-0.022
+- scheduler_late_ms: p50 around 2.000, p95 around 2.000-3.000
+
+Post-play / cleanup window summary:
+- export and cleanup complete successfully (CSV + summary JSON exported)
+- no sustained playback-window regression observed before cleanup transition
+- calibration recommendation remained in expected range for this run (11 ms)
+
+Conclusion:
+- Refactor helper extractions remain stable under gameplay load.
+- Performance profile stays within the same envelope as prior baseline runs.
+
+### Hotfix Update (2026-03-24, back button crash)
+- Status: pass (runtime blocker removed)
+
+Fix summary:
+- Removed stale `timing_calibration_cancel(...)` call from `scr_goto_mainmenu()` in `scr_button_scripts`.
+- Back navigation now safely deactivates calibration state via `global.timing_calibration` when present.
+
+Validation:
+- Static error check on `scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 1)
+- Status: pass (low-risk obsolete code removed)
+
+Change summary:
+- Removed dead legacy toggle initialization `LEGACY_NOTEBEAM_NOWLINE_IN_ANCHOR` from `obj_game_viz` Create.
+- Verified symbol usage first: it was defined once and never read anywhere in project scripts/objects.
+
+Validation:
+- Static error check on `objects/obj_game_viz/Create_0.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 2)
+- Status: pass (low-risk redundant fallback removed)
+
+Change summary:
+- In `obj_tune_picker` Step, removed the fallback branch that repopulated the tune list when `scr_tune_picker_refresh_visible_rows()` was unavailable.
+- The helper exists in `scr_tune_library` and is part of the active tune picker path, so the fallback was redundant.
+
+Validation:
+- Static error check on `objects/obj_tune_picker/Step_0.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 3)
+- Status: pass (redundant helper-availability branches removed)
+
+Change summary:
+- In `obj_tune_picker` Step, removed defensive `is_undefined(...)` branches around tune-picker helper calls.
+- Step now directly uses `scr_tune_picker_get_mouse_gui_x/y`, `scr_tune_picker_handle_click`, `scr_tune_picker_is_pointer_over_list`, `scr_tune_picker_scroll_rows`, and `scr_tune_picker_refresh_visible_rows`.
+- Verified helper definitions in `scr_tune_library` before simplification.
+
+Validation:
+- Static error check on `objects/obj_tune_picker/Step_0.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 4)
+- Status: pass (redundant draw-event helper guard removed)
+
+Change summary:
+- In `obj_tune_picker` Draw GUI event, removed the `is_undefined(scr_tune_picker_draw_canvas)` guard and now call `scr_tune_picker_draw_canvas()` directly.
+- Verified helper definition exists in `scr_tune_library` before the change.
+
+Validation:
+- Static error check on `objects/obj_tune_picker/Draw_64.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 5)
+- Status: pass (redundant checkbox compatibility chain removed)
+
+Change summary:
+- In `scr_checkbox_click` (`scr_button_scripts`), replaced multi-branch `is_undefined(...)` selection/clear fallbacks with direct calls to the canonical tune-picker helpers:
+  - `scr_tune_picker_select_index`
+  - `scr_tune_picker_sync_selected_entry_ui`
+  - `scr_tune_picker_clear_selection`
+  - `scr_tune_picker_refresh_visible_rows`
+- Kept existing `picker != noone` guards unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 6)
+- Status: pass (additional tune-picker compatibility branches removed)
+
+Change summary:
+- In `scr_button_scripts`, removed redundant `is_undefined(...)` branches for tune-picker helper access in:
+  - tune selection/load path (`scr_tune_picker_get_selected_entry`, `scr_tune_picker_get_library`, `scr_tune_picker_get_instance_var`)
+  - part-channel detection (`scr_tune_picker_collect_player_part_channels`)
+  - library regeneration path (`scr_tune_picker_set_instance_var`)
+- Replaced with direct calls to canonical helper functions already defined in `scr_tune_library`.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 7)
+- Status: pass (redundant rebuild helper guard removed)
+
+Change summary:
+- In `scr_load_tune_library` (`scr_tune_library`), removed `is_undefined(scr_build_tune_library)` check before rebuild.
+- `scr_build_tune_library` is defined in the same script file and is part of the active library rebuild flow.
+
+Validation:
+- Static error check on `scripts/scr_tune_library/scr_tune_library.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 8)
+- Status: pass (obsolete commented legacy block removed)
+
+Change summary:
+- Removed a stale commented-out legacy playback start block from `scr_button_scripts`.
+- Active runtime path and diagnostics remain unchanged; this is source-clarity cleanup only.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 9)
+- Status: pass (temporary debug logging pruned)
+
+Change summary:
+- Removed temporary timeline debug block in play-start flow from `scr_button_scripts` (`planned_spans` length probe + log).
+- Kept behavior and error handling unchanged (`tune_start` success/fail flow is intact).
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 10)
+- Status: pass (debug log noise reduced)
+
+Change summary:
+- Removed one DEBUG-tagged informational line from `scr_button_scripts` in tune start path:
+  - `"DEBUG: Before preprocessing - tune.events length ..."`
+- Left non-debug status/error logging in place.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 11)
+- Status: pass (redundant playback-ready log removed)
+
+Change summary:
+- In `scr_goto_playroom` (`scr_button_scripts`), removed duplicate success logging after merge.
+- Kept the detailed merged-count log and all warning/error logs.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 12)
+- Status: pass (commented debug scaffolding removed)
+
+Change summary:
+- In `scr_uncheck_all` (`scr_button_scripts`), removed obsolete commented debug loops/branches that no longer affected behavior.
+- Kept active checkbox uncheck and re-link logic unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 13)
+- Status: pass (checkbox log noise reduced)
+
+Change summary:
+- In `scr_checkbox_click` (`scr_button_scripts`), removed two non-essential informational logs:
+  - `input: ...`
+  - `tune selection: ...`
+- Selection behavior and UI sync calls are unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 14)
+- Status: pass (regeneration log output simplified)
+
+Change summary:
+- In `scr_regenerate_tune_library` (`scr_button_scripts`), removed decorative start/end banner logs.
+- Kept functional behavior and retained useful tune-count completion log.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Runtime Checkpoint (2026-03-24, user validation after batches 1-14)
+- Status: pass (functional + perf envelope stable)
+
+Observed behavior:
+- Full flow completed successfully: play room start, tune run, post-play export, cleanup, back to main menu, reopen UI layers, tune reload.
+- Prior runtime blocker remains resolved: back-to-main-menu path completed without crash.
+
+Playback-window perf snapshot:
+- controller_step_interval_ms remained centered at ~2.000 ms (p95 usually 2.000, occasional 3.000-4.000 max outliers).
+- draw_ms remained very low (p50 around 0.001, p95 around 0.001-0.002).
+- midi_process_ms remained low (p50 around 0.004, p95 usually around 0.007-0.012, with occasional isolated higher maxima).
+- anchor_draw_ms stayed in expected ranges for notebeam/gameviz/tunestructure/timeline during active playback.
+
+Post-play/cleanup window notes:
+- Expected review/export/cleanup spikes observed (for example timeline anchor draw p95 around ~5.7 ms and step-interval spikes during cleanup windows).
+- Spikes stayed concentrated in post-play phases and did not present as sustained active-playback regression.
+
+Follow-up note:
+- `switch 0` / `tune_library_canvas_anchor: No button action set` log spam is still present and can be cleaned in a future low-risk logging pass.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 15)
+- Status: pass (expected no-action anchor log spam suppressed)
+
+Change summary:
+- In `scr_script_not_set` (`scr_button_scripts`), added an early return for `ui_name == "tune_library_canvas_anchor"`.
+- This keeps diagnostics for genuinely unconfigured buttons while suppressing known passive-anchor noise.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 16)
+- Status: pass (button dispatcher log noise reduced)
+
+Change summary:
+- In `scr_handle_button_click` (`scr_button_scripts`), removed per-case entry logs for known button actions.
+- Preserved diagnostic logging for unexpected IDs via default case (`Unknown button script index: ...`).
+- Functional dispatch behavior is unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 17)
+- Status: pass (micro-consolidation in checkbox picker flow)
+
+Change summary:
+- In `scr_checkbox_click` (`scr_button_scripts`), merged two adjacent `picker != noone` checks into a single block.
+- Behavior unchanged; selection and UI sync still run only when the picker instance exists.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 18)
+- Status: pass (helper extraction in tune OK flow)
+
+Change summary:
+- In `scr_button_scripts`, extracted tune-picker selection resolution into `scr_button_resolve_picker_selection()`.
+- `scr_tune_OK` now calls the helper for picker/library/entry lookup and fallback-by-index resolution.
+- Behavior unchanged; this is structural simplification for maintainability.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 19)
+- Status: pass (candidate-path helper extraction in tune OK flow)
+
+Change summary:
+- In `scr_button_scripts`, extracted tune load candidate assembly into `scr_button_build_tune_load_candidates(_library, _filename)`.
+- `scr_tune_OK` now delegates candidate-path creation to the helper.
+- Behavior unchanged; path preference/order remains the same.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 20)
+- Status: pass (UI-field mapping helper extraction in tune OK flow)
+
+Change summary:
+- In `scr_button_scripts`, extracted set-item override mapping from UI fields into `scr_button_apply_set_item_from_ui_fields(_item)`.
+- `scr_tune_OK` now delegates field-to-override mapping to the helper.
+- Behavior unchanged; same field names and target set-item keys are applied.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 21)
+- Status: pass (global-assignment helper extraction in tune OK flow)
+
+Change summary:
+- In `scr_button_scripts`, extracted set-item-to-global assignment into `scr_button_apply_globals_from_set_item(_item)`.
+- `scr_tune_OK` now delegates global playback/metronome/count-in/swing/gracenote assignment to the helper.
+- Behavior unchanged; same keys/defaults are applied.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 22)
+- Status: pass (post-load UI helper extraction in tune OK flow)
+
+Change summary:
+- In `scr_button_scripts`, extracted post-load UI updates into `scr_button_apply_post_tune_load_ui(_button_label, _entry)`.
+- `scr_tune_OK` now delegates post-load window/title updates to the helper.
+- Behavior unchanged; existing window hide and game-info title update path preserved.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 23)
+- Status: pass (set-item summary log helper extraction)
+
+Change summary:
+- In `scr_button_scripts`, extracted created-set-item summary logging into `scr_button_log_created_set_item(_tryfile, _item)`.
+- `scr_tune_OK` now delegates summary log formatting to the helper.
+- Behavior unchanged; message content remains equivalent.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Runtime Checkpoint (2026-03-24, user validation after batch 23)
+- Status: pass (functional flow intact; active-playback envelope stable)
+
+Observed behavior:
+- Tune startup/play/export/cleanup path completed successfully with no functional regressions reported.
+- Back/menu flow remained stable; no recurrence of prior runtime crash path.
+
+Playback-window perf snapshot:
+- `controller_step_interval_ms` stayed centered around ~2 ms during active playback (mostly 2-3 ms, occasional 4 ms).
+- `draw_ms` remained low (p50 ~0.001, p95 ~0.001-0.002).
+- `midi_process_ms` remained low with occasional isolated high maxima.
+- Anchor draw metrics for notebeam/gameviz/tunestructure/timeline stayed within expected active-play ranges.
+
+Post-play/cleanup and tail-window notes:
+- Expected review/export/cleanup spikes appeared again.
+- A heavier transient burst was observed in tail windows (`anchor_draw_ms` notebeam peaks into ~70+ ms and elevated step-interval spikes), then metrics recovered back toward baseline.
+- Treat this as a separate profiling target from the current structural cleanup track.
+
+### Runtime Checkpoint (2026-03-24, Jig of Slurs control run)
+- Status: pass (no clear active-playback regression)
+
+Observed behavior:
+- Same-tune control run completed end-to-end (playback, review/export, cleanup) with no functional failures.
+- Playback scheduler remained stable through active tune windows.
+
+Active-playback envelope (control-run summary):
+- `controller_step_interval_ms`: p50 near 2.000 ms, p95 mostly 3.000 ms.
+- `draw_ms`: p50 near 0.001 ms, p95 around 0.001-0.002 ms.
+- `midi_process_ms`: low medians with intermittent isolated spikes.
+- `anchor_draw_ms` (notebeam/gameviz/tunestructure/timeline): stayed in expected live-play ranges for this tune size.
+
+Post-play/cleanup notes:
+- Cleanup window still shows heavier spikes (for example timeline p95 around ~9-11 ms and elevated step-interval p95 into low teens).
+- Pattern remains phase-scoped to post-play/tail windows, not sustained across active playback.
+
+Interpretation:
+- Current cleanup/refactor batches continue to appear performance-safe for active play.
+- Tail-window spike behavior remains an optimization target, but evidence does not currently indicate a broad regression in core playback cadence.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 24)
+- Status: pass (candidate load-attempt helper extraction)
+
+Change summary:
+- In `scr_button_scripts`, extracted per-candidate tune-load attempt body into `scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label)`.
+- `scr_tune_OK` loop now delegates candidate attempt handling to the helper.
+- Behavior unchanged; load/apply/log/post-load flow remains equivalent.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 25)
+- Status: pass (stale commented legacy block removed)
+
+Change summary:
+- Removed obsolete commented legacy tune-load scaffold at the end of `scr_tune_OK` in `scr_button_scripts`.
+- Active code path unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 26)
+- Status: pass (restore/exit pattern consolidated in tune OK flow)
+
+Change summary:
+- In `scr_tune_OK` (`scr_button_scripts`), consolidated repeated button-label restore calls into one final restore point.
+- Kept existing messages and load/hide behavior unchanged.
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Cleanup Update (2026-03-24, post-hotfix batch 27)
+- Status: pass (final low-value informational tune-load logs removed)
+
+Change summary:
+- In `scr_button_scripts`, removed low-value informational logs in the tune OK candidate-load path:
+  - `Tune selected: ...`
+  - `Attempting to load tune: ...`
+  - `Loaded tune: ...`
+  - created-set-item summary logging helper + call
+- Kept warning/failure diagnostics in place (`No tune selected`, `No tune filename selected`, `Failed to load tune from candidates`, hide-layer warning).
+
+Validation:
+- Static error check on `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+
+### Freeze Checkpoint (2026-03-24, post-hotfix cleanup wave)
+- Status: ready for runtime gate
+
+Checkpoint summary:
+- Planned cleanup wave completed through batch 27.
+- All touched files in the final batches are static-clean.
+- Next gate is one runtime validation pass to reconfirm active-playback envelope remains stable.
+
+### Runtime Gate (2026-03-24, no audio interface / slower MIDI driver)
+- Status: pass (cleanup wave remains functionally and performance safe under slower driver)
+
+Observed behavior:
+- End-to-end flow succeeded (playback, review export, summary export, scheduled cleanup, all-notes-off, cleanup complete).
+- No functional regressions observed in tune start/play/cleanup paths.
+
+Active-playback profile (driver-constrained run):
+- `controller_step_interval_ms`: p50 mostly around 3 ms, p95 around 4-6 ms, p99 around 6-7 ms, occasional peaks up to ~9 ms.
+- `scheduler_late_ms`: improved during run windows (typically p95 around 3-4 ms late, p99 around 4-5 ms).
+- `scheduler_group_proc_ms` and `midi_send_ms`: elevated versus prior audio-interface runs, with p50 around ~1.0 ms and p95 around ~1.9-2.0 ms in later windows.
+- `draw_ms` remained very low (p50 around 0.002 ms), and anchor draw metrics stayed within expected notebeam/tunestructure/gameviz envelopes.
+
+Interpretation:
+- The dominant shift is consistent with slower MIDI output path overhead rather than rendering or recent cleanup regressions.
+- Cleanup/refactor batches continue to look safe; active-play cadence remains stable enough for this driver class.
+
+Follow-up note:
+- If needed, keep a separate baseline profile for "slow MIDI driver / no interface" so future regressions are compared within the same driver class.
+
+### Gameplay Controls Update (2026-03-24, notebeam zoom/pan controls wired)
+- Status: pass (UI wiring + script handlers connected)
+
+Change summary:
+- Verified the six new notebeam controls exist in RoomUI and are mapped to new handlers:
+  - zoom: script index `22`
+  - pan: script index `23`
+- Corrected two minus-button setup mistakes in RoomUI:
+  - `ui_name` fixed to `notebeam_zoom_minus`
+  - `button_click_value` fixed to `-1`
+- Added explicit `ui_layer_num=3` to new controls that were missing it (`notebeam_pan_far_left`, `notebeam_zoom_plus`, `notebeam_zoom_minus`).
+- Added button dispatcher cases and handlers in `scr_button_scripts` for indices `22` and `23`.
+- Implemented notebeam zoom/pan timeline helpers in `scr_game_viz` and wired mouse wheel pan over the notebeam anchor.
+- Pan now applies smooth visual offset in time-domain; zoom updates notebeam time window (`measures_ahead` / `measures_behind`).
+
+Validation:
+- `roomui/RoomUI/RoomUI.yy`: no errors found.
+- `scripts/scr_button_scripts/scr_button_scripts.gml`: no errors found.
+- `scripts/scr_game_viz/scr_game_viz.gml`: pre-existing diagnostics still present; no new diagnostics introduced by this change.
+
+### Gameplay Controls Follow-up (2026-03-24, left-of-now zoom consistency)
+- Status: pass (cache invalidation adjusted)
+
+Change summary:
+- Fixed asymmetry where historical player spans (left of now-line) could appear unscaled after zoom changes.
+- Root cause was live player-surface cache not invalidating on window changes.
+- Live player cache now invalidates when any of these change:
+  - `ms_behind`
+  - `ms_ahead`
+  - `now_ratio`
+
+Expected result:
+- Zoom now rescales both past (left) and future (right) regions consistently during playback.
 
 
 
@@ -514,3 +1001,162 @@ Scoring
 🎉 End of Project Plan
 This document defines the destination, the architecture, and the path forward.
 Your  now becomes the “current state,” while this plan becomes the “future state.”
+
+## Scoring Implementation Checkpoints (2026-03-29)
+
+Checkpoint 1 (complete)
+- Added script: scripts/scr_scoring/scr_scoring.gml
+- Added objective judge: ms overlap by measure and overall score (0-100)
+- Added player_id support (default: "default")
+- Added context keying (tune_id + player_id + bpm + swing + part_key)
+- Added summary export block: performance_summary.scoring
+- Added tune-structure completed tile tint from selected judge measure scores
+
+Checkpoint 2 (complete)
+- Added UI helper functions for overview and popup rows:
+- scoring_get_ui_overview_rows()
+- scoring_get_measure_popup_rows(measure_num)
+
+Checkpoint 3 (next)
+- Build scoring panel container adjacent to fp_gameviz_controls + fp_tune_structure
+- Top 20 percent = judge overview and selected judge score
+- Bottom 80 percent = scrollable judge list with columns: score, best, average
+- Click row to expand component metrics and show popup text from scoring helpers
+
+UI Wiring Instructions (next session)
+- Panel overview source: scoring_get_ui_overview_rows()
+- Measure popup source: scoring_get_measure_popup_rows(measure_num)
+- Use selected judge id in timeline_state.score_selected_judge (currently ms_overlap)
+- For tune-structure popups: on measure tile click, read measure number from measure_nav_tile_hitboxes and query popup rows
+- For judge list rows:
+- score = current run score
+- best = from tune_history_index contexts[] where context id matches selected run context
+- average = running average over matching contexts[] plays
+- Keep panel read-only in first pass (no editing controls)
+
+Validation Steps After UI Hookup
+- Play one tune fully, wait for review mode, confirm completed tiles are color-tinted by score
+- Export history and verify summary JSON includes scoring and player_id fields
+- Re-run same tune/context and verify history index context plays_count increments
+- Click at least 3 measures and verify popup strings are stable and non-empty
+
+---
+
+## Set System Spec (2026-04-05)
+
+### What is a Set
+A set combines multiple tunes into a continuous playback session. Sets are used both for game variety and to practice competition sets as played on bagpipes. Duration is typically 3–8 minutes. Each tune may have individual settings (BPM, swing, gracenote timing). Tunes flow smoothly from one to the next.
+
+### JSON Format
+Sets live in `datafiles/sets/`, one JSON per set, filename = set slug. Sets are shared across all players (not per-player). Current schema:
+
+```json
+{
+  "set": {
+    "title": "March Strathspey Reel",
+    "id": "example_msr",
+    "description": "...",
+    "playback_overrides": { "bpm_percent": 1.0, "gracenote_override_ms": null }
+  },
+  "tunes": [
+    {
+      "filename": "Scotland_The_Brave.json",
+      "bpm": 88,
+      "swing": "1.0",
+      "transition": { "type": "gap", "beats": 4 }
+    },
+    ...
+  ],
+  "ending": { "type": "none" }
+}
+```
+
+### Repeats
+No dedicated `repeats` field. To repeat a tune, add it multiple times in the `tunes` array.
+
+### Player BPM/Swing/Gracenote Overrides
+Sets define defaults per tune. At runtime the player can override BPM, swing, and gracenote timing per tune before starting. These overrides are applied on top of the set defaults but are not saved back to the set JSON.
+
+### Preprocessing Strategy
+Preprocess all tunes and transitions before play starts (Strategy A — offset-and-stitch). Each tune is preprocessed independently at 0-based time; timestamps are then shifted by `previous_tune_end_ms + transition_duration_ms` and merged into a single event stream stored at `global.playback_events`. This happens at set-load time, before entering the playroom, with a loading indicator if needed.
+
+### Transition Types
+Each tune entry carries a `transition` field controlling what happens after that tune ends:
+
+| Type | Description |
+|---|---|
+| `direct` | Next tune starts immediately |
+| `gap` | Empty metronome gap of N beats at the next tune's BPM/meter |
+| `mini_tune` | A short clip (external JSON fragment, same format as tune events) is inserted; has its own BPM/meter |
+| `alt_ending` | Replace the last measure(s) of the current tune before the transition |
+
+`alt_ending` works by: loading the alt-ending JSON fragment, locating the `last_measure_marker` / last measure with bagpipe notes in the main tune event array, and splicing the replacement events in before stitching. If a tune has trailing blank measures/beats (no bagpipe notes) those are stripped first.
+
+A transition may combine options, e.g. alt_ending + gap + mini_tune.
+
+### Ending
+The `ending` field controls what happens after the last tune. `"type": "none"` means nothing. Future types: `gap`, `mini_tune`, `alt_ending`.
+
+### Beat Continuity
+When BPM and meter are identical across a `direct` transition, the metronome beat count continues without reset. No beat-1 accent or visual flicker at the boundary. The transition gap (when present) communicates rhythm changes via the metronome during that space.
+
+### Performance History
+- Individual tune summaries are written as normal (keyed per tune + player + BPM + swing).
+- A `set_summary.json` is written to `datafiles/config/players/{player_id}/sets/` after a **full** set completion, aggregating per-tune scores.
+- Each tune summary written during a set includes a `set_id` field so all performances of a set can be filtered from history.
+- Mid-set abandon: completed tunes score independently; the set-level summary is **not** written unless the full set is completed.
+
+---
+
+## Set System — Implementation Status (2026-04-05)
+
+### Done
+- Set JSON format (`datafiles/sets/`, `example_msr.json`)
+- `scr_set_preprocess_and_build_playback()` — offset-and-stitch preprocessing at load time
+- `scr_playback_context_build_for_set()` — populates `global.playback_context` with segment data; all `bar_events` shifted to absolute time with all time fields (`time`, `time_ms`, `timestamp_ms`, `expected_ms`) synced
+- `global.playback_context` architecture (`mode`, `segments[]`, `active_segment`) — single tune = set of 1
+- Transition types: `direct` and `gap` implemented
+- Tune structure panel: shows one segment at a time with title strip and prev/next arrows
+- Segment auto-advance during playback
+- Segment-aware scoring: `scoring_build_ms_overlap_summary` scores each segment independently, stores `score_by_segment[]` in `timeline_state`
+- Segment-aware tile colours (`scoring_get_measure_visual_style`)
+- Segment-aware judge panel / popup (`scoring_get_panel_focus`, `scoring_find_measure_result`, `scoring_get_detail_popup_rows`)
+- Measure gap fix: `seg_bar_events` now includes all events with `measure >= 1`, not just bar/beat markers
+
+### In Progress / Deferred
+- `gv_get_current_planned_measure` — still scans all set events; could briefly highlight wrong tile at tune boundary
+- `gv_review_jump_to_measure` — uses tune-1 `measure_ms` for scrub buttons; slightly off for mixed-tempo sets
+
+### Not Yet Started
+
+**Set picker UI**
+- The tune picker currently shows only single tunes. Need a mode toggle (Tunes / Sets) in the picker window.
+- In Sets mode: list sets from `datafiles/sets/`, show title + tune count + duration estimate.
+- Selecting a set opens a **Set Detail panel** showing: set title, list of tunes in order (tune name, BPM, swing, transition summary), and per-tune override controls (BPM slider, swing, gracenote). Play button launches the set.
+
+**Per-tune runtime overrides UI**
+- When a set is selected, player can adjust BPM %, swing, gracenote per tune before pressing Play.
+- These are applied at preprocess time and not persisted to the set JSON.
+
+**Transition types: `mini_tune`, `alt_ending`**
+- `mini_tune`: load a small event JSON, preprocess it, offset-and-stitch between tunes.
+- `alt_ending`: strip trailing blank measures from main tune events, splice in alt-ending events.
+- Both require external authoring of the event fragments (ABC/Excel export pipeline) for now; in-game authoring is future scope.
+
+**Set name / current tune name in gameinfo window**
+- `fp_gameinfo_window` should show the set title and the current tune name during play.
+- Currently only the title strip in the tune structure panel shows this.
+
+**Judge scope toggle (set overall vs per-tune)**
+- The judge panel shows per-segment scores when switching segments.
+- Need an explicit toggle: "Set overall" vs "Tune N" so the player can compare aggregate vs per-tune performance without navigating the structure panel.
+
+**Performance history — set-level summary**
+- Write `set_summary.json` on full-set completion.
+- Tag individual tune summaries with `set_id`.
+- Mid-set abandon: write completed tune summaries without set summary.
+
+**Set library index**
+- Analogous to `tune_library.json` — a `set_library.json` index scanned at startup from `datafiles/sets/`.
+- Enables filtering, sorting, and display in the picker without re-reading every set JSON at runtime.
+

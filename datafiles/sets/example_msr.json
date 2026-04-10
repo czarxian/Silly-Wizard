@@ -1,0 +1,32 @@
+{
+  "set": {
+    "title": "March Strathspey Reel",
+    "id": "example_msr",
+    "description": "A classic MSR: march, strathspey, reel.",
+    "playback_overrides": {
+      "bpm_percent": 1.0,
+      "gracenote_override_ms": null
+    }
+  },
+  "tunes": [
+    {
+      "filename": "Scotland_The_Brave.json",
+      "bpm": 88,
+      "swing": "1.0",
+      "transition": { "type": "gap", "beats": 4 }
+    },
+    {
+      "filename": "LadyCarmichaelofCastlecraig.json",
+      "bpm": 72,
+      "swing": "1.5",
+      "transition": { "type": "gap", "beats": 4 }
+    },
+    {
+      "filename": "Jock_Wilsons_Ball.json",
+      "bpm": 108,
+      "swing": "1.0",
+      "transition": { "type": "direct" }
+    }
+  ],
+  "ending": { "type": "none" }
+}

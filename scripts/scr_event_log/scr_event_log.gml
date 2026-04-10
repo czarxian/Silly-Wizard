@@ -25,6 +25,9 @@ if (!variable_global_exists("EVENT_HISTORY_EXPORTED")) {
 if (!variable_global_exists("EVENT_HISTORY_LIBRARY_UPDATED")) {
     global.EVENT_HISTORY_LIBRARY_UPDATED = false;
 }
+if (!variable_global_exists("current_player_id")) {
+    global.current_player_id = "player_1";
+}
 
 /// @function event_history_add(_event_struct)
 /// @description Add a new event to the history log.
@@ -45,6 +48,17 @@ function event_history_add(_event_struct) {
     if (variable_global_exists("EVENT_HISTORY_ENABLED") && !global.EVENT_HISTORY_ENABLED) {
         return;
     }
+
+    if (is_struct(_event_struct)
+        && !variable_struct_exists(_event_struct, "loop_iteration")
+        && variable_global_exists("loop_runtime_active")
+        && global.loop_runtime_active) {
+        var loop_iter = variable_global_exists("loop_runtime_current_iteration")
+            ? floor(real(global.loop_runtime_current_iteration))
+            : 0;
+        variable_struct_set(_event_struct, "loop_iteration", max(0, loop_iter));
+    }
+
     array_push(global.EVENT_HISTORY, _event_struct);
     
     // Optional: Log to debug output if needed for real-time monitoring
@@ -348,6 +362,12 @@ function event_history_get_export_score(_export_info = undefined) {
         if (variable_struct_exists(_export_info, "last_score")) return variable_struct_get(_export_info, "last_score");
     }
 
+    if (variable_global_exists("scoring_last_run") && is_struct(global.scoring_last_run)) {
+        if (variable_struct_exists(global.scoring_last_run, "overall_score")) {
+            return real(variable_struct_get(global.scoring_last_run, "overall_score"));
+        }
+    }
+
     var global_keys = [
         "last_score",
         "run_score",
@@ -388,6 +408,10 @@ function event_history_get_export_info(_timestamp = "") {
     var grace_override_ms = variable_global_exists("gracenote_override_ms")
         ? real(global.gracenote_override_ms)
         : 0;
+    var player_key = variable_global_exists("current_player_id")
+        ? string_trim(string(global.current_player_id))
+        : "default";
+    if (player_key == "") player_key = "default";
 
     var timestamp = string(_timestamp);
     if (timestamp == "") {
@@ -401,6 +425,8 @@ function event_history_get_export_info(_timestamp = "") {
         tune_name: tune_name,
         tune_filename: tune_filename,
         tune_id: event_history_make_tune_history_id((tune_filename != "") ? tune_filename : tune_name),
+        player_id: player_key,
+        part_key: "all",
         tune_title: tune_title,
         clean_tune: clean_tune,
         timestamp: timestamp,
@@ -496,6 +522,7 @@ function event_history_update_tune_history_index(_export_info = undefined) {
     variable_struct_set(history_entry, "last_grace_override_ms", real(event_history_struct_get(export_info, "grace_override_ms", 0)));
     variable_struct_set(history_entry, "last_export_base_name", string(event_history_struct_get(export_info, "base_name", "")));
     variable_struct_set(history_entry, "tune_name", string(event_history_struct_get(export_info, "tune_name", "")));
+    variable_struct_set(history_entry, "last_player_id", string(event_history_struct_get(export_info, "player_id", "default")));
 
     var score_value = event_history_get_export_score(export_info);
     var score_text = string_trim(string(score_value ?? ""));
@@ -511,6 +538,65 @@ function event_history_update_tune_history_index(_export_info = undefined) {
         } else if (string_length(string_trim(string(event_history_struct_get(history_entry, "best_score", "")))) <= 0) {
             variable_struct_set(history_entry, "best_score", score_text);
         }
+
+        var player_key = string(event_history_struct_get(export_info, "player_id", "default"));
+        var part_key = string(event_history_struct_get(export_info, "part_key", "all"));
+        var bpm_key = real(event_history_struct_get(export_info, "bpm", 0));
+        var swing_key = string(event_history_struct_get(export_info, "swing", ""));
+        var context_key = string(tune_id) + "|" + string_lower(player_key) + "|" + string(bpm_key) + "|" + swing_key + "|" + part_key;
+
+        var contexts = event_history_struct_get(history_entry, "contexts", []);
+        if (!is_array(contexts)) contexts = [];
+        var ctx_idx = -1;
+        for (var ci = 0; ci < array_length(contexts); ci++) {
+            var ctx = contexts[ci];
+            if (!is_struct(ctx)) continue;
+            if (string(event_history_struct_get(ctx, "id", "")) == context_key) {
+                ctx_idx = ci;
+                break;
+            }
+        }
+
+        if (ctx_idx < 0) {
+            array_push(contexts, {
+                id: context_key,
+                player_id: player_key,
+                bpm: bpm_key,
+                swing: swing_key,
+                part_key: part_key,
+                plays_count: 0,
+                last_played_utc: "",
+                last_score: "",
+                best_score: "",
+                score_sum: 0,
+                avg_score: ""
+            });
+            ctx_idx = array_length(contexts) - 1;
+        }
+
+        var ctx_entry = contexts[ctx_idx];
+        variable_struct_set(ctx_entry, "plays_count", floor(max(0, real(event_history_struct_get(ctx_entry, "plays_count", 0)))) + 1);
+        variable_struct_set(ctx_entry, "last_played_utc", string(event_history_struct_get(export_info, "timestamp", "")));
+        variable_struct_set(ctx_entry, "last_score", score_text);
+
+        var ctx_score_real = event_history_try_score_real(score_value);
+        var ctx_best_real = event_history_try_score_real(event_history_struct_get(ctx_entry, "best_score", undefined));
+        if (!is_undefined(ctx_score_real)) {
+            var prev_sum = real(event_history_struct_get(ctx_entry, "score_sum", 0));
+            var next_sum = prev_sum + ctx_score_real;
+            var next_count = max(1, real(event_history_struct_get(ctx_entry, "plays_count", 1)));
+            variable_struct_set(ctx_entry, "score_sum", next_sum);
+            variable_struct_set(ctx_entry, "avg_score", string_format(next_sum / next_count, 0, 2));
+
+            if (is_undefined(ctx_best_real) || ctx_score_real > ctx_best_real) {
+                variable_struct_set(ctx_entry, "best_score", score_text);
+            }
+        } else if (string_length(string_trim(string(event_history_struct_get(ctx_entry, "best_score", "")))) <= 0) {
+            variable_struct_set(ctx_entry, "best_score", score_text);
+        }
+
+        contexts[ctx_idx] = ctx_entry;
+        variable_struct_set(history_entry, "contexts", contexts);
     }
 
     tunes[match_idx] = history_entry;
@@ -527,14 +613,19 @@ function event_history_build_summary_player_spans() {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) {
         return spans_out;
     }
-    if (!variable_struct_exists(global.timeline_state, "player_in") || !is_array(global.timeline_state.player_in)) {
+    var source_spans = [];
+    if (variable_struct_exists(global.timeline_state, "review_full_trace") && is_array(global.timeline_state.review_full_trace)
+        && array_length(global.timeline_state.review_full_trace) > 0) {
+        source_spans = global.timeline_state.review_full_trace;
+    } else if (variable_struct_exists(global.timeline_state, "player_in") && is_array(global.timeline_state.player_in)) {
+        source_spans = global.timeline_state.player_in;
+    } else {
         return spans_out;
     }
 
-    var player_spans = global.timeline_state.player_in;
-    var n_spans = array_length(player_spans);
+    var n_spans = array_length(source_spans);
     for (var i = 0; i < n_spans; i++) {
-        var span = player_spans[i];
+        var span = source_spans[i];
         if (!is_struct(span)) continue;
 
         var start_ms = real(span.start_ms ?? 0);
@@ -581,10 +672,18 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         return false;
     }
 
+    var scoring_summary = undefined;
+    var scoring_builder_idx = asset_get_index("scoring_build_ms_overlap_summary");
+    if (script_exists(scoring_builder_idx)) {
+        scoring_summary = script_execute(scoring_builder_idx, export_info);
+    }
+
     var payload = {
         schema_version: 1,
         export_type: "performance_summary",
         tune_name: event_history_struct_get(export_info, "tune_name", ""),
+        tune_id: event_history_struct_get(export_info, "tune_id", ""),
+        player_id: event_history_struct_get(export_info, "player_id", "default"),
         tune_title: event_history_struct_get(export_info, "tune_title", ""),
         clean_tune: event_history_struct_get(export_info, "clean_tune", ""),
         timestamp: event_history_struct_get(export_info, "timestamp", ""),
@@ -593,6 +692,9 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         grace_override_ms: event_history_struct_get(export_info, "grace_override_ms", 0),
         player_spans: player_spans
     };
+    if (is_struct(scoring_summary)) {
+        variable_struct_set(payload, "scoring", scoring_summary);
+    }
     variable_struct_set(payload, "player_span_count", array_length(event_history_struct_get(payload, "player_spans", [])));
 
     var file = file_text_open_write(filepath);
@@ -604,6 +706,129 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
     file_text_write_string(file, json_stringify(payload));
     file_text_close(file);
     show_debug_message("✓ Exported review summary to: " + filepath);
+    return true;
+}
+
+/// @function event_history_export_loop_session_json(_export_info)
+/// @description Export one loop-session JSON with each loop iteration grouped separately.
+function event_history_export_loop_session_json(_export_info = undefined) {
+    if (!variable_global_exists("loop_runtime_active") || !global.loop_runtime_active) {
+        return false;
+    }
+    if (!variable_global_exists("EVENT_HISTORY") || !is_array(global.EVENT_HISTORY) || array_length(global.EVENT_HISTORY) <= 0) {
+        return false;
+    }
+
+    var export_info = is_struct(_export_info)
+        ? _export_info
+        : event_history_get_export_info();
+    var export_folder = string(event_history_struct_get(export_info, "folder", ""));
+    if (export_folder == "") {
+        return false;
+    }
+    if (!directory_exists(export_folder)) {
+        directory_create(export_folder);
+    }
+
+    var selected_measures = [];
+    if (is_undefined(gv_loop_get_selected_measures) == false) {
+        selected_measures = gv_loop_get_selected_measures();
+    }
+
+    var run_map = {};
+    var run_order = [];
+    for (var i = 0; i < array_length(global.EVENT_HISTORY); i++) {
+        var ev = global.EVENT_HISTORY[i];
+        if (!is_struct(ev)) continue;
+
+        var loop_iteration = floor(real(event_history_struct_get(ev, "loop_iteration", 0)));
+        if (loop_iteration <= 0) continue;
+        var run_key = string(loop_iteration);
+
+        if (!variable_struct_exists(run_map, run_key) || !is_struct(run_map[$ run_key])) {
+            run_map[$ run_key] = {
+                iteration: loop_iteration,
+                event_count: 0,
+                player_event_count: 0,
+                first_timestamp_ms: -1,
+                last_timestamp_ms: -1
+            };
+            array_push(run_order, loop_iteration);
+        }
+
+        var run = run_map[$ run_key];
+        run.event_count += 1;
+
+        var ev_source = string(event_history_struct_get(ev, "source", ""));
+        if (ev_source == "player") {
+            run.player_event_count += 1;
+        }
+
+        var ev_time = real(event_history_struct_get(ev, "timestamp_ms", 0));
+        if (run.first_timestamp_ms < 0 || ev_time < run.first_timestamp_ms) {
+            run.first_timestamp_ms = ev_time;
+        }
+        if (run.last_timestamp_ms < 0 || ev_time > run.last_timestamp_ms) {
+            run.last_timestamp_ms = ev_time;
+        }
+
+        run_map[$ run_key] = run;
+    }
+
+    if (array_length(run_order) <= 0) {
+        return false;
+    }
+
+    for (var a = 1; a < array_length(run_order); a++) {
+        var v = run_order[a];
+        var b = a - 1;
+        while (b >= 0 && run_order[b] > v) {
+            run_order[b + 1] = run_order[b];
+            b--;
+        }
+        run_order[b + 1] = v;
+    }
+
+    var runs = [];
+    for (var r = 0; r < array_length(run_order); r++) {
+        var run_key = string(run_order[r]);
+        if (!variable_struct_exists(run_map, run_key)) continue;
+        var run = run_map[$ run_key];
+        run.duration_ms = max(0, real(run.last_timestamp_ms) - real(run.first_timestamp_ms));
+        array_push(runs, run);
+    }
+
+    var payload = {
+        schema_version: 1,
+        export_type: "loop_session",
+        tune_name: event_history_struct_get(export_info, "tune_name", ""),
+        tune_title: event_history_struct_get(export_info, "tune_title", ""),
+        clean_tune: event_history_struct_get(export_info, "clean_tune", ""),
+        timestamp: event_history_struct_get(export_info, "timestamp", ""),
+        bpm: event_history_struct_get(export_info, "bpm", 0),
+        swing: event_history_struct_get(export_info, "swing", ""),
+        loop_repeat_total: variable_global_exists("loop_runtime_repeat_total") ? real(global.loop_runtime_repeat_total) : array_length(runs),
+        loop_blank_measure: variable_global_exists("loop_runtime_blank_measure") ? (global.loop_runtime_blank_measure == true) : false,
+        selected_measures: selected_measures,
+        runs: runs
+    };
+    variable_struct_set(payload, "run_count", array_length(runs));
+
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.loop_session_runs = runs;
+    }
+
+    var base_name = string(event_history_struct_get(export_info, "base_name", "session"));
+    var filepath = export_folder + "/" + base_name + "_loop_session.json";
+    var file = file_text_open_write(filepath);
+    if (file < 0) {
+        show_debug_message("ERROR: Could not open loop session file for writing: " + filepath);
+        return false;
+    }
+
+    file_text_write_string(file, json_stringify(payload));
+    file_text_close(file);
+    show_debug_message("✓ Exported loop session to: " + filepath);
     return true;
 }
 
@@ -651,9 +876,9 @@ function event_history_sort_summaries_desc(_summaries) {
     return sorted;
 }
 
-/// @function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm, _match_swing)
+/// @function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm, _match_swing, _player_id, _match_player)
 /// @description Load recent matching summary JSON files for review overlays.
-function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm = true, _match_swing = true) {
+function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm = true, _match_swing = true, _player_id = "", _match_player = true) {
     var results = array_create(0);
     var clean_tune = string(_clean_tune ?? "");
     var max_count = max(0, floor(real(_max_count)));
@@ -671,6 +896,7 @@ function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_cou
 
     var target_bpm = real(_bpm);
     var target_swing = string(_swing ?? "");
+    var target_player = string_lower(string_trim(string(_player_id ?? "")));
 
     var entry = file_find_first(folder + "*_summary.json", 0);
     if (entry == "") {
@@ -688,7 +914,9 @@ function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_cou
                     && array_length(event_history_struct_get(summary, "player_spans", [])) > 0) {
                     var bpm_ok = !_match_bpm || abs(real(event_history_struct_get(summary, "bpm", -1)) - target_bpm) <= 0.001;
                     var swing_ok = !_match_swing || string(event_history_struct_get(summary, "swing", "")) == target_swing;
-                    if (bpm_ok && swing_ok) {
+                    var summary_player = string_lower(string_trim(string(event_history_struct_get(summary, "player_id", ""))));
+                    var player_ok = !_match_player || target_player == "" || summary_player == target_player;
+                    if (bpm_ok && swing_ok && player_ok) {
                         array_push(results, summary);
                     }
                 }

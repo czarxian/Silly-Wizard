@@ -80,10 +80,10 @@ function scr_preprocess_tune(_tune, _overrides) {
 	show_debug_message("  Base MIDI: " + string(base_midi));
 	
 	// Apply swing overrides before building playable events
-	var perf_swing = perf.swing ?? "";
-	var swing_value = !is_undefined(override_swing) ? override_swing : (meta.swing ?? perf_swing ?? "");
+	var perf_swing = perf[$ "swing"] ?? "";
+	var swing_value = !is_undefined(override_swing) ? override_swing : (meta[$ "swing"] ?? perf_swing ?? "");
 	var swing_mult = tune_parse_swing_multiplier(swing_value);
-	var grace_override_ms = !is_undefined(override_grace_ms) ? override_grace_ms : (meta.gracenote_override_ms ?? meta.gracenote_ms ?? undefined);
+	var grace_override_ms = !is_undefined(override_grace_ms) ? override_grace_ms : (meta[$ "gracenote_override_ms"] ?? meta[$ "gracenote_ms"] ?? undefined);
 	if (swing_mult > 0) {
 		events = tune_apply_swing_to_events(events, tempo_bpm, unit_ms, swing_mult, grace_override_ms);
 	}

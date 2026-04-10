@@ -1,5 +1,25 @@
 // scr_timing_utils — Shared timing helpers
 
+/// @function timing_sample_begin_step_now_ms()
+/// @description Capture one authoritative engine timestamp for this frame in Begin Step.
+/// @returns Real timestamp in milliseconds
+function timing_sample_begin_step_now_ms() {
+    var now_ms = current_time;
+    global.ENGINE_STEP_NOW_MS = now_ms;
+    return now_ms;
+}
+
+/// @function timing_get_engine_now_ms()
+/// @description Read the shared engine timestamp captured in Begin Step.
+/// Falls back to current_time when Begin Step sampling is not available.
+/// @returns Real timestamp in milliseconds
+function timing_get_engine_now_ms() {
+    if (variable_global_exists("ENGINE_STEP_NOW_MS")) {
+        return real(global.ENGINE_STEP_NOW_MS);
+    }
+    return current_time;
+}
+
 function timing_normalize_time_sig(_time_sig) {
     var ts = string(_time_sig ?? "");
     ts = string_trim(ts);

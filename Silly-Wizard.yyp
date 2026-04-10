@@ -33,6 +33,7 @@
   "IncludedFiles":[
     {"$GMIncludedFile":"","%Name":"embellishments.json","CopyToMask":-1,"filePath":"datafiles","name":"embellishments.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Runtime data folder.lnk","CopyToMask":-1,"filePath":"datafiles","name":"Runtime data folder.lnk","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"example_msr.json","CopyToMask":-1,"filePath":"datafiles/sets","name":"example_msr.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Barnyards of Delgaty.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"Barnyards of Delgaty.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Calibrate.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"Calibrate.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Canadian Scottish.json","CopyToMask":-1,"filePath":"datafiles/tunes","name":"Canadian Scottish.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
@@ -52,7 +53,7 @@
   "isEcma":false,
   "LibraryEmitters":[],
   "MetaData":{
-    "IDEVersion":"2024.14.3.217",
+    "IDEVersion":"2024.14.4.222",
   },
   "name":"Silly-Wizard",
   "resources":[
@@ -75,6 +76,7 @@
     {"id":{"name":"obj_tune_picker","path":"objects/obj_tune_picker/obj_tune_picker.yy",},},
     {"id":{"name":"obj_tune","path":"objects/obj_tune/obj_tune.yy",},},
     {"id":{"name":"obj_ui_controller","path":"objects/obj_ui_controller/obj_ui_controller.yy",},},
+    {"id":{"name":"obj_ui_label","path":"objects/obj_ui_label/obj_ui_label.yy",},},
     {"id":{"name":"obj_UI_parent","path":"objects/obj_UI_parent/obj_UI_parent.yy",},},
     {"id":{"name":"Room_main_menu","path":"rooms/Room_main_menu/Room_main_menu.yy",},},
     {"id":{"name":"Room_play","path":"rooms/Room_play/Room_play.yy",},},
@@ -87,6 +89,8 @@
     {"id":{"name":"scr_metronome","path":"scripts/scr_metronome/scr_metronome.yy",},},
     {"id":{"name":"scr_MIDI","path":"scripts/scr_MIDI/scr_MIDI.yy",},},
     {"id":{"name":"scr_preprocess_tune","path":"scripts/scr_preprocess_tune/scr_preprocess_tune.yy",},},
+    {"id":{"name":"scr_scoring","path":"scripts/scr_scoring/scr_scoring.yy",},},
+    {"id":{"name":"scr_set_scripts","path":"scripts/scr_set_scripts/scr_set_scripts.yy",},},
     {"id":{"name":"scr_timing_utils","path":"scripts/scr_timing_utils/scr_timing_utils.yy",},},
     {"id":{"name":"scr_tune_library","path":"scripts/scr_tune_library/scr_tune_library.yy",},},
     {"id":{"name":"scr_tune_load","path":"scripts/scr_tune_load/scr_tune_load.yy",},},

@@ -6,8 +6,27 @@
 //  - Initializes MIDI device lists and MIDI event counters used by scr_MIDI and scr_button_scripts.
 // Related scripts: scripts/scr_tune_library/, scripts/scr_MIDI/, scripts/scr_button_scripts/
 
-// Set high step rate for precise MIDI timing (callbacks fire with ~1ms precision)
-room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh rate)
+// Set step rate for gameplay/update loop.
+// Higher FPS lowers frame-quantized scheduler jitter (at CPU cost).
+if (!variable_global_exists("GAME_STEP_FPS")) {
+	global.GAME_STEP_FPS = 500;
+}
+var _game_step_fps = max(30, floor(real(global.GAME_STEP_FPS)));
+game_set_speed(_game_step_fps, gamespeed_fps);
+
+// Playback scheduler mode: "step" (per-step due-group pump) or "timesource".
+if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
+	global.PLAYBACK_SCHEDULER_MODE = "timesource";
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
+	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0.0;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
+	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 8;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
+	global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1000;
+}
 
 //Create Globals
 	//old_scr_tune_library();
@@ -84,6 +103,29 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 
 //Game State
 	global.game_state="menu";
+	if (!variable_global_exists("pending_layer_mode")) {
+		global.pending_layer_mode = "";
+	}
+	if (!variable_global_exists("pending_layer_room")) {
+		global.pending_layer_room = -1;
+	}
+	if (!variable_global_exists("pending_auto_start_play")) {
+		global.pending_auto_start_play = false;
+	}
+		if (!variable_global_exists("loop_mode_enabled")) {
+			global.loop_mode_enabled = false;
+		}
+		if (!variable_global_exists("loop_repeat_total")) {
+			global.loop_repeat_total = 10;
+		}
+		if (!variable_global_exists("loop_jump_to_selection")) {
+			global.loop_jump_to_selection = false;
+		}
+	if (room == Room_main_menu) {
+		global.pending_layer_mode = "main";
+		global.pending_layer_room = Room_main_menu;
+		scr_player_button_label_refresh();
+	}
 
 // Review overlay toggles
 	// Master switches for post-play notebeam overlays.
@@ -133,7 +175,10 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 
 // Currently selected set item index (for editing in tune window)
 	global.current_set_item_index = -1;
-	
+
+// === MUSICAL SET (multi-tune named set, Phase 1) ===
+	scr_set_init_global();  // also calls scr_playback_context_init()
+
 	global.midi_output_drum=0;
 	global.midi_output_drum_name="not selected";
 	global.midi_ouput_drum_channel=0;
@@ -144,4 +189,8 @@ room_speed = 1000;  // 1000 steps per second (rendering still at monitor refresh
 	global.Midi_current_event_time=0;	
 	global.Midi_next_event_deltatime=0;
 
+// Load judge settings for the default player on startup
+if (script_exists(asset_get_index("scoring_judge_settings_load_for_player"))) {
+	scoring_judge_settings_load_for_player();
+}
 

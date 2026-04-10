@@ -1,9 +1,12 @@
 /// @description Timeline initial draw pass (planned row + now bar)
 
-if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) exit;
-if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) exit;
-if (!variable_struct_exists(global.timeline_cfg, "enabled") || !global.timeline_cfg.enabled) exit;
-if (!global.timeline_state.active) exit;
+var _draw_t0_us = get_timer();
+if (variable_global_exists("GV_ANCHOR_RENDER_ONLY") && global.GV_ANCHOR_RENDER_ONLY) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW") && global.DIAG_DISABLE_TIMELINE_DRAW) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!variable_struct_exists(global.timeline_cfg, "enabled") || !global.timeline_cfg.enabled) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
+if (!global.timeline_state.active) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
 
 var rect = gv_get_timeline_anchor_rect();
 if (is_struct(rect)) {
@@ -53,21 +56,4 @@ if (is_struct(rect)) {
 	}
 }
 
-// Fallback for rooms that don't instantiate the tune-structure anchor.
-// Keep panel visible during active playback/review even without RoomUI anchor instances.
-var ts_rect = gv_get_anchor_rect_by_name("tunestructure_canvas_anchor");
-var ts_ok = false;
-if (is_struct(ts_rect)) {
-	var ts_w = real(ts_rect.w ?? 0);
-	var ts_h = real(ts_rect.h ?? 0);
-	ts_ok = (ts_w >= 96 && ts_h >= 96);
-}
-if (!ts_ok) {
-	var panel_x1 = 16;
-	var panel_x2 = max(panel_x1 + 140, floor(room_width * 0.22));
-	var panel_y1 = floor(room_height * 0.22);
-	var panel_y2 = floor(room_height * 0.90);
-	if (panel_x2 > panel_x1 && panel_y2 > panel_y1) {
-		gv_draw_tune_structure_panel(panel_x1, panel_y1, panel_x2, panel_y2);
-	}
-}
+tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000);

@@ -52,7 +52,7 @@ function scr_load_tune_library()
                     }
                 }
 
-                if (needs_part_rebuild && is_undefined(scr_build_tune_library) == false) {
+                if (needs_part_rebuild) {
                     show_debug_message("scr_load_tune_library: rebuilding tune library to add player part metadata");
                     return scr_build_tune_library(string(variable_struct_get(data, "root")));
                 }
@@ -327,6 +327,11 @@ function scr_tune_library_merge_history(_library)
 
     var history_tunes = scr_tune_library_get_tunes(history_index);
 
+    var current_player_id = variable_global_exists("current_player_id")
+        ? string_lower(string_trim(string(global.current_player_id)))
+        : "default";
+    if (current_player_id == "") current_player_id = "default";
+
     for (var i = 0; i < array_length(library_tunes); i++) {
         var entry = library_tunes[i];
         if (!is_struct(entry)) continue;
@@ -337,6 +342,49 @@ function scr_tune_library_merge_history(_library)
         var history_idx = scr_tune_library_find_history_index(history_index, entry_id);
         if (is_array(history_tunes) && history_idx >= 0 && history_idx < array_length(history_tunes)) {
             entry = scr_tune_library_apply_history_entry(entry, history_tunes[history_idx]);
+
+            // Override with per-player context stats
+            var h_entry = history_tunes[history_idx];
+            if (variable_struct_exists(h_entry, "contexts") && is_array(variable_struct_get(h_entry, "contexts"))) {
+                var contexts = variable_struct_get(h_entry, "contexts");
+                var player_best_real = undefined;
+                var player_last_score = "";
+                var player_last_played = "";
+                var player_plays = 0;
+                for (var ci = 0; ci < array_length(contexts); ci++) {
+                    var ctx = contexts[ci];
+                    if (!is_struct(ctx)) continue;
+                    var ctx_pid = string_lower(string_trim(string(event_history_struct_get(ctx, "player_id", ""))));
+                    if (ctx_pid != current_player_id) continue;
+                    player_plays += max(0, floor(real(event_history_struct_get(ctx, "plays_count", 0))));
+                    var ctx_last = string(event_history_struct_get(ctx, "last_played_utc", ""));
+                    if (ctx_last > player_last_played) {
+                        player_last_played = ctx_last;
+                        player_last_score = string(event_history_struct_get(ctx, "last_score", ""));
+                    }
+                    var ctx_best_real = event_history_try_score_real(event_history_struct_get(ctx, "best_score", ""));
+                    if (!is_undefined(ctx_best_real) && (is_undefined(player_best_real) || ctx_best_real > player_best_real)) {
+                        player_best_real = ctx_best_real;
+                    }
+                }
+                if (player_plays > 0) {
+                    variable_struct_set(entry, "plays_count", player_plays);
+                    variable_struct_set(entry, "times_played", player_plays);
+                } else {
+                    variable_struct_set(entry, "plays_count", 0);
+                    variable_struct_set(entry, "times_played", 0);
+                    variable_struct_set(entry, "last_score", "");
+                    variable_struct_set(entry, "score", "");
+                    variable_struct_set(entry, "best_score", "");
+                }
+                if (player_last_score != "") {
+                    variable_struct_set(entry, "last_score", player_last_score);
+                    variable_struct_set(entry, "score", player_last_score);
+                }
+                if (!is_undefined(player_best_real)) {
+                    variable_struct_set(entry, "best_score", string_format(player_best_real, 0, 2));
+                }
+            }
         }
 
         library_tunes[i] = entry;
@@ -882,9 +930,8 @@ function scr_tune_picker_sync_selected_entry_ui()
 		scr_tune_picker_set_selected_part_channel(entry, selected_part_channel);
 	}
 
-    if (variable_global_exists("obj_gameinfo_win_title") && instance_exists(global.obj_gameinfo_win_title)) {
-        scr_tune_instance_set(global.obj_gameinfo_win_title, "field_contents", scr_tune_picker_get_tune_title(entry));
-    }
+    global.gameinfo_title[0] = scr_tune_picker_get_tune_title(entry);
+    scr_update_fields(3);
 
     var tempo_str = string(scr_tune_struct_get(entry, "tempo_default", "120"));
     var metro_field_3_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_3");
@@ -1344,7 +1391,7 @@ function scr_tune_picker_update_canvas_layout()
     var sort_w = clamp(floor(bounds.w * 0.20), 140, 200);
     var filter_value_w = clamp(floor(bounds.w * 0.38), 170, 330);
     var row_split_ratio = 0.50;
-    var meta_column_ratios = [0.25, 0.11, 0.12, 0.20, 0.10, 0.22];
+    var meta_column_ratios = [0.25, 0.11, 0.12, 0.20, 0.17, 0.15];
 
     var controls_y1 = bounds.y1 + 2;
     var controls_y2 = controls_y1 + control_h;
@@ -1359,6 +1406,20 @@ function scr_tune_picker_update_canvas_layout()
     var rows_rect = scr_tune_picker_make_rect(list_rect.x1, list_rect.y1, scrollbar_rect.x1 - 6, list_rect.y2);
 
     var visible_rows = max(1, floor((rows_rect.h + row_gap) / (row_h + row_gap)));
+
+    // In sets mode, split list area: left pane (55%) = tune list, right pane (45%) = set builder
+    var view_mode = string(scr_tune_picker_get_instance_var(picker, "view_mode", "tunes"));
+    var right_pane_rect = undefined;
+    if (view_mode == "sets") {
+        var pane_gap   = 8;
+        var left_w     = floor(list_rect.w * 0.55) - floor(pane_gap * 0.5);
+        var right_x1   = list_rect.x1 + left_w + pane_gap;
+        right_pane_rect = scr_tune_picker_make_rect(right_x1, list_rect.y1, list_rect.x2, list_rect.y2);
+        var left_list_rect = scr_tune_picker_make_rect(list_rect.x1, list_rect.y1, list_rect.x1 + left_w, list_rect.y2);
+        scrollbar_rect = scr_tune_picker_make_rect(left_list_rect.x2 - 14, left_list_rect.y1, left_list_rect.x2, left_list_rect.y2);
+        rows_rect      = scr_tune_picker_make_rect(left_list_rect.x1, left_list_rect.y1, scrollbar_rect.x1 - 6, left_list_rect.y2);
+        visible_rows   = max(1, floor((rows_rect.h + row_gap) / (row_h + row_gap)));
+    }
     scr_tune_picker_set_instance_var(picker, "view_row_height", row_h);
     scr_tune_picker_set_instance_var(picker, "view_row_gap", row_gap);
     scr_tune_picker_set_instance_var(picker, "view_visible_rows", visible_rows);
@@ -1372,6 +1433,8 @@ function scr_tune_picker_update_canvas_layout()
         list_rect: list_rect,
         rows_rect: rows_rect,
         scrollbar_rect: scrollbar_rect,
+        right_pane_rect: right_pane_rect,
+        view_mode: view_mode,
         control_scale: control_scale,
         info_scale: info_scale,
         title_scale: title_scale,
@@ -1485,25 +1548,49 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
     var sort_rect = scr_tune_struct_get(layout, "sort_rect", undefined);
     var scrollbar_rect = scr_tune_struct_get(layout, "scrollbar_rect", undefined);
     var rows_rect = scr_tune_struct_get(layout, "rows_rect", undefined);
+    var right_pane_rect = scr_tune_struct_get(layout, "right_pane_rect", undefined);
     var bounds = scr_tune_struct_get(layout, "bounds", undefined);
     var row_height = real(scr_tune_struct_get(layout, "row_height", 0));
     var row_gap = real(scr_tune_struct_get(layout, "row_gap", 0));
     var layout_visible_rows = floor(real(scr_tune_struct_get(layout, "visible_rows", 1)));
+    var view_mode = string(scr_tune_picker_get_instance_var(picker, "view_mode", "tunes"));
 
-    if (scr_tune_picker_rect_contains(filter_prev_rect, _gui_x, _gui_y)) {
-        scr_tune_picker_cycle_filter_rhythm(-1);
-        return true;
+    // --- Sets mode: route right pane clicks first ---
+    if (view_mode == "sets" && is_struct(right_pane_rect)) {
+        if (scr_set_builder_handle_click_right(_gui_x, _gui_y)) return true;
     }
 
-    if (scr_tune_picker_rect_contains(filter_value_rect, _gui_x, _gui_y)
-        || scr_tune_picker_rect_contains(filter_next_rect, _gui_x, _gui_y)) {
-        scr_tune_picker_cycle_filter_rhythm(1);
-        return true;
-    }
-
-    if (scr_tune_picker_rect_contains(sort_rect, _gui_x, _gui_y)) {
-        scr_tune_picker_cycle_sort_mode(1);
-        return true;
+    // --- Mode toggle buttons (filter_prev / filter_value / filter_next) ---
+    if (view_mode == "sets") {
+        // Any of the three mode buttons → back to tunes mode
+        if (scr_tune_picker_rect_contains(filter_prev_rect, _gui_x, _gui_y)
+            || scr_tune_picker_rect_contains(filter_value_rect, _gui_x, _gui_y)
+            || scr_tune_picker_rect_contains(filter_next_rect, _gui_x, _gui_y)) {
+            scr_tune_picker_set_instance_var(picker, "view_mode", "tunes");
+            scr_tune_picker_set_instance_var(picker, "view_layout", undefined); // force layout rebuild
+            scr_tune_picker_refresh_visible_rows();
+            return true;
+        }
+        // sort_rect in sets mode = informational only (no action)
+        if (scr_tune_picker_rect_contains(sort_rect, _gui_x, _gui_y)) return true;
+    } else {
+        // Tunes mode: existing rhythm filter
+        if (scr_tune_picker_rect_contains(filter_prev_rect, _gui_x, _gui_y)) {
+            scr_tune_picker_cycle_filter_rhythm(-1);
+            return true;
+        }
+        if (scr_tune_picker_rect_contains(filter_value_rect, _gui_x, _gui_y)
+            || scr_tune_picker_rect_contains(filter_next_rect, _gui_x, _gui_y)) {
+            scr_tune_picker_cycle_filter_rhythm(1);
+            return true;
+        }
+        // sort_rect in tunes mode = "Sets →" button
+        if (scr_tune_picker_rect_contains(sort_rect, _gui_x, _gui_y)) {
+            scr_tune_picker_set_instance_var(picker, "view_mode", "sets");
+            scr_tune_picker_set_instance_var(picker, "view_layout", undefined); // force layout rebuild
+            scr_tune_picker_refresh_visible_rows();
+            return true;
+        }
     }
 
     if (scr_tune_picker_rect_contains(scrollbar_rect, _gui_x, _gui_y)) {
@@ -1541,7 +1628,21 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
             if (_gui_y <= row_top + row_height) {
                 var source_idx = scr_tune_picker_get_visible_source_index(row_idx);
                 if (source_idx >= 0) {
-                    scr_tune_picker_activate_index(source_idx);
+                    if (view_mode == "sets") {
+                        // Append the clicked tune to the set builder slot list
+                        var lib_tunes = scr_tune_library_get_tunes(scr_tune_picker_get_library(picker));
+                        if (is_array(lib_tunes) && source_idx < array_length(lib_tunes)) {
+                            var add_entry = lib_tunes[source_idx];
+                            scr_set_builder_append_tune(
+                                string(scr_tune_struct_get(add_entry, "filename", "")),
+                                real(scr_tune_struct_get(add_entry, "tempo_default", 120)),
+                                1.0,
+                                scr_tune_picker_get_tune_title(add_entry)
+                            );
+                        }
+                    } else {
+                        scr_tune_picker_activate_index(source_idx);
+                    }
                     return true;
                 }
             }
@@ -1585,12 +1686,14 @@ function scr_tune_picker_draw_canvas()
     var info_rect = scr_tune_struct_get(layout, "info_rect", undefined);
     var rows_rect = scr_tune_struct_get(layout, "rows_rect", undefined);
     var scrollbar_rect = scr_tune_struct_get(layout, "scrollbar_rect", undefined);
+    var right_pane_rect = scr_tune_struct_get(layout, "right_pane_rect", undefined);
     var row_height = real(scr_tune_struct_get(layout, "row_height", 56));
     var row_gap = real(scr_tune_struct_get(layout, "row_gap", 6));
     var layout_visible_rows = floor(real(scr_tune_struct_get(layout, "visible_rows", 1)));
 
     var gui_x = scr_tune_picker_get_mouse_gui_x();
     var gui_y = scr_tune_picker_get_mouse_gui_y();
+    var view_mode = string(scr_tune_picker_get_instance_var(picker, "view_mode", "tunes"));
     var filter_key = string_lower(string_trim(string(scr_tune_picker_get_instance_var(picker, "view_filter_rhythm", "all"))));
     var sort_mode = string_lower(string_trim(string(scr_tune_picker_get_instance_var(picker, "view_sort_mode", "title_asc"))));
     var selected_id = string_lower(string_trim(string(scr_tune_picker_get_instance_var(picker, "selected_tune_id", ""))));
@@ -1606,7 +1709,13 @@ function scr_tune_picker_draw_canvas()
     var row_line_gap = real(scr_tune_struct_get(layout, "row_line_gap", 4));
     var row_pad_bottom = real(scr_tune_struct_get(layout, "row_pad_bottom", 7));
     var row_split_ratio = real(scr_tune_struct_get(layout, "row_split_ratio", 0.50));
-    var meta_column_ratios = scr_tune_struct_get(layout, "meta_column_ratios", [0.25, 0.11, 0.12, 0.20, 0.10, 0.22]);
+    var meta_column_ratios = scr_tune_struct_get(layout, "meta_column_ratios", [0.25, 0.11, 0.12, 0.20, 0.17, 0.15]);
+
+    // In sets mode: widen title, show only the rhythm column
+    if (view_mode == "sets") {
+        row_split_ratio = 0.75;
+        meta_column_ratios = [1.0];
+    }
 
     draw_set_halign(fa_left);
     draw_set_valign(fa_top);
@@ -1617,41 +1726,59 @@ function scr_tune_picker_draw_canvas()
     var sort_hover = scr_tune_picker_rect_contains(sort_rect, gui_x, gui_y);
 
     scr_tune_picker_draw_box(filter_prev_rect, spr_cell_dark, filter_prev_hover, false);
-    scr_tune_picker_draw_box(filter_value_rect, spr_cell_dark, filter_value_hover, filter_key != "all");
     scr_tune_picker_draw_box(filter_next_rect, spr_cell_dark, filter_next_hover, false);
     scr_tune_picker_draw_box(sort_rect, spr_cell_dark, sort_hover, false);
 
     scr_tune_picker_draw_center_text(filter_prev_rect, "<", fnt_button, c_white, control_scale);
     scr_tune_picker_draw_center_text(filter_next_rect, ">", fnt_button, c_white, control_scale);
 
-    var filter_label = "Rhythm: " + scr_tune_picker_get_rhythm_label(filter_key);
-    draw_set_font(fnt_button);
-    filter_label = scr_tune_picker_fit_text_scaled(filter_label, real(scr_tune_struct_get(filter_value_rect, "w", 0)) - 12, control_scale);
-    scr_tune_picker_draw_center_text(filter_value_rect, filter_label, fnt_button, c_ltgray, control_scale);
+    if (view_mode == "sets") {
+        // Sets mode: filter area = mode toggle, sort area = slot count
+        scr_tune_picker_draw_box(filter_value_rect, spr_cell_dark, filter_value_hover, true);
+        scr_tune_picker_draw_center_text(filter_value_rect, "Sets", fnt_button, c_white, control_scale);
 
-    var sort_label = scr_tune_picker_fit_text_scaled(scr_tune_picker_get_sort_mode_label(sort_mode), real(scr_tune_struct_get(sort_rect, "w", 0)) - 12, control_scale);
-    scr_tune_picker_draw_center_text(sort_rect, sort_label, fnt_button, c_ltgray, control_scale);
+        var slot_count = array_length(scr_tune_picker_get_instance_var(picker, "set_builder_slots", []));
+        var slots_label = "Slots: " + string(slot_count) + "/8";
+        slots_label = scr_tune_picker_fit_text_scaled(slots_label, real(scr_tune_struct_get(sort_rect, "w", 0)) - 12, control_scale);
+        scr_tune_picker_draw_center_text(sort_rect, slots_label, fnt_button, c_ltgray, control_scale);
 
-    var start_display = (total_visible > 0) ? (scroll_offset + 1) : 0;
-    var end_display = min(scroll_offset + visible_rows, total_visible);
-    var info_text = string(start_display) + "-" + string(end_display) + " of " + string(total_visible);
-    if (total_visible != total_tunes) {
-        info_text += " filtered";
+        draw_set_font(fnt_button);
+        draw_set_color(c_ltgray);
+        var sets_info = "Tap a tune to add  |  " + string(total_visible) + " tunes";
+        sets_info = scr_tune_picker_fit_text_scaled(sets_info, real(scr_tune_struct_get(info_rect, "w", 0)) - 4, info_scale);
+        scr_tune_picker_draw_text_scaled(real(scr_tune_struct_get(info_rect, "x1", 0)) + 2, real(scr_tune_struct_get(info_rect, "y1", 0)) + 7, sets_info, info_scale, info_scale);
+    } else {
+        // Tunes mode: filter area = rhythm filter, sort_rect = "Sets →" entry
+        scr_tune_picker_draw_box(filter_value_rect, spr_cell_dark, filter_value_hover, filter_key != "all");
+        var filter_label = "Rhythm: " + scr_tune_picker_get_rhythm_label(filter_key);
+        draw_set_font(fnt_button);
+        filter_label = scr_tune_picker_fit_text_scaled(filter_label, real(scr_tune_struct_get(filter_value_rect, "w", 0)) - 12, control_scale);
+        scr_tune_picker_draw_center_text(filter_value_rect, filter_label, fnt_button, c_ltgray, control_scale);
+
+        var sort_label = scr_tune_picker_fit_text_scaled("Sets  \u2192", real(scr_tune_struct_get(sort_rect, "w", 0)) - 12, control_scale);
+        scr_tune_picker_draw_center_text(sort_rect, sort_label, fnt_button, c_ltgray, control_scale);
+
+        var start_display = (total_visible > 0) ? (scroll_offset + 1) : 0;
+        var end_display = min(scroll_offset + visible_rows, total_visible);
+        var info_text = string(start_display) + "-" + string(end_display) + " of " + string(total_visible);
+        if (total_visible != total_tunes) {
+            info_text += " filtered";
+        }
+
+        var selected_entry = scr_tune_picker_get_selected_entry();
+        if (is_struct(selected_entry)) {
+            info_text += " | " + scr_tune_picker_get_tune_title(selected_entry);
+            var selected_part_label = scr_tune_picker_get_part_label(selected_entry, scr_tune_picker_get_selected_part_channel());
+            if (string_length(selected_part_label) > 0) {
+                info_text += " | " + selected_part_label;
+            }
+        }
+
+        draw_set_font(fnt_button);
+        draw_set_color(c_ltgray);
+        info_text = scr_tune_picker_fit_text_scaled(info_text, real(scr_tune_struct_get(info_rect, "w", 0)) - 4, info_scale);
+        scr_tune_picker_draw_text_scaled(real(scr_tune_struct_get(info_rect, "x1", 0)) + 2, real(scr_tune_struct_get(info_rect, "y1", 0)) + 7, info_text, info_scale, info_scale);
     }
-
-    var selected_entry = scr_tune_picker_get_selected_entry();
-    if (is_struct(selected_entry)) {
-        info_text += " | " + scr_tune_picker_get_tune_title(selected_entry);
-		var selected_part_label = scr_tune_picker_get_part_label(selected_entry, scr_tune_picker_get_selected_part_channel());
-		if (string_length(selected_part_label) > 0) {
-			info_text += " | " + selected_part_label;
-		}
-    }
-
-    draw_set_font(fnt_button);
-    draw_set_color(c_ltgray);
-    info_text = scr_tune_picker_fit_text_scaled(info_text, real(scr_tune_struct_get(info_rect, "w", 0)) - 4, info_scale);
-    scr_tune_picker_draw_text_scaled(real(scr_tune_struct_get(info_rect, "x1", 0)) + 2, real(scr_tune_struct_get(info_rect, "y1", 0)) + 7, info_text, info_scale, info_scale);
 
     if (total_visible <= 0) {
         draw_set_font(fnt_setting);
@@ -1664,6 +1791,10 @@ function scr_tune_picker_draw_canvas()
         var empty_y = real(scr_tune_struct_get(rows_rect, "y1", 0)) + max(12, floor((real(scr_tune_struct_get(rows_rect, "h", 0)) - empty_h) * 0.5));
         scr_tune_picker_draw_text_scaled(empty_x, empty_y, empty_text, empty_scale, empty_scale);
         draw_set_color(c_white);
+        if (is_struct(right_pane_rect)) {
+            var _rp0 = right_pane_rect;
+            scr_set_builder_draw_right_pane(real(scr_tune_struct_get(_rp0, "x1", 0)), real(scr_tune_struct_get(_rp0, "y1", 0)), real(scr_tune_struct_get(_rp0, "x2", 0)), real(scr_tune_struct_get(_rp0, "y2", 0)), layout);
+        }
         return true;
     }
 
@@ -1682,7 +1813,8 @@ function scr_tune_picker_draw_canvas()
         var hovered = scr_tune_picker_rect_contains(row_rect, gui_x, gui_y);
         var entry = tunes[source_idx];
         var tune_id = scr_tune_picker_get_tune_id(entry);
-        var is_selected = (string_length(selected_id) > 0 && tune_id == selected_id);
+        // In sets mode rows are clickable to append (not select); in tunes mode show selection highlight
+        var is_selected = (view_mode == "tunes") && (string_length(selected_id) > 0 && tune_id == selected_id);
 
         scr_tune_picker_draw_box(row_rect, noone, hovered, is_selected, true);
 
@@ -1691,6 +1823,18 @@ function scr_tune_picker_draw_canvas()
             draw_set_color(make_color_rgb(124, 197, 118));
             draw_rectangle(row_rect.x1 + 4, row_rect.y1 + 4, row_rect.x1 + 8, row_rect.y2 - 4, false);
             draw_set_color(c_white);
+        }
+
+        // In sets mode, draw a small "+" badge to signal append behaviour
+        if (view_mode == "sets" && hovered) {
+            draw_set_alpha(0.80);
+            draw_set_color(make_color_rgb(80, 160, 100));
+            draw_rectangle(row_rect.x2 - 22, row_rect.y1 + 4, row_rect.x2 - 4, row_rect.y2 - 4, false);
+            draw_set_alpha(1);
+            scr_tune_picker_draw_center_text(
+                scr_tune_picker_make_rect(row_rect.x2 - 22, row_rect.y1 + 4, row_rect.x2 - 4, row_rect.y2 - 4),
+                "+", fnt_button, c_white, control_scale
+            );
         }
 
         var inner_left = row_rect.x1 + row_x_pad;
@@ -1771,6 +1915,13 @@ function scr_tune_picker_draw_canvas()
     draw_set_alpha(1);
     draw_set_halign(fa_left);
     draw_set_valign(fa_top);
+
+    // Draw set builder right pane in sets mode
+    if (view_mode == "sets" && is_struct(right_pane_rect)) {
+        var _rp1 = right_pane_rect;
+        scr_set_builder_draw_right_pane(real(scr_tune_struct_get(_rp1, "x1", 0)), real(scr_tune_struct_get(_rp1, "y1", 0)), real(scr_tune_struct_get(_rp1, "x2", 0)), real(scr_tune_struct_get(_rp1, "y2", 0)), layout);
+    }
+
     return true;
 }
 
@@ -1961,10 +2112,11 @@ function scr_tune_picker_populate()
     // Also attach the library to the picker instance and reset selection
     var picker = instance_find(obj_tune_picker, 0);
     var previous_selected_id = "";
+    var previous_selected_part_channel = -1;
     if (picker != noone)
     {
         previous_selected_id = string_lower(string_trim(string(scr_tune_picker_get_instance_var(picker, "selected_tune_id", ""))));
-        var previous_selected_part_channel = floor(real(scr_tune_picker_get_instance_var(picker, "selected_part_channel", -1)));
+        previous_selected_part_channel = floor(real(scr_tune_picker_get_instance_var(picker, "selected_part_channel", -1)));
 
         if (string_length(previous_selected_id) <= 0
             && is_array(scr_tune_library_get_tunes(scr_tune_picker_get_library(picker)))) {
@@ -2157,4 +2309,790 @@ function scr_build_tune_library(_root_folder)
     show_debug_message("scr_build_tune_library: wrote " + out_file + " (" + string(array_length(tunes)) + " tunes)");
 
     return library;
+}
+
+// =============================================================================
+// Set Builder UI Functions
+// =============================================================================
+
+function scr_set_builder_get_picker()
+{
+    return instance_find(obj_tune_picker, 0);
+}
+
+/// Append a tune to the set builder slot list (max 8).
+function scr_set_builder_append_tune(_filename, _bpm, _swing, _title)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    if (array_length(slots) >= 8) return false;
+
+    array_push(slots, {
+        filename: string(_filename),
+        bpm:      real(_bpm),
+        swing:    real(_swing),
+        title:    string(_title)
+    });
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots", slots);
+    return true;
+}
+
+/// Remove slot at the given index, clamping the selection.
+function scr_set_builder_remove_slot(_index)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var idx = floor(real(_index));
+    if (idx < 0 || idx >= array_length(slots)) return false;
+
+    array_delete(slots, idx, 1);
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots", slots);
+
+    var sel = floor(real(scr_tune_picker_get_instance_var(picker, "set_builder_sel_slot", -1)));
+    if (sel >= array_length(slots)) sel = array_length(slots) - 1;
+    scr_tune_picker_set_instance_var(picker, "set_builder_sel_slot", sel);
+    return true;
+}
+
+/// Swap a slot with its neighbour (delta = -1 for up, +1 for down), updating selection to new position.
+function scr_set_builder_move_slot(_index, _delta)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var idx    = floor(real(_index));
+    var target = idx + floor(real(_delta));
+
+    if (idx < 0 || idx >= array_length(slots)) return false;
+    if (target < 0 || target >= array_length(slots)) return false;
+
+    var tmp     = slots[idx];
+    slots[idx]  = slots[target];
+    slots[target] = tmp;
+
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots", slots);
+    scr_tune_picker_set_instance_var(picker, "set_builder_sel_slot", target);
+    return true;
+}
+
+/// Write the current BPM/swing fields back into the given slot.
+function scr_set_builder_sync_slot_from_fields(_slot_idx)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var idx = floor(real(_slot_idx));
+    if (idx < 0 || idx >= array_length(slots)) return false;
+
+    var slot = slots[idx];
+
+    var bpm_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_3");
+    if (bpm_inst == noone) bpm_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "tune_BPM_field");
+    if (instance_exists(bpm_inst)) {
+        slot.bpm = real(scr_tune_instance_get(bpm_inst, "field_value", slot.bpm));
+    }
+
+    var swing_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_6");
+    if (instance_exists(swing_inst)) {
+        slot.swing = real(scr_tune_instance_get(swing_inst, "field_value", slot.swing));
+    }
+
+    var grace_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_7");
+    if (instance_exists(grace_inst)) {
+        var _grace_default = variable_struct_exists(slot, "gracenote_override_ms") ? slot.gracenote_override_ms : 0;
+        slot.gracenote_override_ms = real(scr_tune_instance_get(grace_inst, "field_value", _grace_default));
+    }
+
+    slots[idx] = slot;
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots", slots);
+    return true;
+}
+
+/// Push a slot's BPM/swing/gracenote into the metronome bar fields.
+function scr_set_builder_sync_fields_from_slot(_slot_idx)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var idx = floor(real(_slot_idx));
+    if (idx < 0 || idx >= array_length(slots)) return false;
+
+    var slot = slots[idx];
+
+    var bpm_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_3");
+    if (bpm_inst == noone) bpm_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "tune_BPM_field");
+    if (instance_exists(bpm_inst)) {
+        scr_tune_instance_set(bpm_inst, "field_value",   real(slot.bpm));
+        scr_tune_instance_set(bpm_inst, "field_contents", string(slot.bpm));
+    }
+
+    var swing_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_6");
+    if (instance_exists(swing_inst)) {
+        scr_tune_instance_set(swing_inst, "field_value",   real(slot.swing));
+        scr_tune_instance_set(swing_inst, "field_contents", string(slot.swing));
+    }
+
+    var grace_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_7");
+    if (instance_exists(grace_inst)) {
+        var grace_ms = variable_struct_exists(slot, "gracenote_override_ms") ? real(slot.gracenote_override_ms) : 0;
+        scr_tune_instance_set(grace_inst, "field_value",    grace_ms);
+        scr_tune_instance_set(grace_inst, "field_contents", string(grace_ms));
+    }
+
+    return true;
+}
+
+/// When in sets mode with a slot selected, write a changed field value directly
+/// into that slot.  Called from field-change handlers (BPM, swing, gracenote).
+/// _field_ui_name should be "metro_field_3", "metro_field_6", or "metro_field_7".
+/// _new_value is the numeric value that was just applied to the field.
+function scr_set_builder_writeback_field_to_selected_slot(_field_ui_name, _new_value)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+    if (string(scr_tune_picker_get_instance_var(picker, "view_mode", "tunes")) != "sets") return false;
+
+    var sel = floor(real(scr_tune_picker_get_instance_var(picker, "set_builder_sel_slot", -1)));
+    if (sel < 0) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    if (sel >= array_length(slots)) return false;
+
+    var slot = slots[sel];
+    if (_field_ui_name == "metro_field_3" || _field_ui_name == "tune_BPM_field") {
+        slot.bpm = real(_new_value);
+    } else if (_field_ui_name == "metro_field_6") {
+        slot.swing = real(_new_value);
+    } else if (_field_ui_name == "metro_field_7") {
+        if (!variable_struct_exists(slot, "gracenote_override_ms")) slot.gracenote_override_ms = 0;
+        slot.gracenote_override_ms = real(_new_value);
+    } else {
+        return false;
+    }
+    slots[sel] = slot;
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots", slots);
+    return true;
+}
+
+/// Save the current slot list as a set JSON under datafiles/sets/.
+/// Returns the written filepath on success, "exists" if a file already exists and confirmation
+/// is needed, or "" on failure/validation error.
+function scr_set_builder_save(_name)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return "";
+
+    var name = string_trim(string(_name));
+    if (string_length(name) <= 0) return "";
+
+    // Sync selected slot from current fields before saving
+    var sel = floor(real(scr_tune_picker_get_instance_var(picker, "set_builder_sel_slot", -1)));
+    if (sel >= 0) scr_set_builder_sync_slot_from_fields(sel);
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    if (array_length(slots) <= 0) return "";
+
+    var slug = scr_set_slugify(name);
+    if (string_length(slug) <= 0) slug = "unnamed_set";
+
+    var folder   = "datafiles/sets/";
+    var filepath = folder + slug + ".json";
+
+    // Check for existing file; require explicit confirm before overwriting
+    var confirm = bool(scr_tune_picker_get_instance_var(picker, "set_confirm_overwrite", false));
+    if (!confirm && file_exists(filepath)) {
+        scr_tune_picker_set_instance_var(picker, "set_confirm_overwrite", true);
+        return "exists";
+    }
+    scr_tune_picker_set_instance_var(picker, "set_confirm_overwrite", false);
+
+    // Build JSON payload
+    var tunes_out = [];
+    for (var i = 0; i < array_length(slots); i++) {
+        var s = slots[i];
+        array_push(tunes_out, {
+            filename:   string(s.filename),
+            bpm:        real(s.bpm),
+            swing:      string(s.swing),
+            transition: { type: "direct" }
+        });
+    }
+
+    var payload = {
+        set:    { title: name, id: slug, description: "" },
+        tunes:  tunes_out,
+        ending: { type: "none" }
+    };
+
+    if (!directory_exists(folder)) directory_create(folder);
+
+    var f = file_text_open_write(filepath);
+    if (f < 0) {
+        show_debug_message("scr_set_builder_save: could not open " + filepath + " for writing");
+        return "";
+    }
+    file_text_write_string(f, json_stringify(payload));
+    file_text_close(f);
+
+    show_debug_message("scr_set_builder_save: wrote " + filepath);
+    return filepath;
+}
+
+/// Draw the right pane of the set builder. Called from scr_tune_picker_draw_canvas() in sets mode.
+function scr_set_builder_draw_right_pane(_x1, _y1, _x2, _y2, _layout)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return;
+
+    var gui_x = scr_tune_picker_get_mouse_gui_x();
+    var gui_y = scr_tune_picker_get_mouse_gui_y();
+
+    var slots            = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var sel_slot         = floor(real(scr_tune_picker_get_instance_var(picker, "set_builder_sel_slot", -1)));
+    var set_name         = string(scr_tune_picker_get_instance_var(picker, "set_name_text", "New Set"));
+    var name_editing     = bool(scr_tune_picker_get_instance_var(picker, "set_name_editing", false));
+    var confirm_overwrite = bool(scr_tune_picker_get_instance_var(picker, "set_confirm_overwrite", false));
+    var slot_count       = array_length(slots);
+
+    var control_scale = real(scr_tune_struct_get(_layout, "control_scale", 0.58));
+    var title_scale   = real(scr_tune_struct_get(_layout, "title_scale", 0.87));
+    var meta_scale    = real(scr_tune_struct_get(_layout, "meta_scale", 0.75));
+    var pad = 8;
+
+    // Pane background
+    draw_set_alpha(0.70);
+    draw_set_color(make_color_rgb(28, 32, 42));
+    draw_rectangle(_x1, _y1, _x2, _y2, false);
+    draw_set_alpha(160 / 255);
+    draw_set_color(make_color_rgb(122, 125, 127));
+    draw_rectangle(_x1, _y1, _x2, _y2, true);
+    draw_set_alpha(1);
+
+    // --- Tab bar: Build | Saved ---
+    var tab_h      = 24;
+    var pane_view  = string(scr_tune_picker_get_instance_var(picker, "_sb_pane_view", "build"));
+    var tab_gap    = 4;
+    var half_tab_w = floor((_x2 - _x1 - 2 * pad - tab_gap) * 0.5);
+    var tab_build_rect = scr_tune_picker_make_rect(_x1 + pad, _y1 + pad, _x1 + pad + half_tab_w, _y1 + pad + tab_h);
+    var tab_saved_rect = scr_tune_picker_make_rect(tab_build_rect.x2 + tab_gap, _y1 + pad, _x2 - pad, _y1 + pad + tab_h);
+    scr_tune_picker_set_instance_var(picker, "_sb_tab_build_rect", tab_build_rect);
+    scr_tune_picker_set_instance_var(picker, "_sb_tab_saved_rect", tab_saved_rect);
+    scr_tune_picker_draw_box(tab_build_rect, spr_cell_dark, scr_tune_picker_rect_contains(tab_build_rect, gui_x, gui_y), pane_view == "build", true);
+    scr_tune_picker_draw_box(tab_saved_rect, spr_cell_dark, scr_tune_picker_rect_contains(tab_saved_rect, gui_x, gui_y), pane_view == "saved", true);
+    scr_tune_picker_draw_center_text(tab_build_rect, "Build", fnt_button, c_white, control_scale);
+    scr_tune_picker_draw_center_text(tab_saved_rect, "Saved", fnt_button, c_white, control_scale);
+
+    var content_y1 = _y1 + pad + tab_h + 6;
+
+    if (pane_view == "saved") {
+        scr_set_builder_draw_saved_pane(_x1, content_y1, _x2, _y2, _layout, picker, pad, gui_x, gui_y, control_scale, meta_scale);
+        draw_set_color(c_white);
+        draw_set_alpha(1);
+        return;
+    }
+
+    // --- Name field ---
+    var name_h    = 30;
+    var name_rect = scr_tune_picker_make_rect(_x1 + pad, content_y1, _x2 - pad, content_y1 + name_h);
+    var name_hover = scr_tune_picker_rect_contains(name_rect, gui_x, gui_y);
+    scr_tune_picker_draw_box(name_rect, noone, name_hover, name_editing, true);
+
+    draw_set_font(fnt_button);
+    draw_set_color(name_editing ? c_white : c_ltgray);
+    var name_display = "Name: " + set_name + (name_editing ? "|" : "");
+    draw_set_font(fnt_button);
+    var name_th = ceil(string_height("Ag") * control_scale);
+    name_display = scr_tune_picker_fit_text_scaled(name_display, name_rect.w - 12, control_scale);
+    scr_tune_picker_draw_text_scaled(name_rect.x1 + 6, name_rect.y1 + max(3, floor((name_rect.h - name_th) * 0.5)), name_display, control_scale, control_scale);
+    draw_set_color(c_white);
+
+    // --- Save button (anchor drawn first to compute slot_list_y2) ---
+    var save_h    = 30;
+    var save_rect = scr_tune_picker_make_rect(_x1 + pad, _y2 - pad - save_h, _x2 - pad, _y2 - pad);
+    scr_tune_picker_set_instance_var(picker, "_sb_save_rect", save_rect);
+    var save_hov    = scr_tune_picker_rect_contains(save_rect, gui_x, gui_y);
+    var save_active = (slot_count > 0 && string_length(string_trim(set_name)) > 0);
+    scr_tune_picker_draw_box(save_rect, spr_cell_dark, save_hov, save_active, true);
+    var save_label = save_active ? "Save Set" : "Save Set (need name + tunes)";
+    draw_set_font(fnt_button);
+    var save_col = save_active ? c_white : make_color_rgb(90, 100, 115);
+    scr_tune_picker_draw_center_text(save_rect, save_label, fnt_button, save_col, control_scale);
+
+    // --- Slot list ---
+    var slot_row_h   = 36;
+    var slot_row_gap = 4;
+    var btn_w        = 18;
+    var btn_gap      = 3;
+    var slot_list_y1 = name_rect.y2 + 6;
+    var slot_list_y2 = save_rect.y1 - 6;
+    var slot_stride  = slot_row_h + slot_row_gap;
+
+    // Store layout info for click handler
+    scr_tune_picker_set_instance_var(picker, "_sb_name_rect",      name_rect);
+    scr_tune_picker_set_instance_var(picker, "_sb_slot_list_y1",   slot_list_y1);
+    scr_tune_picker_set_instance_var(picker, "_sb_slot_row_h",     slot_row_h);
+    scr_tune_picker_set_instance_var(picker, "_sb_slot_row_gap",   slot_row_gap);
+    scr_tune_picker_set_instance_var(picker, "_sb_btn_w",          btn_w);
+
+    if (slot_count == 0) {
+        draw_set_font(fnt_setting);
+        var empty_scale = 0.55;
+        var empty_text  = "Click a tune to add to set";
+        draw_set_color(make_color_rgb(100, 110, 125));
+        var etw = string_width(empty_text) * empty_scale;
+        var ety = slot_list_y1 + 20;
+        var etx = _x1 + max(0, floor(((_x2 - _x1) - etw) * 0.5));
+        scr_tune_picker_draw_text_scaled(etx, ety, empty_text, empty_scale, empty_scale);
+        draw_set_color(c_white);
+    } else {
+        for (var si = 0; si < slot_count; si++) {
+            var sy1 = slot_list_y1 + si * slot_stride;
+            var sy2 = sy1 + slot_row_h;
+            if (sy1 >= slot_list_y2) break;
+
+            var slot      = slots[si];
+            var slot_rect = scr_tune_picker_make_rect(_x1 + pad, sy1, _x2 - pad, sy2);
+            var slot_hov  = scr_tune_picker_rect_contains(slot_rect, gui_x, gui_y);
+            var slot_sel  = (si == sel_slot);
+            scr_tune_picker_draw_box(slot_rect, noone, slot_hov, slot_sel, true);
+
+            if (slot_sel) {
+                draw_set_alpha(1);
+                draw_set_color(make_color_rgb(124, 197, 118));
+                draw_rectangle(slot_rect.x1 + 3, slot_rect.y1 + 3, slot_rect.x1 + 6, slot_rect.y2 - 3, false);
+                draw_set_color(c_white);
+            }
+
+            // Buttons on right: ▲ ▼ ✕
+            var bx2      = slot_rect.x2 - 4;
+            var b_rem_x1 = bx2 - btn_w;
+            var b_dn_x1  = b_rem_x1 - btn_gap - btn_w;
+            var b_up_x1  = b_dn_x1  - btn_gap - btn_w;
+            var b_cy     = floor(sy1 + (slot_row_h - btn_w) * 0.5);
+
+            var up_rect  = scr_tune_picker_make_rect(b_up_x1,  b_cy, b_up_x1  + btn_w, b_cy + btn_w);
+            var dn_rect  = scr_tune_picker_make_rect(b_dn_x1,  b_cy, b_dn_x1  + btn_w, b_cy + btn_w);
+            var rem_rect = scr_tune_picker_make_rect(b_rem_x1, b_cy, b_rem_x1 + btn_w, b_cy + btn_w);
+
+            var up_en  = (si > 0);
+            var dn_en  = (si < slot_count - 1);
+
+            var up_col  = up_en  ? (scr_tune_picker_rect_contains(up_rect, gui_x, gui_y)  ? make_color_rgb(80, 100, 130) : make_color_rgb(50, 60, 75)) : make_color_rgb(35, 38, 48);
+            var dn_col  = dn_en  ? (scr_tune_picker_rect_contains(dn_rect, gui_x, gui_y)  ? make_color_rgb(80, 100, 130) : make_color_rgb(50, 60, 75)) : make_color_rgb(35, 38, 48);
+            var rem_col = scr_tune_picker_rect_contains(rem_rect, gui_x, gui_y) ? make_color_rgb(150, 50, 50) : make_color_rgb(90, 35, 35);
+
+            draw_set_alpha(0.9);
+            draw_set_color(up_col);
+            draw_rectangle(up_rect.x1,  up_rect.y1,  up_rect.x2,  up_rect.y2,  false);
+            draw_set_color(dn_col);
+            draw_rectangle(dn_rect.x1,  dn_rect.y1,  dn_rect.x2,  dn_rect.y2,  false);
+            draw_set_color(rem_col);
+            draw_rectangle(rem_rect.x1, rem_rect.y1, rem_rect.x2, rem_rect.y2, false);
+            draw_set_alpha(1);
+
+            var btn_lbl_scale = 0.55;
+            scr_tune_picker_draw_center_text(up_rect,  chr(9650), fnt_measure, up_en ? c_white : make_color_rgb(55, 65, 85), btn_lbl_scale);
+            scr_tune_picker_draw_center_text(dn_rect,  chr(9660), fnt_measure, dn_en ? c_white : make_color_rgb(55, 65, 85), btn_lbl_scale);
+            scr_tune_picker_draw_center_text(rem_rect, "x",       fnt_measure, c_white, btn_lbl_scale);
+
+            // Title (single line, vertically centred)
+            var title_x1 = slot_rect.x1 + 10;
+            var title_x2 = b_up_x1 - 6;
+            draw_set_font(fnt_setting);
+            draw_set_color(slot_sel ? c_white : c_ltgray);
+            var title_th  = ceil(string_height("Ag") * title_scale);
+            var content_y = floor(sy1 + (slot_row_h - title_th) * 0.5);
+            var slot_title = scr_tune_picker_fit_text_scaled(string(slot.title), max(10, title_x2 - title_x1), title_scale);
+            scr_tune_picker_draw_text_scaled(title_x1, content_y, slot_title, title_scale, title_scale);
+
+            draw_set_color(c_white);
+        }
+    }
+
+    // --- Overwrite confirm overlay ---
+    if (confirm_overwrite) {
+        var ov_h    = 58;
+        var ov_rect = scr_tune_picker_make_rect(_x1 + pad, save_rect.y1 - ov_h - 4, _x2 - pad, save_rect.y1 - 4);
+        scr_tune_picker_set_instance_var(picker, "_sb_confirm_rect", ov_rect);
+
+        draw_set_alpha(0.94);
+        draw_set_color(make_color_rgb(62, 28, 28));
+        draw_rectangle(ov_rect.x1, ov_rect.y1, ov_rect.x2, ov_rect.y2, false);
+        draw_set_alpha(1);
+        draw_set_color(make_color_rgb(180, 80, 80));
+        draw_rectangle(ov_rect.x1, ov_rect.y1, ov_rect.x2, ov_rect.y2, true);
+
+        scr_tune_picker_draw_center_text(
+            scr_tune_picker_make_rect(ov_rect.x1, ov_rect.y1 + 2, ov_rect.x2, ov_rect.y1 + 24),
+            "File exists — overwrite?", fnt_button, c_white, control_scale
+        );
+
+        var btn_half = floor((ov_rect.w - 12) * 0.5);
+        var yes_rect = scr_tune_picker_make_rect(ov_rect.x1 + 4, ov_rect.y1 + 28, ov_rect.x1 + 4 + btn_half, ov_rect.y2 - 4);
+        var no_rect  = scr_tune_picker_make_rect(ov_rect.x1 + 4 + btn_half + 4, ov_rect.y1 + 28, ov_rect.x2 - 4, ov_rect.y2 - 4);
+        scr_tune_picker_set_instance_var(picker, "_sb_confirm_yes_rect", yes_rect);
+        scr_tune_picker_set_instance_var(picker, "_sb_confirm_no_rect",  no_rect);
+
+        scr_tune_picker_draw_box(yes_rect, spr_cell_dark, scr_tune_picker_rect_contains(yes_rect, gui_x, gui_y), false, true);
+        scr_tune_picker_draw_box(no_rect,  spr_cell_dark, scr_tune_picker_rect_contains(no_rect,  gui_x, gui_y), false, true);
+        scr_tune_picker_draw_center_text(yes_rect, "Yes", fnt_button, c_white, control_scale);
+        scr_tune_picker_draw_center_text(no_rect,  "No",  fnt_button, c_white, control_scale);
+    }
+
+    draw_set_color(c_white);
+    draw_set_alpha(1);
+}
+
+/// Handle a click inside the right pane of the set builder.
+function scr_set_builder_handle_click_right(_gui_x, _gui_y)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var right_pane = scr_tune_struct_get(
+        scr_tune_picker_get_instance_var(picker, "view_layout", {}),
+        "right_pane_rect", undefined
+    );
+    if (!is_struct(right_pane)) return false;
+    if (!scr_tune_picker_rect_contains(right_pane, _gui_x, _gui_y)) return false;
+
+    // --- Overwrite confirm overlay takes priority ---
+    var confirm = bool(scr_tune_picker_get_instance_var(picker, "set_confirm_overwrite", false));
+    if (confirm) {
+        var yes_rect = scr_tune_picker_get_instance_var(picker, "_sb_confirm_yes_rect", undefined);
+        var no_rect  = scr_tune_picker_get_instance_var(picker, "_sb_confirm_no_rect",  undefined);
+
+        if (scr_tune_picker_rect_contains(yes_rect, _gui_x, _gui_y)) {
+            var saved = scr_set_builder_save(string(scr_tune_picker_get_instance_var(picker, "set_name_text", "")));
+            if (string_length(saved) > 0 && saved != "exists") {
+                show_debug_message("Set saved: " + saved);
+            }
+            return true;
+        }
+        if (scr_tune_picker_rect_contains(no_rect, _gui_x, _gui_y)) {
+            scr_tune_picker_set_instance_var(picker, "set_confirm_overwrite", false);
+            return true;
+        }
+        return true; // consume click while overlay is open
+    }
+
+    // --- Tab bar clicks ---
+    var tab_build_rect_c = scr_tune_picker_get_instance_var(picker, "_sb_tab_build_rect", undefined);
+    var tab_saved_rect_c = scr_tune_picker_get_instance_var(picker, "_sb_tab_saved_rect", undefined);
+    if (scr_tune_picker_rect_contains(tab_build_rect_c, _gui_x, _gui_y)) {
+        scr_tune_picker_set_instance_var(picker, "_sb_pane_view", "build");
+        return true;
+    }
+    if (scr_tune_picker_rect_contains(tab_saved_rect_c, _gui_x, _gui_y)) {
+        scr_tune_picker_set_instance_var(picker, "_sb_pane_view", "saved");
+        scr_tune_picker_set_instance_var(picker, "_sb_saved_sets", undefined); // force rescan on next draw
+        return true;
+    }
+
+    // --- Saved sets pane clicks ---
+    var pane_view_c = string(scr_tune_picker_get_instance_var(picker, "_sb_pane_view", "build"));
+    if (pane_view_c == "saved") {
+        var saved_sets_c = scr_tune_picker_get_instance_var(picker, "_sb_saved_sets", undefined);
+        if (is_array(saved_sets_c)) {
+            var sc_row_h   = real(scr_tune_picker_get_instance_var(picker, "_sb_saved_sets_row_h",  32));
+            var sc_row_gap = real(scr_tune_picker_get_instance_var(picker, "_sb_saved_sets_row_gap", 4));
+            var sc_y1      = real(scr_tune_picker_get_instance_var(picker, "_sb_saved_sets_y1",      0));
+            var sc_stride  = sc_row_h + sc_row_gap;
+            var sc_x1 = real(scr_tune_struct_get(right_pane, "x1", 0));
+            var sc_x2 = real(scr_tune_struct_get(right_pane, "x2", 0));
+            var sc_pad = 8;
+            var sc_load_w = 44;
+            for (var sc_i = 0; sc_i < array_length(saved_sets_c); sc_i++) {
+                var sc_sy1  = sc_y1 + sc_i * sc_stride;
+                var sc_row  = scr_tune_picker_make_rect(sc_x1 + sc_pad, sc_sy1, sc_x2 - sc_pad, sc_sy1 + sc_row_h);
+                if (!scr_tune_picker_rect_contains(sc_row, _gui_x, _gui_y)) continue;
+                var sc_load = scr_tune_picker_make_rect(sc_row.x2 - sc_load_w - 2, sc_row.y1 + 4, sc_row.x2 - 2, sc_row.y2 - 4);
+                if (scr_tune_picker_rect_contains(sc_load, _gui_x, _gui_y)) {
+                    scr_set_builder_load_from_file(string(scr_tune_struct_get(saved_sets_c[sc_i], "filepath", "")));
+                }
+                return true;
+            }
+        }
+        return true; // click consumed in saved pane
+    }
+
+    // --- Name field ---
+    var name_rect = scr_tune_picker_get_instance_var(picker, "_sb_name_rect", undefined);
+    if (scr_tune_picker_rect_contains(name_rect, _gui_x, _gui_y)) {
+        scr_tune_picker_set_instance_var(picker, "set_name_editing", true);
+        keyboard_string = "";
+        return true;
+    }
+    // Click outside name field stops editing
+    scr_tune_picker_set_instance_var(picker, "set_name_editing", false);
+
+    // --- Save button ---
+    var save_rect = scr_tune_picker_get_instance_var(picker, "_sb_save_rect", undefined);
+    if (scr_tune_picker_rect_contains(save_rect, _gui_x, _gui_y)) {
+        var set_name_val  = string(scr_tune_picker_get_instance_var(picker, "set_name_text", ""));
+        var slots_val = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+        if (string_length(string_trim(set_name_val)) > 0 && array_length(slots_val) > 0) {
+            var result = scr_set_builder_save(set_name_val);
+            if (result != "exists" && string_length(result) > 0) {
+                show_debug_message("Set saved: " + result);
+            }
+        }
+        return true;
+    }
+
+    // --- Slot rows ---
+    var slot_list_y1 = real(scr_tune_picker_get_instance_var(picker, "_sb_slot_list_y1", 0));
+    var slot_row_h   = real(scr_tune_picker_get_instance_var(picker, "_sb_slot_row_h", 44));
+    var slot_row_gap = real(scr_tune_picker_get_instance_var(picker, "_sb_slot_row_gap", 4));
+    var btn_w        = real(scr_tune_picker_get_instance_var(picker, "_sb_btn_w", 18));
+    var slots        = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    var slot_stride  = slot_row_h + slot_row_gap;
+    var _x1 = real(scr_tune_struct_get(right_pane, "x1", 0));
+    var _x2 = real(scr_tune_struct_get(right_pane, "x2", 0));
+    var pad = 8;
+    var btn_gap = 3;
+
+    for (var si = 0; si < array_length(slots); si++) {
+        var sy1       = slot_list_y1 + si * slot_stride;
+        var slot_rect = scr_tune_picker_make_rect(_x1 + pad, sy1, _x2 - pad, sy1 + slot_row_h);
+        if (!scr_tune_picker_rect_contains(slot_rect, _gui_x, _gui_y)) continue;
+
+        var bx2      = slot_rect.x2 - 4;
+        var b_rem_x1 = bx2 - btn_w;
+        var b_dn_x1  = b_rem_x1 - btn_gap - btn_w;
+        var b_up_x1  = b_dn_x1  - btn_gap - btn_w;
+        var b_cy     = floor(sy1 + (slot_row_h - btn_w) * 0.5);
+        var up_rect  = scr_tune_picker_make_rect(b_up_x1,  b_cy, b_up_x1  + btn_w, b_cy + btn_w);
+        var dn_rect  = scr_tune_picker_make_rect(b_dn_x1,  b_cy, b_dn_x1  + btn_w, b_cy + btn_w);
+        var rem_rect = scr_tune_picker_make_rect(b_rem_x1, b_cy, b_rem_x1 + btn_w, b_cy + btn_w);
+
+        if (scr_tune_picker_rect_contains(up_rect, _gui_x, _gui_y) && si > 0) {
+            scr_set_builder_move_slot(si, -1);
+            return true;
+        }
+        if (scr_tune_picker_rect_contains(dn_rect, _gui_x, _gui_y) && si < array_length(slots) - 1) {
+            scr_set_builder_move_slot(si, 1);
+            return true;
+        }
+        if (scr_tune_picker_rect_contains(rem_rect, _gui_x, _gui_y)) {
+            scr_set_builder_remove_slot(si);
+            return true;
+        }
+
+        // Slot body click: select and sync fields
+        scr_tune_picker_set_instance_var(picker, "set_builder_sel_slot", si);
+        scr_set_builder_sync_fields_from_slot(si);
+        return true;
+    }
+
+    return true; // click consumed (inside right pane)
+}
+
+/// Scan datafiles/sets/ for saved set JSON files.
+/// Returns and stores an array of { filepath, name } structs on the picker instance.
+function scr_set_builder_scan_saved_sets()
+{
+    var picker = scr_set_builder_get_picker();
+    var folder = "datafiles/sets/";
+    var result = [];
+
+    if (directory_exists(folder)) {
+        var fname = file_find_first(folder + "*.json", fa_none);
+        while (fname != "") {
+            var name_raw = fname;
+            // strip .json extension
+            if (string_length(name_raw) > 5 && string_copy(name_raw, string_length(name_raw) - 4, 5) == ".json") {
+                name_raw = string_copy(name_raw, 1, string_length(name_raw) - 5);
+            }
+            // replace underscores/hyphens with spaces for display
+            var display_name = "";
+            for (var ci = 1; ci <= string_length(name_raw); ci++) {
+                var ch = string_char_at(name_raw, ci);
+                display_name += (ch == "_" || ch == "-") ? " " : ch;
+            }
+            array_push(result, { filepath: folder + fname, name: display_name });
+            fname = file_find_next();
+        }
+        file_find_close();
+    }
+
+    if (picker != noone) {
+        scr_tune_picker_set_instance_var(picker, "_sb_saved_sets", result);
+    }
+    return result;
+}
+
+/// Load a saved set JSON into the builder slot list.
+/// Switches the right pane back to "build" view on success.
+function scr_set_builder_load_from_file(_filepath)
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+    if (!file_exists(_filepath)) return false;
+
+    var f = file_text_open_read(_filepath);
+    if (f < 0) return false;
+    var raw = "";
+    while (!file_text_eof(f)) {
+        raw += file_text_readln(f);
+    }
+    file_text_close(f);
+
+    var parsed = json_parse(raw);
+    if (!is_struct(parsed)) return false;
+
+    var set_meta  = scr_tune_struct_get(parsed, "set",   undefined);
+    var tunes_arr = scr_tune_struct_get(parsed, "tunes", []);
+    var new_slots = [];
+
+    if (is_array(tunes_arr)) {
+        for (var i = 0; i < array_length(tunes_arr); i++) {
+            var t = tunes_arr[i];
+            array_push(new_slots, {
+                filename:              string(scr_tune_struct_get(t, "filename", "")),
+                bpm:                   real(scr_tune_struct_get(t, "bpm", 80)),
+                swing:                 real(scr_tune_struct_get(t, "swing", 1.0)),
+                gracenote_override_ms: real(scr_tune_struct_get(t, "gracenote_override_ms", 0)),
+                title:                 string(scr_tune_struct_get(t, "filename", "")) // updated from library below
+            });
+        }
+    }
+
+    // Fill in display titles from the library
+    var lib_picker = instance_find(obj_tune_picker, 0);
+    if (lib_picker != noone) {
+        var library = scr_tune_picker_get_library(lib_picker);
+        var lib_tunes = scr_tune_library_get_tunes(library);
+        if (is_array(lib_tunes)) {
+            for (var si = 0; si < array_length(new_slots); si++) {
+                var slot = new_slots[si];
+                for (var li = 0; li < array_length(lib_tunes); li++) {
+                    var le = lib_tunes[li];
+                    if (string(scr_tune_struct_get(le, "filename", "")) == slot.filename) {
+                        new_slots[si].title = scr_tune_picker_get_tune_title(le);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    var set_title = is_struct(set_meta) ? string(scr_tune_struct_get(set_meta, "title", "Set")) : "Set";
+    scr_tune_picker_set_instance_var(picker, "set_builder_slots",    new_slots);
+    scr_tune_picker_set_instance_var(picker, "set_name_text",        set_title);
+    scr_tune_picker_set_instance_var(picker, "set_builder_sel_slot", -1);
+    scr_tune_picker_set_instance_var(picker, "set_confirm_overwrite", false);
+    scr_tune_picker_set_instance_var(picker, "_sb_pane_view",        "build");
+    return true;
+}
+
+/// Draw the saved-sets browser inside the right pane (called when pane_view == "saved").
+function scr_set_builder_draw_saved_pane(_x1, _y1, _x2, _y2, _layout, _picker, _pad, _gui_x, _gui_y, _control_scale, _meta_scale)
+{
+    // Lazily scan on first show
+    var saved_sets = scr_tune_picker_get_instance_var(_picker, "_sb_saved_sets", undefined);
+    if (!is_array(saved_sets)) {
+        saved_sets = scr_set_builder_scan_saved_sets();
+    }
+
+    var row_h     = 32;
+    var row_gap   = 4;
+    var load_btn_w = 46;
+    var stride    = row_h + row_gap;
+
+    // Store for click handler
+    scr_tune_picker_set_instance_var(_picker, "_sb_saved_sets_row_h",  row_h);
+    scr_tune_picker_set_instance_var(_picker, "_sb_saved_sets_row_gap", row_gap);
+    scr_tune_picker_set_instance_var(_picker, "_sb_saved_sets_y1",     _y1);
+
+    var n = array_length(saved_sets);
+    if (n == 0) {
+        draw_set_font(fnt_setting);
+        draw_set_color(make_color_rgb(100, 110, 125));
+        var empty_scale = 0.52;
+        var et  = "No saved sets found";
+        var etw = string_width(et) * empty_scale;
+        var et_th = ceil(string_height(et) * empty_scale);
+        scr_tune_picker_draw_text_scaled(
+            _x1 + max(0, floor((_x2 - _x1 - etw) * 0.5)),
+            _y1 + 20, et, empty_scale, empty_scale
+        );
+        draw_set_color(c_white);
+        return;
+    }
+
+    for (var si = 0; si < n; si++) {
+        var sy1 = _y1 + si * stride;
+        if (sy1 + row_h > _y2) break;
+
+        var item     = saved_sets[si];
+        var row_rect = scr_tune_picker_make_rect(_x1 + _pad, sy1, _x2 - _pad, sy1 + row_h);
+        var hov      = scr_tune_picker_rect_contains(row_rect, _gui_x, _gui_y);
+        scr_tune_picker_draw_box(row_rect, noone, hov, false, true);
+
+        // Load button on right
+        var load_rect = scr_tune_picker_make_rect(row_rect.x2 - load_btn_w - 2, row_rect.y1 + 4, row_rect.x2 - 2, row_rect.y2 - 4);
+        var load_hov  = scr_tune_picker_rect_contains(load_rect, _gui_x, _gui_y);
+        scr_tune_picker_draw_box(load_rect, spr_cell_dark, load_hov, false, true);
+        scr_tune_picker_draw_center_text(load_rect, "Load", fnt_button, c_white, _control_scale * 0.85);
+
+        // Set name label
+        draw_set_font(fnt_setting);
+        draw_set_color(c_ltgray);
+        var name_x   = row_rect.x1 + 8;
+        var name_max = max(10, load_rect.x1 - name_x - 6);
+        var disp_name = scr_tune_picker_fit_text_scaled(string(scr_tune_struct_get(item, "name", "Set")), name_max, _control_scale);
+        var name_th  = ceil(string_height("Ag") * _control_scale);
+        scr_tune_picker_draw_text_scaled(name_x, floor(sy1 + (row_h - name_th) * 0.5), disp_name, _control_scale, _control_scale);
+        draw_set_color(c_white);
+    }
+}
+
+/// Build global.active_set from the current builder slots so scr_goto_playroom
+/// takes the full set preprocess path.  Also loads slot[0] into global.tune for
+/// the main-menu screen.  Returns true if at least one slot was armed.
+function scr_set_builder_arm_for_play()
+{
+    var picker = scr_set_builder_get_picker();
+    if (picker == noone) return false;
+
+    var slots = scr_tune_picker_get_instance_var(picker, "set_builder_slots", []);
+    if (array_length(slots) <= 0) return false;
+
+    var set_name = string_trim(string(scr_tune_picker_get_instance_var(picker, "set_name_text", "Set")));
+    if (string_length(set_name) <= 0) set_name = "Set";
+    var slug = scr_set_slugify(set_name);
+    if (string_length(slug) <= 0) slug = "unnamed_set";
+
+    // Initialise global.active_set (clears any previously-loaded set)
+    scr_set_init_global();
+
+    // Build tunes array in the same format as the set JSON
+    var tunes_out = [];
+    for (var si = 0; si < array_length(slots); si++) {
+        var s = slots[si];
+        array_push(tunes_out, {
+            filename:   string(s.filename),
+            bpm:        real(s.bpm),
+            swing:      string(s.swing),
+            transition: { type: "direct" }
+        });
+    }
+
+    global.active_set.title    = set_name;
+    global.active_set.id       = slug;
+    global.active_set.tunes    = tunes_out;
+    // is_loaded stays false until scr_set_preprocess_and_build_playback succeeds
+
+    // Apply first slot's BPM to the global so the main-menu UI shows a sensible value
+    global.current_bpm = real(slots[0].bpm);
+
+    return true;
 }

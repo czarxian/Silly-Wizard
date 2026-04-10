@@ -45,7 +45,7 @@ global.timeline_cfg = {
     structure_label_every_beat: true,
     structure_label_spacing_px: 26,
     planned_bar_color: make_color_rgb(86, 86, 92),
-    planned_bar_alpha: 0.82,
+    planned_bar_alpha: 0.94,
     planned_melody_text_color: c_white,
     planned_embellishment_text_color: c_green,
     planned_note_text_scale: 1.15,
@@ -62,16 +62,18 @@ global.timeline_cfg = {
     tune_structure_current_base_alpha: 0.55,
     tune_structure_current_overlay_color: make_color_rgb(224, 206, 92),
     tune_structure_current_overlay_alpha: 0.35,
-    tune_structure_played_fill_color: make_color_rgb(48, 48, 54),
-    tune_structure_played_fill_alpha: 0.72,
-    tune_structure_border_color: make_color_rgb(176, 176, 186),
-    tune_structure_border_alpha: 0.58,
+    tune_structure_played_fill_color: make_color_rgb(112, 112, 112),
+    tune_structure_played_fill_alpha: 0.82,
+    tune_structure_border_color: make_color_rgb(84, 121, 112),
+    tune_structure_border_alpha: 0.88,
     tune_structure_current_border_color: make_color_rgb(255, 230, 96),
     tune_structure_current_border_alpha: 1.00,
     tune_structure_part_separator_color: make_color_rgb(200, 202, 220),
     tune_structure_part_separator_alpha: 0.50,
+    tune_structure_auto_follow_interval_ms: 90,
+    tune_structure_auto_follow_max_rows_per_step: 1,
     notebeam_enabled: true,
-    notebeam_draw_from_timeline: true,
+    notebeam_draw_from_timeline: false,
     notebeam_show_now_line: true,
     notebeam_now_ratio: -1,
     notebeam_now_x_offset_px: 0,
@@ -89,7 +91,7 @@ global.timeline_cfg = {
     notebeam_lane_row_gap_px: 20,
     notebeam_lane_y_offset_px: 0,
     notebeam_planned_color: make_color_rgb(132, 168, 196),
-    notebeam_planned_alpha: 0.75,
+    notebeam_planned_alpha: 0.94,
     notebeam_player_color: make_color_rgb(190, 190, 196),
     notebeam_compare_version: 2,
     notebeam_player_overlap_colorize: true,
@@ -107,13 +109,14 @@ global.timeline_cfg = {
     notebeam_history_run_count: 10,
     notebeam_history_require_same_bpm: true,
     notebeam_history_require_same_swing: true,
-    notebeam_history_start_color: make_color_rgb(255, 235, 70),
-    notebeam_history_end_color: make_color_rgb(255, 218, 40),
+    notebeam_history_start_color: make_color_rgb(255, 248, 153),
+    notebeam_history_end_color: make_color_rgb(255, 248, 153),
     notebeam_history_band_color: make_color_rgb(220, 220, 220),
     notebeam_history_band_alpha: 0.20,
-    notebeam_history_start_alpha: 0.52,
-    notebeam_history_end_alpha: 0.95,
-    notebeam_debug_log: true,
+    notebeam_history_start_alpha: 1.0,
+    notebeam_history_end_alpha: 1.0,
+        notebeam_postplay_overlay_mode: 0,
+        notebeam_debug_log: false,
     notebeam_show_debug_outline: false,
     notebeam_debug_outline_color: make_color_rgb(80, 80, 88),
     notebeam_debug_outline_alpha: 0.65,
@@ -124,14 +127,109 @@ global.timeline_cfg = {
     notebeam_emb_box_enabled: true,
     notebeam_emb_box_review_only: true,
     notebeam_emb_box_fill_color: make_color_rgb(60, 155, 70),
-    notebeam_emb_box_fill_alpha: 0.14,
+    notebeam_emb_box_fill_alpha: 0.24,
     notebeam_emb_box_border_color: make_color_rgb(60, 155, 70),
-    notebeam_emb_box_border_alpha: 0.90,
+    notebeam_emb_box_border_alpha: 1.0,
     notebeam_emb_box_lane_padding_px: 3,
     notebeam_emb_box_time_padding_ms: 0,
+    notebeam_planned_min_visible_px: 1.0,
+    notebeam_planned_view_pad_px: 0.5,
+    notebeam_visual_throttle_enabled: true,
+    notebeam_visual_target_hz: 90,
+    notebeam_underlay_cache_enabled: true,
+    notebeam_underlay_invalidation_ms: 33,
+    // Temporary notebeam jitter diagnostics (all off by default)
+    notebeam_diag_enabled: true,
+    notebeam_diag_log_interval_frames: 45,
+    notebeam_diag_disable_planned: false,
+    notebeam_diag_disable_player: false,
+    notebeam_diag_disable_pending: false,
+    notebeam_diag_disable_history: false,
+    notebeam_diag_disable_beat_boxes: false,
+    notebeam_diag_disable_emb_boxes: false,
+    notebeam_diag_disable_popup_hitboxes: false,
+    notebeam_diag_disable_popup_draw: false,
+    notebeam_diag_disable_overlap_compare: false,
     debug_planned_sequence: false,
     debug_sequence_max_notes: 24
 };
+
+// MIDI timing diagnostics (consumed by scr_MIDI)
+global.MIDI_TIMING_DIAG_ENABLED = true;
+global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS = 1000;
+
+// Realtime timing budget diagnostics (scheduler + visual alignment)
+global.RT_BUDGET_DIAG_ENABLED = true;
+global.RT_BUDGET_DIAG_LOG_INTERVAL_MS = 1000;
+global.RT_BUDGET_SCHED_WARMUP_MS = 1000;
+global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = true;
+global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = true;
+global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+global.PLAYBACK_DEBUG_GROUP_TIMING = true;
+if (!variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW")) {
+    global.DIAG_DISABLE_TIMELINE_DRAW = false;
+}
+if (!variable_global_exists("DIAG_DISABLE_TIMELINE_ANCHOR")) {
+    // Diagnostic toggle: disable only timeline anchor rendering to isolate
+    // its impact on scheduler/step jitter without disabling notebeam/panels.
+    global.DIAG_DISABLE_TIMELINE_ANCHOR = false;
+}
+if (!variable_global_exists("TIMELINE_HIDE_DURING_PLAY")) {
+    // Production mode: hide timeline placeholder while live playback is running,
+    // and restore it automatically in review mode.
+    global.TIMELINE_HIDE_DURING_PLAY = true;
+}
+if (!variable_global_exists("GV_VISUAL_CACHE_ENABLED")) {
+    global.GV_VISUAL_CACHE_ENABLED = true;
+}
+if (!variable_global_exists("GV_VISUAL_CACHE_REFRESH_MS")) {
+    global.GV_VISUAL_CACHE_REFRESH_MS = 11;
+}
+if (!variable_global_exists("GV_TUNESTRUCTURE_PLAY_REFRESH_MS")) {
+    global.GV_TUNESTRUCTURE_PLAY_REFRESH_MS = 48;
+}
+if (!variable_global_exists("GV_ANCHOR_RENDER_ONLY")) {
+    global.GV_ANCHOR_RENDER_ONLY = true;
+}
+if (!variable_global_exists("NOTEBEAM_OVERLAY_NOWLINE_ENABLED")) {
+    global.NOTEBEAM_OVERLAY_NOWLINE_ENABLED = true;
+}
+
+// Compact diagnostics mode: keep scheduler-focused telemetry only.
+if (!variable_global_exists("DIAG_SCHEDULER_FOCUS_MODE")) {
+    global.DIAG_SCHEDULER_FOCUS_MODE = true;
+}
+if (global.DIAG_SCHEDULER_FOCUS_MODE) {
+    global.timeline_cfg.notebeam_diag_enabled = false;
+    global.MIDI_TIMING_DIAG_ENABLED = false;
+    global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
+    global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;
+    global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+    global.PLAYBACK_DEBUG_GROUP_TIMING = false;
+}
+
+if (!variable_global_exists("timeline_anchor_surface_cache") || !is_struct(global.timeline_anchor_surface_cache)) {
+    global.timeline_anchor_surface_cache = {};
+}
+
+// Surface cache for player notebeam rendering
+// Invalidate cache when playhead moves or spans change; blit cached surface each frame
+global.player_surface_cache = noone;
+global.player_surface_cache_valid = false;
+global.player_surface_cache_last_playhead_ms = -9999;
+global.player_surface_cache_invalidation_threshold_ms = 200;  // Invalidate if playhead moves >200ms
+
+// Live notebeam player beam cache (heavy draw path in scr_game_viz)
+global.notebeam_live_player_surface = noone;
+global.notebeam_live_player_surface_valid = false;
+global.notebeam_live_player_surface_last_playhead_ms = -9999;
+global.notebeam_live_player_surface_last_span_count = -1;
+global.notebeam_live_player_surface_invalidation_threshold_ms = 16;
+
+global.notebeam_underlay_surface = noone;
+global.notebeam_underlay_surface_valid = false;
+global.notebeam_underlay_surface_last_playhead_ms = -9999;
+global.notebeam_underlay_surface_signature = "";
 
 if (!variable_global_exists("selected_player_tune_channel")) {
     global.selected_player_tune_channel = global.timeline_cfg.tune_channel;

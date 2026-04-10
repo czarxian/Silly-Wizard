@@ -26,3 +26,11 @@ view_rhythm_options = ["all"];
 view_layout = undefined;
 view_row_height = 56;
 view_row_gap = 6;
+
+// Set builder state
+view_mode = "tunes";            // "tunes" | "sets"
+set_builder_slots = [];         // array of { filename, bpm, swing, title }
+set_builder_sel_slot = -1;      // selected slot index (-1 = none)
+set_name_text = "New Set";
+set_name_editing = false;
+set_confirm_overwrite = false;

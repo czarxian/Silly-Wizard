@@ -15,6 +15,27 @@ if (!variable_global_exists("ui_layer_names")) {
     global.ui_layer_names[2] = "tune_window_layer";
     global.ui_layer_names[3] = "gameplay_layer";
 	global.ui_layer_names[4] = "current_note_layer";
+	global.ui_layer_names[5] = "judge_settings_layer";
+	global.ui_layer_names[6] = "player_window_layer";
+
+	// Player selection
+	global.player_names[0] = "Player 1";
+	global.player_names[1] = "Player 2";
+	global.player_names[2] = "Player 3";
+	global.player_names[3] = "Player 4";
+	global.player_names[4] = "Player 5";
+	global.player_names[5] = "Player 6";
+	global.player_names[6] = "Player 7";
+	global.player_names[7] = "Player 8";
+	global.player_names[8] = "Player 9";
+	global.player_names[9] = "Guest";
+	global.current_player_index = 0;
+	global.current_player_id = "player_1";
+
+	// global.ui_text_refs is populated by obj_ui_label instances self-registering on Create
+	if (!variable_global_exists("ui_text_refs")) {
+		global.ui_text_refs = {};
+	}
 }
 
 // Initialize ui_assets only once
@@ -38,6 +59,8 @@ if (!variable_global_exists("ui_fields")) {
 	global.tune_selection = -1;
 	global.selected_tune_time_sig = ""; // Time signature of tune currently selected in picker (before OK clicked)
 	global.tune_library = { tunes: [] };
+	global.gameinfo_title = ["No tune selected"]; // field_target for obj_gameinfo_win_title
+	global.count_in_measures = 0;
 
 //global.tune_library = ["Tune A", "Tune B", "Tune C", "Tune D", "Tune E", "Tune F","Tune G"];
 global.tune_page = 0;

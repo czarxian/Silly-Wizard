@@ -156,6 +156,21 @@ This section documents the concrete runtime UI architecture and how UI instances
 - Buttons are fully configured in the Room UI editor by overriding properties on instances (see `RoomUI.yy` for examples). Typical configuration sets `button_script_index` and `button_click_value` (and sometimes `button_target`).
 - `scr_handle_button_click(index)` maps indices to high-level actions (open window, start play, save settings, etc.). Handlers use `self` (the button instance) to read `button_target` / `button_click_value` where needed.
 - Checkboxes are `obj_btn_check` + `scr_checkbox_click()` which sets global state (e.g., `global.tune_selection`) and unchecks other boxes as needed using `scr_uncheck_all()`.
+- Passive tune-picker canvas anchor clicks can route through the no-action path (`scr_script_not_set`); `tune_library_canvas_anchor` is intentionally treated as no-op noise and exits early without logging.
+
+### Timeline/notebeam anchor runtime contract
+- Anchor rendering and click routing are split by coordinate space:
+  - GUI-space clicks: gameviz/notebeam handlers (`obj_field_base` Mouse_7 -> `gv_handle_gameviz_controls_click` / `gv_handle_notebeam_click`).
+  - Room/screen-space clicks: tune-structure handler (`obj_field_base` Mouse_7 -> `gv_measure_nav_handle_click(mouse_x, mouse_y)`).
+- Anchor cache setup/storage is centralized via `gv_anchor_cache_get_or_create()` and `gv_anchor_cache_store()` in `scr_game_viz` and reused by timeline/notebeam/tune-structure anchor draw paths.
+- Synthetic measure navigation fallback is centralized via `gv_build_synthetic_measure_nav_map()` so both bind-time and panel bootstrap paths share identical fallback measure grid behavior.
+- Measure-nav state wiring is centralized via `gv_measure_nav_apply_to_timeline_state()` and `gv_measure_nav_ensure_state_defaults()` so bind-time and lazy panel bootstrap use the same state shape.
+- Measure-nav source event selection/flattening is centralized via `gv_measure_nav_resolve_source_events()` to keep bootstrap behavior consistent when falling back from planned arrays to scheduler group events.
+- Measure-nav fallback end-time selection is centralized via `gv_measure_nav_resolve_end_ms_from_events()` and `gv_measure_nav_resolve_end_ms_from_state()` to keep synthetic-map sizing consistent across paths.
+- Tune-structure panel rendering is anchor-driven (`tunestructure_canvas_anchor` in `obj_field_base` Draw_0); the legacy Draw_0 fallback panel path in `obj_game_viz` is retired.
+- Cached anchor rendering (`obj_field_base` Draw_0) sets `global.GV_ANCHOR_RECT_X_OFFSET/Y_OFFSET` to `-bbox_left/-bbox_top` while drawing notebeam and tune-structure into local surfaces.
+- `scr_game_viz` hitbox writes use those offsets (via hitbox bias) so stored hitboxes remain in global screen space and align with click tests.
+- Notebeam popup draws in GUI (`obj_game_viz` Draw_64) to ensure it stays above world-space notebeam/chanter visuals.
 
 ### Fields & dynamic text
 - Fields use `field_target` to reference either a global array (like `tune_library`) or a global variable name (string). `scr_update_fields()` pulls the value and fills `field_contents` to change the visible label.
@@ -168,6 +183,14 @@ This section documents the concrete runtime UI architecture and how UI instances
 
   Note: The population routine **pairs** each field and checkbox **preferentially by explicit editor-assigned IDs** (use `field_ID` on fields and `button_ID` on checkboxes — e.g., 1..10). If those are not set it falls back to `ui_num` (the runtime registration number), and as a last resort it pairs by on-screen order (sorted by Y). This lets you safely add rows (7–10) and control their mapping via the `field_ID`/`button_ID` properties.
 - The `obj_tune_ok_button` calls `scr_handle_button_click` with its `button_script_index` (mapped to `scr_tune_OK`) which loads the selected tune and initiates build→start playback flow.
+  - `scr_tune_OK` now resolves picker/library/entry state through `scr_button_resolve_picker_selection()` before loading candidate tune paths.
+  - Candidate tune paths are assembled via `scr_button_build_tune_load_candidates()`.
+  - Each candidate load/apply attempt runs through `scr_button_try_load_tune_candidate()`.
+  - Runtime per-tune overrides from UI fields are applied via `scr_button_apply_set_item_from_ui_fields()`.
+  - Runtime globals for playback/metronome/count-in/swing/gracenote are applied via `scr_button_apply_globals_from_set_item()`.
+  - Post-load UI updates (window visibility + game info title) are applied via `scr_button_apply_post_tune_load_ui()`.
+  - Created-set summary logging is emitted via `scr_button_log_created_set_item()`.
+  - The tune button label is restored once at the end of `scr_tune_OK` (single restore point).
 
 ### Per-layer summaries (current content)
 Below are the actual UI layers and the important instances placed on each (based on `roomui/RoomUI/RoomUI.yy`). All instances are manually placed in the Room UI editor and configured by overriding object properties there.
