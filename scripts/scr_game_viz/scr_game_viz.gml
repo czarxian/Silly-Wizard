@@ -373,6 +373,21 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_view_offset_target_ms")) {
         variable_struct_set(global.timeline_cfg, "notebeam_view_offset_target_ms", 0);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_enabled")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_nowline_planned_pulse_enabled", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_pre_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_nowline_planned_pulse_pre_ms", 28);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_post_ms")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_nowline_planned_pulse_post_ms", 60);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_width_boost")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_nowline_planned_pulse_width_boost", 1.4);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_height_pad_px")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_nowline_planned_pulse_height_pad_px", 7);
+    }
 
     return global.timeline_cfg;
 }
@@ -1529,6 +1544,26 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.score_judge_row_hitboxes = [];
     global.timeline_state.score_detail_popup = { visible: false };
 
+    // Precompute planned note-on cue times for a lightweight now-line pulse effect.
+    var _pulse_tune_channel = variable_struct_exists(global.timeline_cfg, "tune_channel")
+        ? floor(real(global.timeline_cfg.tune_channel))
+        : 2;
+    var _pulse_cues_ms = [];
+    var _pulse_n = array_length(_planned_events);
+    for (var _pi = 0; _pi < _pulse_n; _pi++) {
+        var _pev = _planned_events[_pi];
+        if (!is_struct(_pev)) continue;
+        var _ptype = string(_pev[$ "type"] ?? "");
+        if (_ptype != "note_on") continue;
+        if (variable_struct_exists(_pev, "channel")) {
+            var _pch = floor(real(_pev.channel));
+            if (_pch != _pulse_tune_channel) continue;
+        }
+        array_push(_pulse_cues_ms, gv_evt_time_ms(_pev));
+    }
+    global.timeline_state.nowline_planned_pulse_cues_ms = _pulse_cues_ms;
+    global.timeline_state.nowline_planned_pulse_i = 0;
+
     if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
         variable_struct_set(global.timeline_cfg, "notebeam_view_offset_target_ms", 0);
         variable_struct_set(global.timeline_cfg, "notebeam_view_offset_ms", 0);
@@ -1778,6 +1813,62 @@ function gv_draw_notebeam_nowline_overlay_gui() {
     var now_line_width = variable_struct_exists(global.timeline_cfg, "notebeam_now_line_width")
         ? max(1, real(global.timeline_cfg.notebeam_now_line_width))
         : 2;
+
+    var pulse_strength = 0;
+    var pulse_enabled = !variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_enabled")
+        || global.timeline_cfg.notebeam_nowline_planned_pulse_enabled;
+    if (pulse_enabled
+        && variable_struct_exists(global.timeline_state, "nowline_planned_pulse_cues_ms")
+        && is_array(global.timeline_state.nowline_planned_pulse_cues_ms)
+        && variable_struct_exists(global.timeline_state, "playhead_ms")) {
+        var _cues = global.timeline_state.nowline_planned_pulse_cues_ms;
+        var _n_cues = array_length(_cues);
+        if (_n_cues > 0) {
+            var _playhead = real(global.timeline_state.playhead_ms);
+            var _pre_ms = max(0, real(variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_pre_ms")
+                ? global.timeline_cfg.notebeam_nowline_planned_pulse_pre_ms : 28));
+            var _post_ms = max(0, real(variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_post_ms")
+                ? global.timeline_cfg.notebeam_nowline_planned_pulse_post_ms : 60));
+            var _pulse_i = variable_struct_exists(global.timeline_state, "nowline_planned_pulse_i")
+                ? floor(real(global.timeline_state.nowline_planned_pulse_i))
+                : 0;
+            _pulse_i = clamp(_pulse_i, 0, _n_cues);
+
+            while (_pulse_i < _n_cues && _playhead > real(_cues[_pulse_i]) + _post_ms) {
+                _pulse_i++;
+            }
+            while (_pulse_i > 0 && _playhead < real(_cues[_pulse_i - 1]) - _pre_ms) {
+                _pulse_i--;
+            }
+            global.timeline_state.nowline_planned_pulse_i = _pulse_i;
+
+            var _best_strength = 0;
+            var _chk_start = max(0, _pulse_i - 1);
+            var _chk_end = min(_n_cues - 1, _pulse_i + 1);
+            for (var _ci = _chk_start; _ci <= _chk_end; _ci++) {
+                var _cue_ms = real(_cues[_ci]);
+                var _dt = _playhead - _cue_ms;
+                var _s = 0;
+                if (_dt < 0) {
+                    if (_pre_ms > 0 && _dt >= -_pre_ms) _s = 1 - (abs(_dt) / _pre_ms);
+                } else {
+                    if (_post_ms > 0 && _dt <= _post_ms) _s = 1 - (_dt / _post_ms);
+                }
+                if (_s > _best_strength) _best_strength = _s;
+            }
+            pulse_strength = clamp(_best_strength, 0, 1);
+        }
+    }
+
+    if (pulse_strength > 0) {
+        var _width_boost = real(variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_width_boost")
+            ? global.timeline_cfg.notebeam_nowline_planned_pulse_width_boost : 1.4);
+        var _height_pad = real(variable_struct_exists(global.timeline_cfg, "notebeam_nowline_planned_pulse_height_pad_px")
+            ? global.timeline_cfg.notebeam_nowline_planned_pulse_height_pad_px : 7);
+        now_line_width += max(0, _width_boost) * pulse_strength;
+        gui_y1 -= max(0, _height_pad) * pulse_strength;
+        gui_y2 += max(0, _height_pad) * pulse_strength;
+    }
 
     draw_set_alpha(1);
     draw_set_color(now_line_color);
