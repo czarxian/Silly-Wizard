@@ -193,4 +193,10 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
 if (script_exists(asset_get_index("scoring_judge_settings_load_for_player"))) {
 	scoring_judge_settings_load_for_player();
 }
+if (script_exists(asset_get_index("scoring_player_settings_load_for_player"))) {
+	scoring_player_settings_load_for_player();
+}
+if (script_exists(asset_get_index("scoring_tune_overrides_load_for_player"))) {
+	scoring_tune_overrides_load_for_player();
+}
 

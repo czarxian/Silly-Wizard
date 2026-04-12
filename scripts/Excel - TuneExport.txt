@@ -2,7 +2,7 @@
 ' MODULE: modTuneExport
 ' PURPOSE: Export current tune sheet to performance folder as metadata file
 ' WORKBOOK: Silly Wizard Work.xlsm (Master Tune Workbook)
-' NOTE: Tune title is in cell C3 (column C, row 3)
+' NOTE: Tune title is read from metadata variable "title" (col B/C), with C3 fallback
 '=============================================================================
 Option Explicit
 
@@ -25,15 +25,15 @@ Public Sub ExportCurrentTuneMetadata()
     
     Set ws = ActiveSheet
     
-    ' Get tune title from C3 (CORRECTED from D3)
+    ' Get tune title from metadata table (fallback: C3)
     tuneTitle = ""
     On Error Resume Next
-    tuneTitle = Trim(CStr(ws.Range("C3").Value))
+    tuneTitle = GetTuneTitleFromSheet(ws)
     On Error GoTo ErrorHandler
     
     If tuneTitle = "" Then
-        MsgBox "No tune title found in cell C3." & vbCrLf & vbCrLf & _
-            "Please ensure you're on a tune sheet with the title in C3.", _
+        MsgBox "No tune title found." & vbCrLf & vbCrLf & _
+            "Expected metadata variable 'title' in the B/C table or fallback value in C3.", _
             vbExclamation, "Export Error"
         Exit Sub
     End If
@@ -130,7 +130,7 @@ Public Sub ExportAllTuneMetadata()
     If MsgBox("This will export ALL tune sheets to the performance folder." & vbCrLf & _
         "Existing metadata files will be overwritten." & vbCrLf & vbCrLf & _
         "Root folder: " & PERFORMANCE_ROOT & vbCrLf & vbCrLf & _
-        "Tune title read from cell C3 on each sheet." & vbCrLf & vbCrLf & _
+        "Tune title read from metadata variable 'title' (fallback: C3)." & vbCrLf & vbCrLf & _
         "Continue?", vbQuestion + vbYesNo, "Export All Tunes") = vbNo Then
         Exit Sub
     End If
@@ -144,7 +144,7 @@ Public Sub ExportAllTuneMetadata()
     For Each ws In ThisWorkbook.Worksheets
         tuneTitle = ""
         On Error Resume Next
-        tuneTitle = Trim(CStr(ws.Range("C3").Value))  ' CORRECTED: C3 instead of D3
+        tuneTitle = GetTuneTitleFromSheet(ws)
         On Error GoTo 0
         
         If tuneTitle = "" Then
@@ -200,7 +200,7 @@ NextSheet:
     Dim resultMsg As String
     resultMsg = "Batch export complete!" & vbCrLf & vbCrLf & _
         "Exported: " & exportCount & " tunes" & vbCrLf & _
-        "Skipped: " & skipCount & " sheets (no title in C3)" & vbCrLf & _
+        "Skipped: " & skipCount & " sheets (no title metadata/C3 fallback)" & vbCrLf & _
         "Errors: " & errorCount
     
     If errorList <> "" Then
@@ -248,7 +248,7 @@ Public Sub ShowExportConfiguration()
     PERFORMANCE_ROOT = "C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\performances"
     
     MsgBox "Current Export Configuration:" & vbCrLf & vbCrLf & _
-        "Tune Title Cell: C3" & vbCrLf & vbCrLf & _
+        "Tune Title Source: metadata variable 'title' (fallback: C3)" & vbCrLf & vbCrLf & _
         "Performance Root Folder:" & vbCrLf & _
         PERFORMANCE_ROOT & vbCrLf & vbCrLf & _
         "Files will be saved as:" & vbCrLf & _
@@ -256,6 +256,25 @@ Public Sub ShowExportConfiguration()
         "To change settings, edit the VBA module.", _
         vbInformation, "Export Configuration"
 End Sub
+
+Private Function GetTuneTitleFromSheet(ws As Worksheet) As String
+    Dim r As Long
+    Dim v As String
+
+    For r = 2 To 48
+        If LCase$(Trim$(ws.Cells(r, 2).Value)) = "title" Then
+            v = Trim$(CStr(ws.Cells(r, 3).Value))
+            If v <> "" Then
+                GetTuneTitleFromSheet = v
+                Exit Function
+            End If
+            Exit For
+        End If
+    Next r
+
+    ' Backward-compatible fallback for legacy sheets.
+    GetTuneTitleFromSheet = Trim$(CStr(ws.Range("C3").Value))
+End Function
 
 
 '------------------------------------------------------------------------------

@@ -35,7 +35,23 @@ function timing_get_effective_quarter_bpm(_bpm, _time_sig) {
     if (bpm <= 0) bpm = 120;
 
     var ts = timing_normalize_time_sig(_time_sig);
+
+    // Cut time: displayed BPM is commonly half-note BPM.
     if (ts == "2/2") return bpm * 2;
+
+    // Compound meters (x/8, x/16 where x is multiple of 3 and > 3):
+    // interpret displayed BPM as dotted-beat BPM by default.
+    // Convert to quarter-note BPM using:
+    // quarter_per_beat = (3/denom) / (1/4) = 12/denom
+    // effective_quarter_bpm = bpm * (12 / denom)
+    var parts = string_split(ts, "/");
+    if (array_length(parts) >= 2) {
+        var num = real(parts[0]);
+        var den = real(parts[1]);
+        if (num > 3 && (num mod 3) == 0 && (den == 8 || den == 16)) {
+            return bpm * (12 / den);
+        }
+    }
 
     return bpm;
 }

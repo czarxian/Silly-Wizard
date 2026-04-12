@@ -213,6 +213,14 @@ function gv_measure_nav_resolve_end_ms_from_state() {
     return _fallback_end_ms;
 }
 
+/// Returns true only during active live playback (not review, not idle).
+function gv_is_live_playback() {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "active") || !global.timeline_state.active) return false;
+    var done = variable_struct_exists(global.timeline_state, "playback_complete") && global.timeline_state.playback_complete;
+    return !done;
+}
+
 function gv_ensure_timeline_cfg_defaults() {
     if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) {
         global.timeline_cfg = {};
@@ -1154,8 +1162,10 @@ function gv_timeline_step_tick() {
         && mouse_x <= real(variable_struct_get(notebeam_rect, "x2"))
         && mouse_y >= real(variable_struct_get(notebeam_rect, "y1"))
         && mouse_y <= real(variable_struct_get(notebeam_rect, "y2"))) {
-        if (mouse_wheel_up()) gv_notebeam_pan_by_steps(-1);
-        if (mouse_wheel_down()) gv_notebeam_pan_by_steps(1);
+        if (!gv_is_live_playback()) {
+            if (mouse_wheel_up()) gv_notebeam_pan_by_steps(-1);
+            if (mouse_wheel_down()) gv_notebeam_pan_by_steps(1);
+        }
     }
 
     if (variable_struct_exists(cfg, "notebeam_view_offset_target_ms")) {
@@ -1924,7 +1934,9 @@ function gv_measure_at_ms(_ms) {
         var ed = real(e[$ "end_ms"] ?? 0);
         if (_ms >= s && _ms < ed) return floor(real(e[$ "measure"] ?? -1));
     }
-    // Past end: return last measure
+    // Before first entry (e.g. pickup bar before measure 1): clamp to first measure.
+    if (n > 0 && _ms < real(entries[0][$ "start_ms"] ?? 0)) return floor(real(entries[0][$ "measure"] ?? -1));
+    // Past end: return last measure.
     if (n > 0) return floor(real(entries[n-1][$ "measure"] ?? -1));
     return -1;
 }

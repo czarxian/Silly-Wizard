@@ -1012,6 +1012,256 @@ function scoring_judge_settings_load_for_player(_player_id = undefined) {
     return store;
 }
 
+function scoring_profile_get_app_settings_path(_player_id = undefined) {
+    return scoring_profile_get_player_folder(_player_id) + "/app_settings.json";
+}
+
+function scoring_profile_get_tune_overrides_path(_player_id = undefined) {
+    return scoring_profile_get_player_folder(_player_id) + "/tune_overrides.json";
+}
+
+function scoring_player_settings_build_payload(_player_id = undefined) {
+    var settings = {
+        midi_input_device:       variable_global_exists("midi_input_device") ? real(global.midi_input_device) : 0,
+        midi_input_device_name:  variable_global_exists("midi_input_device_name") ? string(global.midi_input_device_name) : "",
+        midi_input_channel:      variable_global_exists("midi_input_channel") ? real(global.midi_input_channel) : 0,
+        midi_output_device:      variable_global_exists("midi_output_device") ? real(global.midi_output_device) : 0,
+        midi_output_device_name: variable_global_exists("midi_output_device_name") ? string(global.midi_output_device_name) : "",
+        midi_output_channel:     variable_global_exists("midi_ouput_channel") ? real(global.midi_ouput_channel) : 0,
+        MIDI_chanter:            variable_global_exists("MIDI_chanter") ? string(global.MIDI_chanter) : "blair",
+        metronome_mode:          variable_global_exists("metronome_mode") ? real(global.metronome_mode) : 2,
+        metronome_pattern:       variable_global_exists("metronome_pattern_selection") ? real(global.metronome_pattern_selection) : 0,
+        metronome_volume:        variable_global_exists("metronome_volume") ? real(global.metronome_volume) : 100,
+        notebeam_measures_ahead:  (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_ahead")) ? real(global.timeline_cfg.measures_ahead) : 2.0,
+        notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0
+    };
+
+    return {
+        schema_version: 1,
+        export_type: "player_app_settings",
+        player_id: scoring_profile_get_player_id(_player_id),
+        settings: settings
+    };
+}
+
+function scoring_player_settings_save_for_player(_player_id = undefined) {
+    scoring_profile_ensure_player_folder(_player_id);
+    var path = scoring_profile_get_app_settings_path(_player_id);
+    var payload = scoring_player_settings_build_payload(_player_id);
+    return scoring_json_write_struct(path, payload);
+}
+
+function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_index) {
+    var count = midi_input_device_count();
+    if (count <= 0) return 0;
+
+    var wanted = string_trim(string(_saved_name));
+    if (wanted != "") {
+        for (var i = 0; i < count; i++) {
+            if (string(midi_input_device_name(i)) == wanted) return i;
+        }
+    }
+
+    return clamp(floor(real(_saved_index)), 0, count - 1);
+}
+
+function scoring_player_settings_resolve_midi_output_index(_saved_name, _saved_index) {
+    var count = midi_output_device_count();
+    if (count <= 0) return 0;
+
+    var wanted = string_trim(string(_saved_name));
+    if (wanted != "") {
+        for (var i = 0; i < count; i++) {
+            if (string(midi_output_device_name(i)) == wanted) return i;
+        }
+    }
+
+    return clamp(floor(real(_saved_index)), 0, count - 1);
+}
+
+function scoring_player_settings_load_for_player(_player_id = undefined) {
+    var fallback = {
+        schema_version: 1,
+        export_type: "player_app_settings",
+        player_id: scoring_profile_get_player_id(_player_id),
+        settings: {}
+    };
+
+    var path = scoring_profile_get_app_settings_path(_player_id);
+    var data = scoring_json_read_struct(path, fallback);
+    var s = variable_struct_exists(data, "settings") && is_struct(data.settings) ? data.settings : {};
+
+    var in_idx_saved = real(variable_struct_exists(s, "midi_input_device") ? s[$ "midi_input_device"] : (variable_global_exists("midi_input_device") ? global.midi_input_device : 0));
+    var in_name_saved = string(variable_struct_exists(s, "midi_input_device_name") ? s[$ "midi_input_device_name"] : "");
+    var out_idx_saved = real(variable_struct_exists(s, "midi_output_device") ? s[$ "midi_output_device"] : (variable_global_exists("midi_output_device") ? global.midi_output_device : 0));
+    var out_name_saved = string(variable_struct_exists(s, "midi_output_device_name") ? s[$ "midi_output_device_name"] : "");
+
+    if (midi_input_device_count() > 0) {
+        global.midi_input_device = scoring_player_settings_resolve_midi_input_index(in_name_saved, in_idx_saved);
+        global.midi_input_device_name = midi_input_device_name(global.midi_input_device);
+    } else {
+        global.midi_input_device = 0;
+        global.midi_input_device_name = "no MIDI input devices found";
+    }
+
+    if (midi_output_device_count() > 0) {
+        global.midi_output_device = scoring_player_settings_resolve_midi_output_index(out_name_saved, out_idx_saved);
+        global.midi_output_device_name = midi_output_device_name(global.midi_output_device);
+    } else {
+        global.midi_output_device = 0;
+        global.midi_output_device_name = "no MIDI output devices found";
+    }
+
+    global.midi_input_channel = real(variable_struct_exists(s, "midi_input_channel") ? s[$ "midi_input_channel"] : (variable_global_exists("midi_input_channel") ? global.midi_input_channel : 0));
+    global.midi_ouput_channel = real(variable_struct_exists(s, "midi_output_channel") ? s[$ "midi_output_channel"] : (variable_global_exists("midi_ouput_channel") ? global.midi_ouput_channel : 0));
+    global.metronome_mode = floor(real(variable_struct_exists(s, "metronome_mode") ? s[$ "metronome_mode"] : (variable_global_exists("metronome_mode") ? global.metronome_mode : 2)));
+    global.metronome_pattern_selection = floor(real(variable_struct_exists(s, "metronome_pattern") ? s[$ "metronome_pattern"] : (variable_global_exists("metronome_pattern_selection") ? global.metronome_pattern_selection : 0)));
+    global.metronome_volume = floor(real(variable_struct_exists(s, "metronome_volume") ? s[$ "metronome_volume"] : (variable_global_exists("metronome_volume") ? global.metronome_volume : 100)));
+
+    if (variable_struct_exists(s, "MIDI_chanter")) {
+        global.MIDI_chanter = string(s[$ "MIDI_chanter"]);
+    }
+
+    if (script_exists(asset_get_index("gv_ensure_timeline_cfg_defaults"))) {
+        var _cfg = gv_ensure_timeline_cfg_defaults();
+        if (variable_struct_exists(s, "notebeam_measures_ahead"))  variable_struct_set(_cfg, "measures_ahead",  max(0.25, real(s[$ "notebeam_measures_ahead"])));
+        if (variable_struct_exists(s, "notebeam_measures_behind")) variable_struct_set(_cfg, "measures_behind", max(0.25, real(s[$ "notebeam_measures_behind"])));
+    }
+
+    return true;
+}
+
+function scoring_tune_override_key(_tune_filename = undefined) {
+    var source = "";
+    if (!is_undefined(_tune_filename)) {
+        source = string(_tune_filename);
+    } else if (variable_global_exists("current_tune_filename")) {
+        source = string(global.current_tune_filename);
+    } else if (variable_global_exists("current_set") && is_array(global.current_set)) {
+        var idx = variable_global_exists("current_set_item_index") ? floor(real(global.current_set_item_index)) : -1;
+        if (idx >= 0 && idx < array_length(global.current_set) && is_struct(global.current_set[idx])) {
+            source = string(global.current_set[idx][$ "tune_filename"] ?? "");
+        }
+    }
+
+    source = string_trim(source);
+    if (source == "") return "";
+
+    source = string_replace_all(source, "\\", "/");
+    var last_sep = 0;
+    var n = string_length(source);
+    for (var i = 1; i <= n; i++) {
+        if (string_copy(source, i, 1) == "/") last_sep = i;
+    }
+    if (last_sep > 0 && last_sep < n) source = string_copy(source, last_sep + 1, n - last_sep);
+
+    return string_lower(source);
+}
+
+function scoring_tune_overrides_get_store() {
+    if (!variable_global_exists("player_tune_overrides") || !is_struct(global.player_tune_overrides)) {
+        global.player_tune_overrides = {};
+    }
+    return global.player_tune_overrides;
+}
+
+function scoring_tune_overrides_save_for_player(_player_id = undefined) {
+    scoring_profile_ensure_player_folder(_player_id);
+    var path = scoring_profile_get_tune_overrides_path(_player_id);
+    var store = scoring_tune_overrides_get_store();
+
+    var overrides = [];
+    var keys = variable_struct_get_names(store);
+    for (var i = 0; i < array_length(keys); i++) {
+        var key = string(keys[i]);
+        if (!variable_struct_exists(store, key)) continue;
+        var ov = store[$ key];
+        if (!is_struct(ov)) continue;
+
+        array_push(overrides, {
+            tune_key: key,
+            bpm: real(ov[$ "bpm"] ?? 120),
+            swing_mult: real(ov[$ "swing_mult"] ?? 0),
+            gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0)
+        });
+    }
+
+    var payload = {
+        schema_version: 1,
+        export_type: "tune_overrides",
+        player_id: scoring_profile_get_player_id(_player_id),
+        overrides: overrides
+    };
+
+    return scoring_json_write_struct(path, payload);
+}
+
+function scoring_tune_overrides_load_for_player(_player_id = undefined) {
+    var fallback = {
+        schema_version: 1,
+        export_type: "tune_overrides",
+        player_id: scoring_profile_get_player_id(_player_id),
+        overrides: []
+    };
+
+    var path = scoring_profile_get_tune_overrides_path(_player_id);
+    var data = scoring_json_read_struct(path, fallback);
+
+    var store = {};
+    var list = variable_struct_exists(data, "overrides") ? data[$ "overrides"] : [];
+    if (is_array(list)) {
+        for (var i = 0; i < array_length(list); i++) {
+            var ov = list[i];
+            if (!is_struct(ov)) continue;
+            var key = scoring_tune_override_key(string(ov[$ "tune_key"] ?? ""));
+            if (key == "") continue;
+            store[$ key] = {
+                bpm: real(ov[$ "bpm"] ?? 120),
+                swing_mult: real(ov[$ "swing_mult"] ?? 0),
+                gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0)
+            };
+        }
+    }
+
+    global.player_tune_overrides = store;
+    return store;
+}
+
+function scoring_tune_override_apply_current(_tune_filename = undefined) {
+    var key = scoring_tune_override_key(_tune_filename);
+    if (key == "") return false;
+
+    global.current_tune_filename = key;
+
+    var store = scoring_tune_overrides_get_store();
+    if (!variable_struct_exists(store, key)) return false;
+
+    var ov = store[$ key];
+    if (!is_struct(ov)) return false;
+
+    if (variable_struct_exists(ov, "bpm")) global.current_bpm = real(ov[$ "bpm"]);
+    if (variable_struct_exists(ov, "swing_mult")) global.swing_mult = real(ov[$ "swing_mult"]);
+    if (variable_struct_exists(ov, "gracenote_override_ms")) global.gracenote_override_ms = real(ov[$ "gracenote_override_ms"]);
+
+    return true;
+}
+
+function scoring_tune_override_save_current(_tune_filename = undefined) {
+    var key = scoring_tune_override_key(_tune_filename);
+    if (key == "") return false;
+
+    global.current_tune_filename = key;
+
+    var store = scoring_tune_overrides_get_store();
+    store[$ key] = {
+        bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 120,
+        swing_mult: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
+        gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0
+    };
+    global.player_tune_overrides = store;
+    return scoring_tune_overrides_save_for_player();
+}
+
 function scoring_judge_settings_ensure_state() {
     if (!variable_global_exists("judge_settings_ui_state") || !is_struct(global.judge_settings_ui_state)) {
         global.judge_settings_ui_state = {

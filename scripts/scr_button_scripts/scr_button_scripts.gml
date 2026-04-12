@@ -1120,6 +1120,7 @@
 	function scr_tune_bpm_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) return;
 
 		var field = scr_button_inst_get(ctx, "field_ref", noone);
 		if (!instance_exists(field)) return;
@@ -1145,6 +1146,9 @@
 			}
 		}
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_3", new_val);
+		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
+			scoring_tune_override_save_current();
+		}
 
 		show_debug_message("BPM: " + string(new_val));
 	}
@@ -1153,6 +1157,7 @@
 	function scr_tune_countin_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) return;
 
 		var field = scr_button_inst_get(ctx, "field_ref", noone);
 		if (!instance_exists(field)) return;
@@ -1185,6 +1190,7 @@
 	function scr_gracenote_override_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) return;
 
 		var field = scr_button_inst_get(ctx, "field_ref", noone);
 		if (!instance_exists(field)) return;
@@ -1210,6 +1216,9 @@
 			}
 		}
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_7", new_val);
+		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
+			scoring_tune_override_save_current();
+		}
 
 		show_debug_message("Gracenote override (ms): " + string(new_val));
 	}
@@ -1218,6 +1227,7 @@
 	function scr_swing_mult_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) return;
 
 		var field = scr_button_inst_get(ctx, "field_ref", noone);
 		if (!instance_exists(field)) return;
@@ -1243,6 +1253,9 @@
 			}
 		}
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_6", new_val);
+		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
+			scoring_tune_override_save_current();
+		}
 
 		show_debug_message("Swing multiplier: " + string(new_val));
 	}
@@ -1271,6 +1284,9 @@
 
 		var changed = gv_notebeam_zoom_by_steps(steps);
 		if (changed) {
+			if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+				scoring_player_settings_save_for_player();
+			}
 			show_debug_message("Notebeam zoom step: " + string(steps));
 		}
 	}
@@ -1279,6 +1295,7 @@
 	function scr_notebeam_pan_scroll(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) return;
 
 		var steps = real(scr_button_inst_get(ctx, "button_click_value", 0));
 		if (steps == 0) return;
@@ -1297,6 +1314,9 @@
 
 		midi_input_device_open(global.midi_input_device);
 		midi_output_device_open(global.midi_output_device);
+		if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+			scoring_player_settings_save_for_player();
+		}
 
 		var button_label = string(scr_button_inst_get(ctx, "button_label", ""));
 		if (!scr_hide_window(button_label, ctx)) {
@@ -1325,6 +1345,9 @@
 		if (script_exists(asset_get_index("scoring_judge_settings_save_for_player"))) {
 			scoring_judge_settings_save_for_player();
 		}
+		if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+			scoring_player_settings_save_for_player();
+		}
 
 		global.current_player_index = idx;
 		var name = global.player_names[idx];
@@ -1333,6 +1356,15 @@
 		// Load incoming player's judge settings
 		if (script_exists(asset_get_index("scoring_judge_settings_load_for_player"))) {
 			scoring_judge_settings_load_for_player();
+		}
+		if (script_exists(asset_get_index("scoring_player_settings_load_for_player"))) {
+			scoring_player_settings_load_for_player();
+		}
+		if (script_exists(asset_get_index("scoring_tune_overrides_load_for_player"))) {
+			scoring_tune_overrides_load_for_player();
+		}
+		if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
+			scoring_tune_override_apply_current();
 		}
 
 		scr_open_window(6);  // closes the player popup
@@ -1548,6 +1580,17 @@
 		global.current_set_item_index = 0;
 		scr_button_apply_globals_from_set_item(item);
 
+		var tune_key = string(scr_button_struct_get(_entry, "filename", ""));
+		if (tune_key == "") tune_key = _tryfile;
+		global.current_tune_filename = tune_key;
+		if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
+			scoring_tune_override_apply_current(tune_key);
+			scr_button_struct_set(item, "bpm", global.current_bpm);
+			scr_button_struct_set(item, "swing_mult", global.swing_mult);
+			scr_button_struct_set(item, "gracenote_override_ms", global.gracenote_override_ms);
+			global.current_set[0] = item;
+		}
+
 		scr_button_apply_post_tune_load_ui(_button_label, _entry);
 		return true;
 	}
@@ -1594,7 +1637,13 @@
 					if (is_struct(_ok_entry)) {
 						var _ok_cands = scr_button_build_tune_load_candidates(_ok_lib, _ok_fname);
 						for (var _ok_ci = 0; _ok_ci < array_length(_ok_cands); _ok_ci++) {
-							if (scr_tune_load_json(_ok_cands[_ok_ci])) break;
+							if (scr_tune_load_json(_ok_cands[_ok_ci])) {
+								global.current_tune_filename = _ok_fname;
+								if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
+									scoring_tune_override_apply_current(_ok_fname);
+								}
+								break;
+							}
 						}
 					}
 					if (!scr_hide_window(button_label, ctx)) {

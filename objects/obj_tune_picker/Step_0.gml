@@ -33,8 +33,11 @@ if (mouse_wheel_up()) scroll_delta -= 1;
 if (mouse_wheel_down()) scroll_delta += 1;
 
 var pointer_over_list = scr_tune_picker_is_pointer_over_list(gui_x, gui_y);
+var pointer_over_set_slots = (view_mode == "sets") && scr_set_builder_is_pointer_over_slots(gui_x, gui_y);
 
 if (scroll_delta != 0 && pointer_over_list) {
     scr_tune_picker_scroll_rows(scroll_delta);
     scr_tune_picker_refresh_visible_rows();
+} else if (scroll_delta != 0 && pointer_over_set_slots) {
+    scr_set_builder_scroll_rows(scroll_delta);
 }

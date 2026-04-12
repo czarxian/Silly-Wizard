@@ -31,6 +31,7 @@ view_row_gap = 6;
 view_mode = "tunes";            // "tunes" | "sets"
 set_builder_slots = [];         // array of { filename, bpm, swing, title }
 set_builder_sel_slot = -1;      // selected slot index (-1 = none)
+set_builder_scroll_offset = 0;  // top visible slot in right pane
 set_name_text = "New Set";
 set_name_editing = false;
 set_confirm_overwrite = false;

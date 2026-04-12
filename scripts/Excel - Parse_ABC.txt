@@ -5,8 +5,14 @@ Option Explicit
 ' ============================================================
 
 Const SHEET_EVENTS As String = "Tune"
-Const ABC_METADATA_CELL As String = "F2"
-Const ABC_SOURCE_CELL As String = "G2"
+' Parts table: G = Type, H = Voice/Instrument, I = ABC text
+' Row with Type="metadata" provides the ABC header block.
+' All other rows are processed in order (melody first, then appended).
+Const PART_TABLE_TYPE_COL  As Long = 7   ' Column G
+Const PART_TABLE_VOICE_COL As Long = 8   ' Column H
+Const PART_TABLE_ABC_COL   As Long = 9   ' Column I
+Const PART_TABLE_FIRST_ROW As Long = 2   ' Row 2 is the metadata row
+Const PART_TABLE_MAX_ROW   As Long = 25  ' Scan up to this row for parts
 
 Const HEADER_ROW As Long = 50
 Const FIRST_DATA_ROW As Long = 51
@@ -59,10 +65,9 @@ Private UnitsPerMeasure As Double   ' = UnitsPerBeat * BeatsPerMeasure
 Private PickupOffsetUnits As Double
 Private PickupDetected As Boolean
 
-' Harmony append state (set by AppendHarmonyEvents; reset after use)
-Private AppendStartRow As Long  ' 0 = normal start at FIRST_DATA_ROW
-Private ActiveVoice As String   ' "" = default "pipes"
-Const ABC_HARMONY1_CELL As String = "H2"
+' Multi-part append state (used by ParseAllParts; reset after completion)
+Private AppendStartRow As Long  ' 0 = write from FIRST_DATA_ROW; >0 = append here
+Private ActiveVoice As String   ' Voice label written to COL_VOICE for the current part
 
 Const EPSILON As Double = 0.000001
 Const ROUND_DECIMALS As Long = 9
@@ -70,146 +75,181 @@ Const ROUND_DECIMALS As Long = 9
 ' ============================================================
 ' ENTRY POINT
 ' ============================================================
-
-Public Sub ParseABCToEvents()
+' Reads the parts table (G:I, rows 2-25) and processes each row in order.
+' The row with Type="metadata" provides the ABC header (title, key, meter…).
+' The row with Type="melody" (or the first non-metadata row) clears the event
+' table and writes the primary voice.  Every subsequent row is appended.
+'
+' Supported Type values:
+'   metadata        — ABC header block (no events generated)
+'   melody          — primary voice; voice defaults to "pipes"
+'   harmony1        — first harmony; voice defaults to "harmony1"
+'   harmony2        — second harmony; voice defaults to "harmony2"
+'   transition_tail — tail splice: events tagged structure="tail" / "tail_bar"
+'   transition_head — head splice: events tagged structure="head" / "head_bar"
+'   bridge          — bridge/filler: events tagged structure="bridge" / "bridge_bar"
+'   (any other)     — appended with the supplied voice label
+'
+Public Sub ParseAllParts()
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Worksheets(SHEET_EVENTS)
 
-    Dim metadata As String, abc As String
-    metadata = ws.Range(ABC_METADATA_CELL).Value
-    abc = ws.Range(ABC_SOURCE_CELL).Value
-    
-    If Trim$(metadata) = "" Then
-        MsgBox "No ABC metadata found in " & ABC_METADATA_CELL, vbExclamation
+    ' ---- Locate and parse metadata row ----
+    Dim metadataABC As String
+    Dim foundMetadataRow As Boolean
+    Dim r As Long
+    For r = PART_TABLE_FIRST_ROW To PART_TABLE_MAX_ROW
+        If LCase$(Trim$(ws.Cells(r, PART_TABLE_TYPE_COL).Value)) = "metadata" Then
+            foundMetadataRow = True
+            metadataABC = Trim$(ws.Cells(r, PART_TABLE_ABC_COL).Value)
+            Exit For
+        End If
+    Next r
+
+    If Not foundMetadataRow Then
+        MsgBox "No metadata row found in parts table." & vbCrLf & _
+               "Add a row with Type=metadata (col G) and the ABC header block in col I.", _
+               vbExclamation, "Parse Error"
         Exit Sub
     End If
-    
-    abc = PrepareABCForVoice(abc, "1")
 
-    If Trim$(abc) = "" Then
-        MsgBox "No ABC events found in " & ABC_SOURCE_CELL, vbExclamation
-        Exit Sub
+    If metadataABC <> "" Then
+        ParseABCMetadata ws, metadataABC
     End If
-
-    ' Parse metadata and set up time signature variables
-    ParseABCMetadata ws, metadata
-    
-    ' Calculate rhythmic constants based on parsed metadata
     CalculateRhythmicConstants ws
 
-    PickupOffsetUnits = 0#
-    PickupDetected = False
-
+    ' ---- Clear event table and reset state ----
     ClearEventRows ws
-
-    Dim tokens As Collection
-    Set tokens = TokenizeABC(abc)
-
-    Dim flatTokens As Collection
-    Set flatTokens = ExpandRepeats(tokens)
-
-    WriteEventsFromTokens ws, flatTokens
-    
-    ' Detect pickup after first pass (before recalculating positions)
-    DetectPickup ws
-    
-    RecalculatePositions ws
-    PopulateEmbellishmentTargets ws
-    InferStructuralMetadata ws
-
-    Dim summary As String
-    summary = "ABC parsing complete." & vbCrLf & _
-              "Time Sig: " & TimeSigNum & "/" & TimeSigDen & vbCrLf & _
-              "Units per beat: " & UnitsPerBeat & vbCrLf & _
-              "Units per measure: " & UnitsPerMeasure & vbCrLf & _
-              "Pickup units: " & PickupOffsetUnits
-
-    MsgBox summary, vbInformation
-End Sub
-
-' ============================================================
-' APPEND HARMONY VOICE
-' ============================================================
-' Reads ABC from ABC_HARMONY1_CELL (H2), strips metadata/comments, extracts
-' V:2 if voice markers are present, and appends events with voice "harmony1"
-' after the existing melody rows. Call ParseABCToEvents first.
-Public Sub AppendHarmonyEvents()
-    Dim ws As Worksheet
-    Set ws = ThisWorkbook.Worksheets(SHEET_EVENTS)
-
-    Call AppendHarmonyEventsCore(ws, True)
-End Sub
-
-Private Function AppendHarmonyEventsCore(ws As Worksheet, Optional ByVal showMessage As Boolean = True) As Long
-    AppendHarmonyEventsCore = 0
-
-    Dim harmonyABC As String
-    harmonyABC = ws.Range(ABC_HARMONY1_CELL).Value
-    harmonyABC = PrepareABCForVoice(harmonyABC, "2")
-
-    If Trim$(harmonyABC) = "" Then
-        If showMessage Then
-            MsgBox "No harmony ABC found in " & ABC_HARMONY1_CELL & "." & vbCrLf & _
-                   "Paste harmony ABC into cell " & ABC_HARMONY1_CELL & " and try again.", vbExclamation
-        End If
-        Exit Sub
-    End If
-
-    ' Verify melody events are present
-    Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
-    If lastRow < FIRST_DATA_ROW Then
-        If showMessage Then
-            MsgBox "No melody events found. Run ParseABCToEvents first.", vbExclamation
-        End If
-        Exit Sub
-    End If
-
-    ' Re-derive rhythmic constants from the sheet (safe if VBA state was reset)
-    CalculateRhythmicConstants ws
     PickupOffsetUnits = 0#
     PickupDetected = False
-
-    ' Configure append state
-    AppendStartRow = lastRow + 1
-    ActiveVoice = "harmony1"
-
-    ' Tokenize and expand harmony ABC
-    Dim tokens As Collection
-    Set tokens = TokenizeABC(harmonyABC)
-
-    Dim flatTokens As Collection
-    Set flatTokens = ExpandRepeats(tokens)
-
-    ' Write harmony rows after existing melody rows
-    WriteEventsFromTokens ws, flatTokens
-
-    ' Populate timing/location fields for the merged table
-    DetectPickup ws
-    RecalculatePositions ws
-    PopulateEmbellishmentTargets ws
-    InferStructuralMetadata ws
-
-    ' Renumber all event_ids sequentially over the merged table
-    RenumberEventIds ws
-
-    ' Reset append state
     AppendStartRow = 0
     ActiveVoice = ""
 
-    Dim newLastRow As Long
-    newLastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
-    Dim addedRows As Long
-    addedRows = newLastRow - lastRow
+    ' ---- Process each part row ----
+    Dim totalAdded As Long
+    totalAdded = 0
+    Dim partSummary As String
+    partSummary = ""
 
-    AppendHarmonyEventsCore = addedRows
+    For r = PART_TABLE_FIRST_ROW To PART_TABLE_MAX_ROW
+        Dim partType As String
+        Dim voiceTag  As String
+        Dim abcText   As String
 
-    If showMessage Then
-        MsgBox "Harmony appended as 'harmony1'." & vbCrLf & _
-               addedRows & " harmony event(s) added." & vbCrLf & _
-               "Export JSON when ready.", vbInformation
+        partType = LCase$(Trim$(ws.Cells(r, PART_TABLE_TYPE_COL).Value))
+        voiceTag  = Trim$(ws.Cells(r, PART_TABLE_VOICE_COL).Value)
+        abcText   = Trim$(ws.Cells(r, PART_TABLE_ABC_COL).Value)
+
+        If partType = "" Or partType = "metadata" Then GoTo NextPartRow
+        If abcText = "" Then GoTo NextPartRow
+
+        ' Default voice tag when col H is blank
+        If voiceTag = "" Then
+            Select Case partType
+                Case "melody":          voiceTag = "pipes"
+                Case "harmony1":        voiceTag = "harmony1"
+                Case "harmony2":        voiceTag = "harmony2"
+                Case "transition_tail": voiceTag = "pipes"
+                Case "transition_head": voiceTag = "pipes"
+                Case "bridge":          voiceTag = "pipes"
+                Case Else:              voiceTag = partType
+            End Select
+        End If
+
+        ' Voice index for ABC voice-header extraction
+        Dim voiceIdx As String
+        Select Case partType
+            Case "harmony1": voiceIdx = "2"
+            Case "harmony2": voiceIdx = "3"
+            Case Else:       voiceIdx = "1"
+        End Select
+
+        Dim preparedABC As String
+        preparedABC = PrepareABCForVoice(abcText, voiceIdx)
+        If Trim$(preparedABC) = "" Then GoTo NextPartRow
+
+        ' Snapshot last written row before appending
+        Dim rowBefore As Long
+        rowBefore = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+        If rowBefore < FIRST_DATA_ROW - 1 Then rowBefore = FIRST_DATA_ROW - 1
+
+        ' Configure append state
+        AppendStartRow = IIf(totalAdded = 0, 0, rowBefore + 1)
+        ActiveVoice = voiceTag
+        PickupOffsetUnits = 0#
+        PickupDetected = False
+
+        ' Tokenise, expand repeats, write events
+        Dim tokens As Collection
+        Set tokens = TokenizeABC(preparedABC)
+        Dim flatTokens As Collection
+        Set flatTokens = ExpandRepeats(tokens)
+        WriteEventsFromTokens ws, flatTokens
+
+        ' Tag transition/bridge events in COL_STRUCTURE
+        Dim sectionTag As String
+        sectionTag = ""
+        Select Case partType
+            Case "transition_tail": sectionTag = "tail"
+            Case "transition_head": sectionTag = "head"
+            Case "bridge":          sectionTag = "bridge"
+        End Select
+        If sectionTag <> "" Then TagSectionEvents ws, rowBefore + 1, sectionTag
+
+        ' Tally
+        Dim rowAfter As Long
+        rowAfter = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+        Dim addedCount As Long
+        addedCount = rowAfter - rowBefore
+        totalAdded = totalAdded + addedCount
+        partSummary = partSummary & "  " & partType & " (" & voiceTag & "): " & addedCount & " rows" & vbCrLf
+
+NextPartRow:
+    Next r
+
+    AppendStartRow = 0
+    ActiveVoice = ""
+
+    If totalAdded = 0 Then
+        MsgBox "No events were generated. Check that part rows (col G) have ABC in col I.", _
+               vbExclamation, "Parse Error"
+        Exit Sub
     End If
-End Function
+
+    ' ---- Post-processing over all written events ----
+    DetectPickup ws
+    RecalculatePositions ws
+    PopulateEmbellishmentTargets ws
+    InferStructuralMetadata ws
+    RenumberEventIds ws
+
+    MsgBox "Parse complete — " & totalAdded & " total rows." & vbCrLf & vbCrLf & _
+           partSummary & vbCrLf & _
+           "Time sig: " & TimeSigNum & "/" & TimeSigDen & vbCrLf & _
+           "Units/beat: " & Round(UnitsPerBeat, 4) & vbCrLf & _
+           "Pickup units: " & Round(PickupOffsetUnits, 4), _
+           vbInformation, "Parse Complete"
+End Sub
+
+' Tag all event rows in [firstRow .. last written row] with a transition section label.
+' Bar-type rows get "<tag>_bar"; all other rows get "<tag>".
+' This lets the GML stitcher filter events by section without ambiguity.
+Private Sub TagSectionEvents(ws As Worksheet, ByVal firstRow As Long, ByVal sectionTag As String)
+    Dim r As Long
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_EVENT_ID).End(xlUp).Row
+    For r = firstRow To lastRow
+        If ws.Cells(r, COL_EVENT_ID).Value = "" Then Exit For
+        Dim currentStruct As String
+        currentStruct = Trim$(ws.Cells(r, COL_STRUCTURE).Value)
+        If currentStruct = "bar" Then
+            ws.Cells(r, COL_STRUCTURE).Value = sectionTag & "_bar"
+        Else
+            ws.Cells(r, COL_STRUCTURE).Value = sectionTag
+        End If
+    Next r
+End Sub
+
 
 Private Sub RenumberEventIds(ws As Worksheet)
     Dim r As Long
@@ -501,6 +541,14 @@ Private Function TokenizeABC(ByVal abc As String) As Collection
             If nextCh = ":" Then
                 AddToken tokens, "repeat_start", "|:"
                 i = i + 2
+            ElseIf nextCh = "1" Then
+                ' Alternate ending marker in |1 form
+                AddToken tokens, "ending1", "|1"
+                i = i + 2
+            ElseIf nextCh = "2" Then
+                ' Alternate ending marker in |2 form
+                AddToken tokens, "ending2", "|2"
+                i = i + 2
             ElseIf nextCh = "|" Then
                 AddToken tokens, "double_bar", "||"
                 i = i + 2
@@ -547,8 +595,17 @@ Private Function TokenizeABC(ByVal abc As String) As Collection
             nextCh = ""
             If i < Len(abc) Then nextCh = Mid$(abc, i + 1, 1)
             If nextCh = "|" Then
-                AddToken tokens, "start_bar", "[|"
-                i = i + 2
+                ' Check for [|: (start bar + repeat start)
+                Dim afterBar As String
+                afterBar = ""
+                If i + 2 <= Len(abc) Then afterBar = Mid$(abc, i + 2, 1)
+                If afterBar = ":" Then
+                    AddToken tokens, "repeat_start", "[|:"
+                    i = i + 3
+                Else
+                    AddToken tokens, "start_bar", "[|"
+                    i = i + 2
+                End If
                 GoTo ContinueLoop
             ElseIf nextCh = "1" Then
                 AddToken tokens, "ending1", "[1"
@@ -1122,9 +1179,10 @@ Private Sub ParseABCMetadata(ws As Worksheet, ByVal metadataText As String)
     Dim i As Long
     Dim line As String
     Dim key As String, Value As String
-    
-    ' Clear existing metadata values in metadata block rows 2-48, column C (Value)
-    ws.Range("C2:C48").ClearContents
+
+    ' Clear only fields sourced from ABC headers.
+    ' Preserve manually-entered fields (e.g. transition cut-beat metadata).
+    ClearABCHeaderMappedMetadata ws
     
     For i = LBound(lines) To UBound(lines)
         line = Trim(lines(i))
@@ -1136,10 +1194,26 @@ Private Sub ParseABCMetadata(ws As Worksheet, ByVal metadataText As String)
             Value = Trim(Mid(line, 3))
             
             Select Case key
+                Case "X" ' Reference number
+                    WriteMetadataValue ws, "reference number", Value
                 Case "T" ' Title
                     WriteMetadataValue ws, "title", Value
+                Case "A" ' Area
+                    WriteMetadataValue ws, "area", Value
+                Case "B" ' Book
+                    WriteMetadataValue ws, "book", Value
                 Case "C" ' Composer
                     WriteMetadataValue ws, "composer", Value
+                Case "D" ' Discography
+                    WriteMetadataValue ws, "discography", Value
+                Case "F" ' File name
+                    WriteMetadataValue ws, "file_name", Value
+                Case "G" ' Group
+                    WriteMetadataValue ws, "group", Value
+                Case "H" ' History
+                    WriteMetadataValue ws, "history", Value
+                Case "I" ' Information
+                    WriteMetadataValue ws, "information", Value
                 Case "R" ' Rhythm
                     WriteMetadataValue ws, "rhythm", Value
                 Case "M" ' Meter
@@ -1154,15 +1228,50 @@ Private Sub ParseABCMetadata(ws As Worksheet, ByVal metadataText As String)
                 Case "N" ' Notes / info
                     WriteMetadataValue ws, "notes", Value
                 Case "Z" ' Transcription note
-                    WriteMetadataValue ws, "transcription note", Value
+                    WriteMetadataValue ws, "transcription_note", Value
                 Case "P" ' Parts (if present)
                     WriteMetadataValue ws, "parts", Value
+                Case "O" ' Origin
+                    WriteMetadataValue ws, "origin", Value
+                Case "S" ' Source
+                    WriteMetadataValue ws, "source", Value
+                Case "W" ' Words
+                    WriteMetadataValue ws, "words", Value
+                Case "U" ' User-defined
+                    WriteMetadataValue ws, "user_defined", Value
                 Case Else
                     ' Ignore unknown keys or add more mappings if needed
             End Select
         End If
 SkipLine:
     Next i
+End Sub
+
+Private Sub ClearABCHeaderMappedMetadata(ws As Worksheet)
+    WriteMetadataValue ws, "reference number", ""
+    WriteMetadataValue ws, "title", ""
+    WriteMetadataValue ws, "area", ""
+    WriteMetadataValue ws, "book", ""
+    WriteMetadataValue ws, "composer", ""
+    WriteMetadataValue ws, "discography", ""
+    WriteMetadataValue ws, "file_name", ""
+    WriteMetadataValue ws, "group", ""
+    WriteMetadataValue ws, "history", ""
+    WriteMetadataValue ws, "information", ""
+    WriteMetadataValue ws, "rhythm", ""
+    WriteMetadataValue ws, "meter", ""
+    WriteMetadataValue ws, "time_sig_num", ""
+    WriteMetadataValue ws, "time_sig_den", ""
+    WriteMetadataValue ws, "unit_note_length", ""
+    WriteMetadataValue ws, "tempo_default", ""
+    WriteMetadataValue ws, "key", ""
+    WriteMetadataValue ws, "notes", ""
+    WriteMetadataValue ws, "transcription_note", ""
+    WriteMetadataValue ws, "parts", ""
+    WriteMetadataValue ws, "origin", ""
+    WriteMetadataValue ws, "source", ""
+    WriteMetadataValue ws, "words", ""
+    WriteMetadataValue ws, "user_defined", ""
 End Sub
 
 Private Sub WriteMetadataValue(ws As Worksheet, ByVal variableName As String, ByVal Value As String)
@@ -1210,6 +1319,9 @@ Private Sub InferStructuralMetadata(ws As Worksheet)
     For r = FIRST_DATA_ROW To lastRow
         Dim partVal As Variant
         Dim measureVal As Variant
+
+        ' Ignore structure rows so terminal bar-only measure does not inflate totals.
+        If LCase$(Trim$(ws.Cells(r, COL_TYPE).Value)) = "structure" Then GoTo NextRowInfer
         
         partVal = ws.Cells(r, COL_PART).Value
         measureVal = ws.Cells(r, COL_MEASURE).Value
