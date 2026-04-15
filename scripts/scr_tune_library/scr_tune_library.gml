@@ -8,8 +8,8 @@
 function scr_load_tune_library()
 {
     var candidates = array_create(0);
-    array_push(candidates, "tunes/tune_library.json");
-    array_push(candidates, "datafiles/tunes/tune_library.json");
+    array_push(candidates, "C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/tune_library.json");
+    array_push(candidates, "datafiles/tunes/tune_library.json"); // fallback for non-dev / packaged build
 
     for (var i = 0; i < array_length(candidates); i++)
     {
@@ -1420,7 +1420,9 @@ function scr_tune_picker_update_canvas_layout()
     var filter_prev_rect = scr_tune_picker_make_rect(bounds.x1 + pad, controls_y1, bounds.x1 + pad + arrow_w, controls_y2);
     var filter_value_rect = scr_tune_picker_make_rect(filter_prev_rect.x2 + 4, controls_y1, filter_prev_rect.x2 + 4 + filter_value_w, controls_y2);
     var filter_next_rect = scr_tune_picker_make_rect(filter_value_rect.x2 + 4, controls_y1, filter_value_rect.x2 + 4 + arrow_w, controls_y2);
-    var sort_rect = scr_tune_picker_make_rect(bounds.x2 - pad - sort_w, controls_y1, bounds.x2 - pad, controls_y2);
+    var reload_w = arrow_w;
+    var reload_rect = scr_tune_picker_make_rect(bounds.x2 - pad - reload_w, controls_y1, bounds.x2 - pad, controls_y2);
+    var sort_rect = scr_tune_picker_make_rect(reload_rect.x1 - 4 - sort_w, controls_y1, reload_rect.x1 - 4, controls_y2);
     var info_rect = scr_tune_picker_make_rect(filter_next_rect.x2 + 8, controls_y1, sort_rect.x1 - 8, controls_y2);
 
     var list_rect = scr_tune_picker_make_rect(bounds.x1 + pad, controls_y2 + control_gap, bounds.x2 - pad, bounds.y2 - 4);
@@ -1451,6 +1453,7 @@ function scr_tune_picker_update_canvas_layout()
         filter_value_rect: filter_value_rect,
         filter_next_rect: filter_next_rect,
         sort_rect: sort_rect,
+        reload_rect: reload_rect,
         info_rect: info_rect,
         list_rect: list_rect,
         rows_rect: rows_rect,
@@ -1568,6 +1571,7 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
     var filter_value_rect = scr_tune_struct_get(layout, "filter_value_rect", undefined);
     var filter_next_rect = scr_tune_struct_get(layout, "filter_next_rect", undefined);
     var sort_rect = scr_tune_struct_get(layout, "sort_rect", undefined);
+    var reload_rect = scr_tune_struct_get(layout, "reload_rect", undefined);
     var scrollbar_rect = scr_tune_struct_get(layout, "scrollbar_rect", undefined);
     var rows_rect = scr_tune_struct_get(layout, "rows_rect", undefined);
     var right_pane_rect = scr_tune_struct_get(layout, "right_pane_rect", undefined);
@@ -1613,6 +1617,11 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
             scr_tune_picker_set_instance_var(picker, "set_builder_scroll_offset", 0);
             scr_tune_picker_set_instance_var(picker, "view_layout", undefined); // force layout rebuild
             scr_tune_picker_refresh_visible_rows();
+            return true;
+        }
+        // reload_rect = rebuild tune library
+        if (scr_tune_picker_rect_contains(reload_rect, _gui_x, _gui_y)) {
+            scr_regenerate_tune_library();
             return true;
         }
     }
@@ -1707,6 +1716,7 @@ function scr_tune_picker_draw_canvas()
     var filter_value_rect = scr_tune_struct_get(layout, "filter_value_rect", undefined);
     var filter_next_rect = scr_tune_struct_get(layout, "filter_next_rect", undefined);
     var sort_rect = scr_tune_struct_get(layout, "sort_rect", undefined);
+    var reload_rect = scr_tune_struct_get(layout, "reload_rect", undefined);
     var info_rect = scr_tune_struct_get(layout, "info_rect", undefined);
     var rows_rect = scr_tune_struct_get(layout, "rows_rect", undefined);
     var scrollbar_rect = scr_tune_struct_get(layout, "scrollbar_rect", undefined);
@@ -1748,13 +1758,16 @@ function scr_tune_picker_draw_canvas()
     var filter_value_hover = scr_tune_picker_rect_contains(filter_value_rect, gui_x, gui_y);
     var filter_next_hover = scr_tune_picker_rect_contains(filter_next_rect, gui_x, gui_y);
     var sort_hover = scr_tune_picker_rect_contains(sort_rect, gui_x, gui_y);
+    var reload_hover = scr_tune_picker_rect_contains(reload_rect, gui_x, gui_y);
 
     scr_tune_picker_draw_box(filter_prev_rect, spr_cell_dark, filter_prev_hover, false);
     scr_tune_picker_draw_box(filter_next_rect, spr_cell_dark, filter_next_hover, false);
     scr_tune_picker_draw_box(sort_rect, spr_cell_dark, sort_hover, false);
+    scr_tune_picker_draw_box(reload_rect, spr_cell_dark, reload_hover, false);
 
     scr_tune_picker_draw_center_text(filter_prev_rect, "<", fnt_button, c_white, control_scale);
     scr_tune_picker_draw_center_text(filter_next_rect, ">", fnt_button, c_white, control_scale);
+    scr_tune_picker_draw_center_text(reload_rect, "R", fnt_button, reload_hover ? c_yellow : c_ltgray, control_scale);
 
     if (view_mode == "sets") {
         // Sets mode: filter area = mode toggle, sort area = slot count
@@ -2187,33 +2200,45 @@ function scr_tune_scan_dir(_folder)
     if (string_copy(_folder, string_length(_folder), 1) != "/") _folder += "/";
 
     var search = _folder + "*";
-    var entry = file_find_first(search, 0);
 
+    // Pass 1: files only (attribute 0)
+    var entry = file_find_first(search, 0);
     if (entry != "") {
         while (entry != "") {
-            show_debug_message("  found entry: " + entry + " | is_dir: " + string(directory_exists(_folder + entry)));
-            if (string_copy(entry, 1, 1) == ".") {
-                entry = file_find_next();
-                continue;
-            }
-
-            var fp = _folder + entry;
-
-            if (directory_exists(fp)) {
-                show_debug_message("    -> is subdirectory, recursing");
-                var sub = scr_tune_scan_dir(fp);
-                for (var k = 0; k < array_length(sub); k++) array_push(found, sub[k]);
-            }
-            else {
-                var ext = string_lower(string_copy(entry, string_length(entry) - 4, 5));
-                if (ext == ".json" && entry != "tune_library.json") {
-                    array_push(found, fp);
+            if (string_copy(entry, 1, 1) != ".") {
+                var fp = _folder + entry;
+                if (!directory_exists(fp)) {
+                    var ext = string_lower(string_copy(entry, string_length(entry) - 4, 5));
+                    if (ext == ".json" && entry != "tune_library.json" && entry != "score_images.json") {
+                        show_debug_message("  found tune: " + fp);
+                        array_push(found, fp);
+                    }
                 }
             }
-
             entry = file_find_next();
         }
         file_find_close();
+    }
+
+    // Pass 2: directories only (fa_directory)
+    // Collect all subdir paths BEFORE recursing — file_find_* uses a single global handle
+    // and recursion would clobber it, causing the loop to stop after the first entry.
+    var subdirs = array_create(0);
+    entry = file_find_first(search, fa_directory);
+    if (entry != "") {
+        while (entry != "") {
+            if (string_copy(entry, 1, 1) != ".") {
+                var fp = _folder + entry;
+                if (directory_exists(fp)) array_push(subdirs, fp);
+            }
+            entry = file_find_next();
+        }
+        file_find_close();
+    }
+    for (var d = 0; d < array_length(subdirs); d++) {
+        show_debug_message("  found subdir: " + subdirs[d] + ", recursing");
+        var sub = scr_tune_scan_dir(subdirs[d]);
+        for (var k = 0; k < array_length(sub); k++) array_push(found, sub[k]);
     }
 
     return found;
@@ -2938,13 +2963,46 @@ function scr_set_builder_handle_click_right(_gui_x, _gui_y)
             var sc_x2 = real(scr_tune_struct_get(right_pane, "x2", 0));
             var sc_pad = 8;
             var sc_load_w = 44;
+            var sc_del_w = 44;
+            var sc_gap_w = 4;
+            var pending_delete = string(scr_tune_picker_get_instance_var(picker, "_sb_delete_confirm_filepath", ""));
             for (var sc_i = 0; sc_i < array_length(saved_sets_c); sc_i++) {
                 var sc_sy1  = sc_y1 + sc_i * sc_stride;
                 var sc_row  = scr_tune_picker_make_rect(sc_x1 + sc_pad, sc_sy1, sc_x2 - sc_pad, sc_sy1 + sc_row_h);
                 if (!scr_tune_picker_rect_contains(sc_row, _gui_x, _gui_y)) continue;
                 var sc_load = scr_tune_picker_make_rect(sc_row.x2 - sc_load_w - 2, sc_row.y1 + 4, sc_row.x2 - 2, sc_row.y2 - 4);
+                var sc_del  = scr_tune_picker_make_rect(sc_load.x1 - sc_gap_w - sc_del_w, sc_row.y1 + 4, sc_load.x1 - sc_gap_w, sc_row.y2 - 4);
+                var sc_file = string(scr_tune_struct_get(saved_sets_c[sc_i], "filepath", ""));
+                var row_is_pending = (string_length(pending_delete) > 0 && pending_delete == sc_file);
+
+                if (row_is_pending) {
+                    var sc_yes = scr_tune_picker_make_rect(sc_del.x1, sc_del.y1, sc_del.x1 + floor((sc_del.w - sc_gap_w) * 0.5), sc_del.y2);
+                    var sc_no  = scr_tune_picker_make_rect(sc_yes.x2 + sc_gap_w, sc_del.y1, sc_del.x2, sc_del.y2);
+                    if (scr_tune_picker_rect_contains(sc_yes, _gui_x, _gui_y)) {
+                        var deleted = scr_set_builder_delete_saved_file(sc_file);
+                        scr_tune_picker_set_instance_var(picker, "_sb_delete_confirm_filepath", "");
+                        if (deleted) {
+                            scr_tune_picker_set_instance_var(picker, "_sb_saved_sets", undefined);
+                        }
+                        return true;
+                    }
+                    if (scr_tune_picker_rect_contains(sc_no, _gui_x, _gui_y)) {
+                        scr_tune_picker_set_instance_var(picker, "_sb_delete_confirm_filepath", "");
+                        return true;
+                    }
+                }
+
                 if (scr_tune_picker_rect_contains(sc_load, _gui_x, _gui_y)) {
-                    scr_set_builder_load_from_file(string(scr_tune_struct_get(saved_sets_c[sc_i], "filepath", "")));
+                    scr_set_builder_load_from_file(sc_file);
+                    scr_tune_picker_set_instance_var(picker, "_sb_delete_confirm_filepath", "");
+                    return true;
+                }
+                if (scr_tune_picker_rect_contains(sc_del, _gui_x, _gui_y)) {
+                    if (row_is_pending) {
+                        scr_tune_picker_set_instance_var(picker, "_sb_delete_confirm_filepath", "");
+                    } else {
+                        scr_tune_picker_set_instance_var(picker, "_sb_delete_confirm_filepath", sc_file);
+                    }
                 }
                 return true;
             }
@@ -3162,6 +3220,8 @@ function scr_set_builder_draw_saved_pane(_x1, _y1, _x2, _y2, _layout, _picker, _
     var row_h     = 32;
     var row_gap   = 4;
     var load_btn_w = 46;
+    var del_btn_w = 46;
+    var btn_gap_w = 4;
     var stride    = row_h + row_gap;
 
     // Store for click handler
@@ -3190,12 +3250,30 @@ function scr_set_builder_draw_saved_pane(_x1, _y1, _x2, _y2, _layout, _picker, _
         if (sy1 + row_h > _y2) break;
 
         var item     = saved_sets[si];
+        var filepath = string(scr_tune_struct_get(item, "filepath", ""));
         var row_rect = scr_tune_picker_make_rect(_x1 + _pad, sy1, _x2 - _pad, sy1 + row_h);
         var hov      = scr_tune_picker_rect_contains(row_rect, _gui_x, _gui_y);
         scr_tune_picker_draw_box(row_rect, noone, hov, false, true);
 
         // Load button on right
         var load_rect = scr_tune_picker_make_rect(row_rect.x2 - load_btn_w - 2, row_rect.y1 + 4, row_rect.x2 - 2, row_rect.y2 - 4);
+        var del_rect  = scr_tune_picker_make_rect(load_rect.x1 - btn_gap_w - del_btn_w, row_rect.y1 + 4, load_rect.x1 - btn_gap_w, row_rect.y2 - 4);
+        var pending_delete = string(scr_tune_picker_get_instance_var(_picker, "_sb_delete_confirm_filepath", ""));
+        var row_is_pending = (string_length(pending_delete) > 0 && pending_delete == filepath);
+
+        var del_hov   = scr_tune_picker_rect_contains(del_rect, _gui_x, _gui_y);
+        scr_tune_picker_draw_box(del_rect, spr_cell_dark, del_hov, false, true);
+        if (row_is_pending) {
+            var yes_rect = scr_tune_picker_make_rect(del_rect.x1, del_rect.y1, del_rect.x1 + floor((del_rect.w - btn_gap_w) * 0.5), del_rect.y2);
+            var no_rect  = scr_tune_picker_make_rect(yes_rect.x2 + btn_gap_w, del_rect.y1, del_rect.x2, del_rect.y2);
+            scr_tune_picker_draw_box(yes_rect, spr_cell_dark, scr_tune_picker_rect_contains(yes_rect, _gui_x, _gui_y), false, true);
+            scr_tune_picker_draw_box(no_rect,  spr_cell_dark, scr_tune_picker_rect_contains(no_rect,  _gui_x, _gui_y), false, true);
+            scr_tune_picker_draw_center_text(yes_rect, "Yes", fnt_button, c_white, _control_scale * 0.72);
+            scr_tune_picker_draw_center_text(no_rect,  "No",  fnt_button, c_white, _control_scale * 0.72);
+        } else {
+            scr_tune_picker_draw_center_text(del_rect, "Del", fnt_button, c_white, _control_scale * 0.85);
+        }
+
         var load_hov  = scr_tune_picker_rect_contains(load_rect, _gui_x, _gui_y);
         scr_tune_picker_draw_box(load_rect, spr_cell_dark, load_hov, false, true);
         scr_tune_picker_draw_center_text(load_rect, "Load", fnt_button, c_white, _control_scale * 0.85);
@@ -3204,12 +3282,28 @@ function scr_set_builder_draw_saved_pane(_x1, _y1, _x2, _y2, _layout, _picker, _
         draw_set_font(fnt_setting);
         draw_set_color(c_ltgray);
         var name_x   = row_rect.x1 + 8;
-        var name_max = max(10, load_rect.x1 - name_x - 6);
+        var name_max = max(10, del_rect.x1 - name_x - 6);
         var disp_name = scr_tune_picker_fit_text_scaled(string(scr_tune_struct_get(item, "name", "Set")), name_max, _control_scale);
         var name_th  = ceil(string_height("Ag") * _control_scale);
         scr_tune_picker_draw_text_scaled(name_x, floor(sy1 + (row_h - name_th) * 0.5), disp_name, _control_scale, _control_scale);
         draw_set_color(c_white);
     }
+}
+
+/// Delete a saved set file from disk.
+function scr_set_builder_delete_saved_file(_filepath)
+{
+    if (string_length(string(_filepath)) <= 0) return false;
+    if (!file_exists(_filepath)) return false;
+
+    file_delete(_filepath);
+    var deleted = !file_exists(_filepath);
+    if (deleted) {
+        show_debug_message("scr_set_builder_delete_saved_file: deleted " + string(_filepath));
+    } else {
+        show_debug_message("scr_set_builder_delete_saved_file: delete failed for " + string(_filepath));
+    }
+    return deleted;
 }
 
 /// Build global.active_set from the current builder slots so scr_goto_playroom
@@ -3231,12 +3325,19 @@ function scr_set_builder_arm_for_play()
     // Initialise global.active_set (clears any previously-loaded set)
     scr_set_init_global();
 
-    // Build tunes array in the same format as the set JSON
+    // Build tunes array in the same format as the set JSON.
+    // Expand relative filenames to absolute using the library root so
+    // scr_set_preprocess_and_build_playback can open them directly.
+    var _lib_root = is_struct(global.tune_library) ? string(global.tune_library[$ "root"] ?? "") : "";
     var tunes_out = [];
     for (var si = 0; si < array_length(slots); si++) {
         var s = slots[si];
+        var _slot_fname = string(s.filename);
+        if (_lib_root != "" && string_pos(":/", _slot_fname) == 0 && string_copy(_slot_fname, 1, 1) != "/") {
+            _slot_fname = _lib_root + _slot_fname;
+        }
         var tune_entry = {
-            filename:   string(s.filename),
+            filename:   _slot_fname,
             bpm:        real(s.bpm),
             swing:      string(s.swing),
             transition: { type: "direct" }
