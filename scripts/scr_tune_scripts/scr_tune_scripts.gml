@@ -1,12 +1,14 @@
 
-// scr_tune_scripts — Playback & event preprocessing
+// scr_tune_scripts â€” Playback & event preprocessing
 // Purpose: Build runtime event lists (merge tune + metronome), start playback and provide the time-source callback that sends MIDI.
-// Key functions: tune_build_events, tune_generate_metronome, tune_start, script_tune_callback
+// Key functions: tune_start, script_tune_callback_batched
 
 /// @function create_set_item(_tune_filename)
 /// @description Create a new set item with default settings
 /// @param _tune_filename The tune file path
 /// @returns Set item struct
+/// @reads global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.loop_jump_to_selection
+/// @callers scr_button_try_load_tune_candidate, scr_tune_OK
 
 function create_set_item(_tune_filename) {
     return {
@@ -22,6 +24,11 @@ function create_set_item(_tune_filename) {
     };
 }
 
+/// @function timing_calibration_ensure_state()
+/// @description Lazily initialise global.timing_calibration to its default struct and return it.
+/// @reads global.timing_calibration
+/// @writes global.timing_calibration (first call only)
+/// @callers all timing_calibration_* functions
 function timing_calibration_ensure_state() {
     if (!variable_global_exists("timing_calibration") || !is_struct(global.timing_calibration)) {
         global.timing_calibration = {
@@ -42,16 +49,27 @@ function timing_calibration_ensure_state() {
     return global.timing_calibration;
 }
 
+/// @function timing_calibration_get_status_text()
+/// @description Return the human-readable status string from the calibration state.
+/// @reads global.timing_calibration (via timing_calibration_ensure_state)
 function timing_calibration_get_status_text() {
     var state = timing_calibration_ensure_state();
     return string(state.last_message ?? "Timing calibration has not been run.");
 }
 
+/// @function timing_calibration_is_active()
+/// @description Return true if a calibration run is currently in progress.
+/// @reads global.timing_calibration (via timing_calibration_ensure_state)
 function timing_calibration_is_active() {
     var state = timing_calibration_ensure_state();
     return state.active;
 }
 
+/// @function timing_calibration_collect_expected_note_ons()
+/// @description Collect expected note_on times from the currently playing tune's planned events.
+/// @returns Array of { expected_ms, note_midi, note_canonical, matched } structs
+/// @reads global.timeline_state (planned_events), global.MIDI_chanter
+/// @callers timing_calibration_analyze_current_run
 function timing_calibration_collect_expected_note_ons() {
     var expected = [];
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return expected;
@@ -87,6 +105,11 @@ function timing_calibration_collect_expected_note_ons() {
     return expected;
 }
 
+/// @function timing_calibration_collect_player_note_ons()
+/// @description Collect player note_on events from EVENT_HISTORY for calibration matching.
+/// @returns Array of { actual_ms, note_midi, note_canonical } structs
+/// @reads global.EVENT_HISTORY, global.MIDI_chanter
+/// @callers timing_calibration_analyze_current_run
 function timing_calibration_collect_player_note_ons() {
     var actual = [];
     if (!variable_global_exists("EVENT_HISTORY") || !is_array(global.EVENT_HISTORY)) return actual;
@@ -128,6 +151,9 @@ function timing_calibration_collect_player_note_ons() {
     return actual;
 }
 
+/// @function timing_calibration_match_deltas(_expected, _actual, _max_abs_delta_ms)
+/// @description Match actual notes to expected notes within a time window; return delta array.
+/// @returns Array of delta_ms values for matched pairs
 function timing_calibration_match_deltas(_expected, _actual, _max_abs_delta_ms) {
     var deltas = [];
     if (!is_array(_expected) || !is_array(_actual)) return deltas;
@@ -177,6 +203,8 @@ function timing_calibration_match_deltas(_expected, _actual, _max_abs_delta_ms) 
     return deltas;
 }
 
+/// @function timing_calibration_median(_values)
+/// @description Return the median of a numeric array (pure utility).
 function timing_calibration_median(_values) {
     if (!is_array(_values) || array_length(_values) <= 0) return 0;
 
@@ -195,6 +223,11 @@ function timing_calibration_median(_values) {
     return (real(vals[mid - 1]) + real(vals[mid])) * 0.5;
 }
 
+/// @function timing_calibration_analyze_current_run(_max_delta_ms, _min_matches)
+/// @description Collect and match this run's player events against the planned tune; return analysis result.
+/// @param _max_delta_ms Max window for matching (default 350ms)
+/// @param _min_matches Minimum successful matches required (default 8)
+/// @returns Struct { success, match_count, median_delta_ms, recommended_offset_ms, message }
 function timing_calibration_analyze_current_run(_max_delta_ms = 350, _min_matches = 8) {
     var max_delta_ms = max(50, real(_max_delta_ms));
     var min_matches = max(3, floor(real(_min_matches)));
@@ -228,6 +261,12 @@ function timing_calibration_analyze_current_run(_max_delta_ms = 350, _min_matche
     };
 }
 
+/// @function timing_calibration_probe_from_current_run()
+/// @description Run timing analysis and store the result in global.timing_calibration. Reads window params from timeline_cfg.
+/// @reads global.timeline_cfg (via gv_ensure_timeline_cfg_defaults, reads timing_calibration_match_window_ms etc.)
+/// @writes global.timing_calibration.last_match_count, global.timing_calibration.last_median_delta_ms, global.timing_calibration.last_message
+/// @writes global.current_note_display (status text)
+/// @callers obj_game_controller (end-of-tune calibration flow)
 function timing_calibration_probe_from_current_run() {
     var cfg = gv_ensure_timeline_cfg_defaults();
     var max_delta_ms = variable_struct_exists(cfg, "timing_calibration_match_window_ms")
@@ -257,11 +296,16 @@ function timing_calibration_probe_from_current_run() {
 /// @description Convert MIDI note number to bagpipe letter notation
 /// @param _midi_note The MIDI note number
 /// @returns String letter notation
+/// @reads global.MIDI_chanter (via chanter_midi_to_display)
 
 function midi_to_letter(_midi_note, _channel = -1) {
     return chanter_midi_to_display(_midi_note, _channel, global.MIDI_chanter ?? "default");
 }
 
+/// @function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms)
+/// @description Record a scheduler-late sample to the ring buffer; logs a summary every RT_BUDGET_DIAG_LOG_INTERVAL_MS.
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_sched_late_buf, global.rt_budget_sched_late_head, global.rt_budget_sched_late_count, global.rt_budget_diag_last_log_ms
 function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -320,6 +364,10 @@ function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
     global.rt_budget_diag_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms, _midi_send_count)
+/// @description Record per-group CPU cost samples (proc_ms, midi_send_ms, event count).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_sched_group_proc_buf/events_buf/send_ms_buf/send_count_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms = -1, _midi_send_count = -1) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -427,6 +475,10 @@ function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _mi
     global.rt_budget_sched_group_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_controller_step_ms(_step_ms)
+/// @description Record a game controller step duration sample.
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_controller_step_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -491,6 +543,10 @@ function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
     global.rt_budget_controller_step_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_midi_step_ms(_step_ms)
+/// @description Record a MIDI polling step duration sample (no warmup guard).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS
+/// @writes global.rt_budget_midi_step_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -548,6 +604,10 @@ function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
     global.rt_budget_midi_step_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_draw_ms(_draw_ms)
+/// @description Record a frame draw duration sample (no warmup guard).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS
+/// @writes global.rt_budget_draw_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -605,6 +665,10 @@ function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     global.rt_budget_draw_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms)
+/// @description Accumulate per-anchor draw time into a keyed stats struct (no warmup guard).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS
+/// @writes global.rt_budget_anchor_draw_stats (keyed by _anchor_kind string)
 function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -687,6 +751,10 @@ function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
     global.rt_budget_anchor_draw_stats[$ kind] = stats;
 }
 
+/// @function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms)
+/// @description Record the time between game-controller steps (jitter measurement).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_controller_step_dt_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
     if (_step_dt_ms <= 0) return;
@@ -752,6 +820,10 @@ function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms) {
     global.rt_budget_controller_step_dt_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_scheduler_step_pump(_dispatched, _max_overdue_ms, _min_overdue_ms)
+/// @description Record one scheduler pump cycle (dispatched count, overdue stats).
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_sched_step_overdue_buf/dispatched_buf/early_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_scheduler_step_pump(_dispatched, _max_overdue_ms, _min_overdue_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
@@ -901,10 +973,14 @@ function tune_group_events_by_timestamp(_events) {
         groups[g] = grp;
     }
     
-    show_debug_message("✓ Batched " + string(array_length(_events)) + " events into " + string(array_length(groups)) + " timestamp groups");
+    show_debug_message("âœ“ Batched " + string(array_length(_events)) + " events into " + string(array_length(groups)) + " timestamp groups");
     return groups;
 }
 
+/// @function tune_scheduler_enqueue_deferred(_item)
+/// @description Push a deferred work item onto global.tune_deferred_queue (e.g. panel_note_on).
+/// @reads global.tune_deferred_queue, global.tune_deferred_head
+/// @writes global.tune_deferred_queue (initialises if absent)
 function tune_scheduler_enqueue_deferred(_item) {
     if (!is_struct(_item)) return;
     if (!variable_global_exists("tune_deferred_queue") || !is_array(global.tune_deferred_queue)) {
@@ -914,6 +990,13 @@ function tune_scheduler_enqueue_deferred(_item) {
     array_push(global.tune_deferred_queue, _item);
 }
 
+/// @function tune_scheduler_process_deferred(_max_items, _max_budget_us)
+/// @description Drain up to _max_items deferred work items within a microsecond budget.
+/// @param _max_items Max items to process per call (default 128)
+/// @param _max_budget_us Microsecond budget before stopping (default 1200; 0 = unlimited)
+/// @returns Number of items processed
+/// @reads global.tune_deferred_queue, global.tune_deferred_head, global.MIDI_chanter, global.current_tune_name
+/// @writes global.tune_deferred_queue, global.tune_deferred_head, global.current_note_display
 function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200) {
     if (!variable_global_exists("tune_deferred_queue") || !is_array(global.tune_deferred_queue)) return 0;
 
@@ -1030,6 +1113,9 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
     return processed;
 }
 
+/// @function tune_scheduler_flush_deferred_all()
+/// @description Flush the entire deferred queue in chunks until empty (end-of-tune shutdown).
+/// @callers tune_cleanup_after_finish, tune_start
 function tune_scheduler_flush_deferred_all() {
     var guard = 0;
     while (guard < 100000) {
@@ -1040,7 +1126,13 @@ function tune_scheduler_flush_deferred_all() {
 }
 
 /// @function tune_start(tune_events)
-/// @param tune_events  The array of events to play
+/// @description Group playable events, configure the scheduler, and start the GML time source.
+/// @param _tune_events Array of playable event structs from scr_goto_playroom preprocessing
+/// @returns false if no event groups were produced; undefined on success
+/// @reads global.loop_runtime_current_iteration, global.enable_current_note_layer, global.PLAYBACK_SCHEDULER_* globals
+/// @writes global.tune_event_groups, global.tune_group_index, global.current_tune_name, global.tune_start_real, global.tune_timer, global.tune_scheduler_active, global.tune_scheduler_mode_step, global.tune_deferred_queue, global.tune_deferred_head, global.PLAYBACK_SCHEDULER_* (init if absent)
+/// @objects obj_tune (reads tune_data.filename)
+/// @callers start_play
 
 function tune_start(_tune_events) {
     if (!variable_global_exists("loop_runtime_current_iteration")) {
@@ -1137,7 +1229,10 @@ function tune_start(_tune_events) {
 }
 
 /// @function script_tune_callback_batched()
-/// @description Batched callback that processes all events at the same timestamp
+/// @description GML time-source callback: dispatch one event group (all events at the current timestamp) via MIDI and panel callbacks.
+/// @reads global.tune_event_groups, global.tune_group_index, global.tune_start_real, global.loop_runtime_active, global.loop_runtime_current_iteration, global.timeline_state, global.enable_current_note_layer, global.midi_output_device, global.METRONOME_CONFIG, global.MIDI_chanter, global.EVENT_HISTORY_AUTO_EXPORT, global.EVENT_HISTORY_EXPORTED, global.PLAYBACK_SCHEDULER_CATCHUP
+/// @writes global.loop_runtime_current_iteration, global.tune_group_index, global.tune_scheduler_active, global.EVENT_HISTORY_EXPORTED, global.loop_runtime_active, global.timeline_state.last_dispatched_expected_ms, global.timeline_state.current_measure
+/// @callers tune_scheduler_step_tick (step mode) or GML time_source callback (legacy mode)
 
 function script_tune_callback_batched() {
     if (!variable_global_exists("tune_event_groups") || !is_array(global.tune_event_groups)) return;
@@ -1176,6 +1271,7 @@ function script_tune_callback_batched() {
     var last_note_on_note = 0;
     var last_note_on_channel = 0;
     var latest_group_measure = -1;
+    var latest_group_bar_measure = -1;
     var midi_send_accum_us = 0;
     var midi_send_count = 0;
     for (var i = 0; i < ordered_count; i++) {
@@ -1235,6 +1331,13 @@ function script_tune_callback_batched() {
                     });
                 }
             }
+
+            if (marker_kind == "bar") {
+                var marker_measure_num = floor(real(ev.measure ?? -1));
+                if (marker_measure_num >= 1) {
+                    latest_group_bar_measure = max(latest_group_bar_measure, marker_measure_num);
+                }
+            }
         }
 
         // Skip metronome MIDI events (channel 9 note_on/note_off) - keep structure markers
@@ -1259,12 +1362,28 @@ function script_tune_callback_batched() {
         }
     }
 
-    if (latest_group_measure >= 1
-        && variable_global_exists("timeline_state")
+    if (variable_global_exists("timeline_state")
         && is_struct(global.timeline_state)
         && variable_struct_exists(global.timeline_state, "active")
         && global.timeline_state.active) {
-        global.timeline_state.current_measure = latest_group_measure;
+        var _prev_group_measure = variable_struct_exists(global.timeline_state, "current_measure")
+            ? floor(real(global.timeline_state.current_measure))
+            : -1;
+
+        var _resolved_group_measure = _prev_group_measure;
+
+        // Authoritative live boundary: only bar markers advance current measure.
+        if (latest_group_bar_measure >= 1) {
+            _resolved_group_measure = latest_group_bar_measure;
+        }
+        // Bootstrap before first bar marker only; afterwards keep stable until next bar.
+        else if (_resolved_group_measure < 1 && latest_group_measure >= 1) {
+            _resolved_group_measure = latest_group_measure;
+        }
+
+        if (_resolved_group_measure >= 1) {
+            global.timeline_state.current_measure = _resolved_group_measure;
+        }
     }
     
     // Update UI once per group (only for note_on events)
@@ -1332,6 +1451,10 @@ function script_tune_callback_batched() {
     tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count);
 }
 
+/// @function tune_scheduler_step_tick()
+/// @description Per-frame pump called from obj_game_controller Step event; dispatches all overdue event groups within a budget.
+/// @reads global.tune_scheduler_mode_step, global.tune_scheduler_active, global.tune_event_groups, global.tune_group_index, global.tune_start_real, global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS, global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP, global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US
+/// @callers obj_game_controller (Step event)
 function tune_scheduler_step_tick() {
     if (!variable_global_exists("tune_scheduler_mode_step") || !global.tune_scheduler_mode_step) return;
     if (!variable_global_exists("tune_scheduler_active") || !global.tune_scheduler_active) return;
@@ -1370,6 +1493,10 @@ function tune_scheduler_step_tick() {
 
 // ============ OLD SINGLE-EVENT CALLBACK (PRESERVED FOR REFERENCE) ============
 
+/// @function script_tune_callback()
+/// @description LEGACY single-event GML time-source callback â€” superseded by script_tune_callback_batched. Preserved for reference only.
+/// @reads global.tune_events, global.tune_index, global.tune_start_real, global.METRONOME_CONFIG, global.midi_output_device, global.tune_timer
+/// @writes global.current_note_display, global.tune_index
 function script_tune_callback() {
 
     var ev = global.tune_events[global.tune_index];
@@ -1497,7 +1624,7 @@ function schedule_tune_cleanup(_delay_ms) {
         time_source_expire_after
     );
     time_source_start(cleanup_timer);
-    show_debug_message("⏱ Scheduled tune cleanup in " + string(_delay_ms) + "ms");
+    show_debug_message("â± Scheduled tune cleanup in " + string(_delay_ms) + "ms");
 }
 
 /// @function tune_cleanup_after_finish()
@@ -1506,135 +1633,5 @@ function schedule_tune_cleanup(_delay_ms) {
 function tune_cleanup_after_finish() {
     MIDI_send_off();  // Stop all notes on all channels
     MIDI_stop_checking_messages_and_errors();  // Stop MIDI input checking and close devices
-    show_debug_message("✓ Tune cleanup complete");
+    show_debug_message("âœ“ Tune cleanup complete");
 }
-
-//////Metronome//////
-// Metronome playback generation is implemented in `scr_metronome.gml`
-// (`metronome_generate_events` and `metronome_generate_countin_events`).
-// The historical prototype below is intentionally left as reference only.
-    /*
-    // Check if metronome exists and is enabled
-    if (is_undefined(_tune.metronome) || !variable_struct_exists(_tune.metronome, "enabled") || !_tune.metronome.enabled) {
-        return [];
-    }
-
-    var settings = _tune.metronome;
-    var events = [];
-
-    var bpm          = settings.bpm;
-    var beats_per_bar = settings.beats_per_bar;
-    var ms_per_beat  = 60000 / bpm; // ms, not seconds
-
-    var bar_pattern = tune_metronome_build_pattern(ms_per_beat, settings.subdivision);
-    var tune_length = tune_get_total_ms(_tune);
-
-    var t = 0;
-    while (t < tune_length)
-    {
-        for (var i = 0; i < array_length(bar_pattern); i++)
-        {
-            var p = bar_pattern[i];
-            var click_time = t + p.time;
-
-            var note = p.accent ? settings.accent_note : settings.normal_note;
-
-            array_push(events, {
-                time:     click_time,
-                type:     ev_midi,
-                channel:  settings.channel,
-                note:     note,
-                velocity: settings.velocity
-            });
-        }
-
-        t += beats_per_bar * ms_per_beat;
-    }
-
-    return events;
-}
-
-
-function tune_metronome_build_pattern(_mpb, _subdivision)
-{
-    var pattern = [];
-
-    switch (_subdivision)
-    {
-        case "quarter":
-            array_push(pattern, { time: 0, accent: true });
-            break;
-
-        case "eighth":
-            array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _mpb * 0.5, accent: false });
-            break;
-
-        case "dotcut":
-            array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _mpb * 0.666, accent: false });
-            break;
-
-        case "cutdot":
-            array_push(pattern, { time: 0, accent: true });
-            array_push(pattern, { time: _mpb * 0.333, accent: false });
-            break;
-
-        default:
-            array_push(pattern, { time: 0, accent: true });
-            break;
-    }
-
-    return pattern;
-}
-
-
-function tune_get_total_ms(_tune)
-{
-    var events = _tune.events;
-    var last_time = 0;
-
-    for (var i = 0; i < array_length(events); i++)
-    {
-        if (events[i].time > last_time)
-            last_time = events[i].time;
-    }
-
-    return last_time;
-}
-
-
-function tune_build_events(_tune)
-{
-    // Base events (manual)
-    var base = _tune.events;
-    show_debug_message("tune_build_events: Base has " + string(array_length(base)) + " events");
-    
-    var met  = metronome_generate_events(_tune);  // Use new metronome system
-    show_debug_message("tune_build_events: Metronome returned " + string(array_length(met)) + " events");
-    
-    // Debug: show first metronome event if any
-    if (array_length(met) > 0) {
-        var first = met[0];
-        show_debug_message("  First metro event: time=" + string(first.time) + " note=" + string(first.note) + " channel=" + string(first.channel));
-    }
-
-    // Merge arrays
-    var total = array_length(base) + array_length(met);
-    var merged = array_create(total);
-
-    var i = 0;
-    for (var j = 0; j < array_length(base); j++) {
-        merged[i++] = base[j];
-    }
-    for (var j = 0; j < array_length(met); j++) {
-        merged[i++] = met[j];
-    }
-
-    // Sort by time
-    array_sort(merged, function(a, b) { return a.time - b.time; });
-    
-    show_debug_message("tune_build_events: Merged total = " + string(array_length(merged)) + " events");
-
-    return merged;
-	}

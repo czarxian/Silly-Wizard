@@ -40,6 +40,7 @@ if (ui_name_value == "timeline_canvas_anchor") {
 	}
 	if (!use_visual_cache) {
 		gv_draw_timeline_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
+		gv_draw_timeline_canvas_overlay(bbox_left, bbox_top, bbox_right, bbox_bottom);
 		tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 		exit;
 	}
@@ -59,6 +60,8 @@ if (ui_name_value == "timeline_canvas_anchor") {
 		variable_struct_set(_cache, "last_ms", _now_ms);
 	}
 	draw_surface(_cache_surf, bbox_left, bbox_top);
+	// Live overlay: scrolling ticks + now-line drawn every frame at real playhead time.
+	gv_draw_timeline_canvas_overlay(bbox_left, bbox_top, bbox_right, bbox_bottom);
 	gv_anchor_cache_store(_key, _cache);
 	tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
@@ -165,16 +168,15 @@ if (ui_name_value == "tunestructure_canvas_anchor") {
 			: -999999;
 		
 		// Fast path: read current measure cached by scheduler/parser.
-		var _current_measure = (variable_global_exists("timeline_state")
-			&& is_struct(global.timeline_state)
-			&& variable_struct_exists(global.timeline_state, "current_measure"))
-			? floor(real(global.timeline_state.current_measure))
+		// Always derive current measure from nav entries via the resolver.
+		// Do NOT use global.timeline_state.current_measure directly here — the
+		// tune callback writes JSON-measure numbers (which count internal pickups
+		// as separate measures) and will advance current_measure one beat before
+		// the display-measure boundary.  The resolver uses the snippet-based nav
+		// entries and is the only authoritative source of the display measure.
+		var _current_measure = (_playhead_ms >= 0)
+			? gv_get_current_planned_measure(_playhead_ms)
 			: -1;
-
-		// Fallback: derive from playhead.
-		if (_current_measure < 1 && _playhead_ms >= 0) {
-			_current_measure = gv_get_current_planned_measure(_playhead_ms);
-		}
 		
 		// Redraw overlay if measure changed OR if segment changed (tile positions moved).
 		if (_current_measure != _cached_measure || _current_seg != _cached_overlay_seg) {
@@ -317,6 +319,16 @@ if (ui_name_value == "judge_list_canvas" || ui_name_value == "judge_detail_canva
 	var _detail_idx = asset_get_index("scoring_judge_settings_draw_detail_canvas");
 	if (script_exists(_detail_idx)) {
 		script_execute(_detail_idx, bbox_left, bbox_top, bbox_right, bbox_bottom);
+	}
+	exit;
+}
+
+if (ui_name_value == "loop_score_matrix_canvas") {
+	var _loop_layer_id = layer_get_id("loop_score_overview_layer");
+	if (_loop_layer_id == -1 || !layer_get_visible(_loop_layer_id)) exit;
+	var _loop_draw_idx = asset_get_index("scoring_loop_overview_draw_canvas");
+	if (script_exists(_loop_draw_idx)) {
+		script_execute(_loop_draw_idx, bbox_left, bbox_top, bbox_right, bbox_bottom);
 	}
 	exit;
 }
