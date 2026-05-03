@@ -8,6 +8,10 @@ if (!variable_global_exists("scoring_last_run")) {
     global.scoring_last_run = undefined;
 }
 
+/// @function scoring_get_player_id()
+/// @description Return the active player ID, reading global.current_player_id and sanitizing to a non-empty string.
+/// @returns {string}  Player key (e.g. "player_1")
+/// @reads   global.current_player_id
 function scoring_get_player_id() {
     var player_key = "player_1";
     if (variable_global_exists("current_player_id")) {
@@ -17,6 +21,14 @@ function scoring_get_player_id() {
     return player_key;
 }
 
+/// @function scoring_get_context_key(_tune_id, _player_id, _bpm, _swing, _part_key)
+/// @description Build a canonical context key string for keying scoring history records.
+/// @param {string} _tune_id    Tune identifier
+/// @param {string} _player_id  Player identifier
+/// @param {real}   _bpm        Tempo in BPM
+/// @param {string} _swing      Swing multiplier string
+/// @param {string} [_part_key] Part filter (default "all")
+/// @returns {string}  Pipe-delimited lowercase context key
 function scoring_get_context_key(_tune_id, _player_id, _bpm, _swing, _part_key = "all") {
     return string_lower(string(_tune_id))
         + "|" + string_lower(string(_player_id))
@@ -25,6 +37,10 @@ function scoring_get_context_key(_tune_id, _player_id, _bpm, _swing, _part_key =
         + "|" + string(_part_key);
 }
 
+/// @function scoring_measure_entries_from_timeline()
+/// @description Return the measure_nav_entries array from global.timeline_state, or [] if unavailable.
+/// @returns {array}  Array of measure entry structs {measure, start_ms, end_ms, part}
+/// @reads   global.timeline_state
 function scoring_measure_entries_from_timeline() {
     var entries = [];
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return entries;
@@ -38,6 +54,12 @@ function scoring_measure_entries_from_timeline() {
     return entries;
 }
 
+/// @function scoring_filter_spans_in_window(_spans, _start_ms, _end_ms)
+/// @description Return only the spans from _spans that overlap the time window [_start_ms, _end_ms).
+/// @param {array} _spans     Array of span structs {start_ms, end_ms, lane_idx}
+/// @param {real}  _start_ms  Window start in ms
+/// @param {real}  _end_ms    Window end in ms
+/// @returns {array}  Filtered span array
 function scoring_filter_spans_in_window(_spans, _start_ms, _end_ms) {
     var filtered = [];
     if (!is_array(_spans)) return filtered;
@@ -51,12 +73,31 @@ function scoring_filter_spans_in_window(_spans, _start_ms, _end_ms) {
         var a2 = max(real(s.start_ms ?? 0), real(s.end_ms ?? 0));
         if (a2 <= _start_ms || a1 >= _end_ms) continue;
 
-        array_push(filtered, s);
+        // Clip span to window boundary so partial-overlap spans don't inflate expected_active_ms
+        var clipped_start = max(a1, _start_ms);
+        var clipped_end   = min(a2, _end_ms);
+        if (clipped_start == a1 && clipped_end == a2) {
+            array_push(filtered, s);
+        } else {
+            var keys = struct_get_names(s);
+            var copy = {};
+            for (var _ki = 0; _ki < array_length(keys); _ki++) {
+                copy[$ keys[_ki]] = s[$ keys[_ki]];
+            }
+            copy.start_ms = clipped_start;
+            copy.end_ms   = clipped_end;
+            array_push(filtered, copy);
+        }
     }
 
     return filtered;
 }
 
+/// @function scoring_boundaries_add_unique(_arr, _value)
+/// @description Append _value to _arr only if not already present within 0.0001 tolerance. Returns modified array.
+/// @param {array} _arr    Sorted boundary array (modified in-place)
+/// @param {real}  _value  Millisecond boundary to insert
+/// @returns {array}  The array (same reference)
 function scoring_boundaries_add_unique(_arr, _value) {
     var v = real(_value);
     for (var i = 0; i < array_length(_arr); i++) {
@@ -66,6 +107,11 @@ function scoring_boundaries_add_unique(_arr, _value) {
     return _arr;
 }
 
+/// @function scoring_lane_key_at_time(_spans, _t_ms)
+/// @description Return a comma-separated sorted lane index key for all spans active at time _t_ms.
+/// @param {array} _spans  Span array {start_ms, end_ms, lane_idx}
+/// @param {real}  _t_ms   Sample time in ms
+/// @returns {string}  Key like "2" or "0,2" or "" (for silence)
 function scoring_lane_key_at_time(_spans, _t_ms) {
     if (!is_array(_spans) || array_length(_spans) <= 0) return "";
 
@@ -108,6 +154,13 @@ function scoring_lane_key_at_time(_spans, _t_ms) {
     return key;
 }
 
+/// @function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _player_spans, _settings)
+/// @description Score a single measure by comparing planned and player lane activity in the measure's time window. Returns a struct with matching_ms, mismatch_ms, expected_active_ms, player_active_ms, and score (0–100).
+/// @param {struct} _measure_entry  {measure, start_ms, end_ms, part}
+/// @param {array}  _planned_spans  Planned note spans for the measure window
+/// @param {array}  _player_spans   Player MIDI spans for the measure window
+/// @param {struct} [_settings]     Optional scoring settings from scoring_ms_overlap_get_effective_settings
+/// @returns {struct}  Scoring result {measure, start_ms, end_ms, total_ms, matching_ms, mismatch_ms, expected_active_ms, player_active_ms, score}
 function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _player_spans, _settings = undefined) {
     var measure_num = floor(real(_measure_entry.measure ?? -1));
     var start_ms = real(_measure_entry.start_ms ?? 0);
@@ -194,6 +247,10 @@ function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _playe
     return result;
 }
 
+/// @function scoring_measure_results_to_map(_measure_results)
+/// @description Convert an array of measure score results to a struct keyed by measure number string.
+/// @param {array} _measure_results  Array of {measure, score, ...} structs
+/// @returns {struct}  {"1": 85.2, "2": 90.0, ...}
 function scoring_measure_results_to_map(_measure_results) {
     var out = {};
     if (!is_array(_measure_results)) return out;
@@ -209,6 +266,13 @@ function scoring_measure_results_to_map(_measure_results) {
     return out;
 }
 
+/// @function scoring_apply_run_to_runtime(_run_summary)
+/// @description Store a scoring run summary into all runtime globals and update timeline_state maps. Called at the end of scoring_build_ms_overlap_summary.
+/// @param {struct} _run_summary  Scoring summary struct from scoring_build_ms_overlap_summary
+/// @reads   global.timeline_state
+/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state.score_selected_judge, global.timeline_state.score_measure_maps
+/// @objects none
+/// @callers scoring_build_ms_overlap_summary
 function scoring_apply_run_to_runtime(_run_summary) {
     if (!is_struct(_run_summary)) return;
 
@@ -240,6 +304,14 @@ function scoring_apply_run_to_runtime(_run_summary) {
     variable_struct_set(global.timeline_state, "score_measure_maps", maps);
 }
 
+/// @function scoring_build_ms_overlap_summary(_export_info)
+/// @description Run full ms_overlap scoring across all measures (tune or set mode), accumulate per-segment and overall scores, call scoring_apply_run_to_runtime, and return the summary struct.
+/// @param {struct|undefined} [_export_info]  Optional {tune_id, bpm, swing} for context key generation
+/// @returns {struct}  Full scoring summary: {schema_version, judge_id, overall_score, measure_scores, raw, ...}
+/// @reads   global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries, score_by_segment), global.playback_context, global.current_bpm, global.swing_mult
+/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state (via scoring_apply_run_to_runtime + score_by_segment)
+/// @objects none
+/// @callers scr_button_scripts (end-of-tune path), obj_game_controller
 function scoring_build_ms_overlap_summary(_export_info = undefined) {
     var tune_id = "";
     var bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
@@ -293,14 +365,15 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
             var _seg = _segs[_si];
             if (!is_struct(_seg)) { _score_by_seg[_si] = undefined; continue; }
 
-            // Build nav from bar_events (stored pre-offset) and apply absolute offset.
+            // Build nav from bar_events.
+            // bar_events in playback_context have absolute times (scr_playback_context_build_for_set
+            // deep-copies them and syncs all time fields to the offset-mutated value).
             var _bar_evts = _seg[$ "bar_events"] ?? [];
             var _nav = gv_build_measure_nav_map(_bar_evts);
             var _seg_start_ms = real(_seg[$ "start_ms"] ?? 0);
             var _seg_end_ms   = real(_seg[$ "end_ms"]   ?? 0);
-            // bar_events in playback_context already have absolute times — no offset loop.
-            // Only fix the last entry's end_ms, which gv_build_measure_nav_map always
-            // sets to gv_get_planned_end_ms() (total set duration, not segment end).
+            // Clamp the last entry's end_ms to the segment boundary (gv_build_measure_nav_map
+            // may set it to gv_get_planned_end_ms() — the total set duration, not segment end).
             if (_seg_end_ms > 0 && is_array(_nav.entries) && array_length(_nav.entries) > 0) {
                 _nav.entries[array_length(_nav.entries) - 1].end_ms = _seg_end_ms;
             }
@@ -408,15 +481,24 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
     return summary;
 }
 
+/// @function scoring_score_to_color(_score)
+/// @description Map a 0–100 score to a grade-band RGB color (A=green, F=red).
+/// @param {real} _score  Score value 0–100
+/// @returns {real}  GameMaker color value
 function scoring_score_to_color(_score) {
     var s = clamp(real(_score), 0, 100);
     if (s >= 90) return make_color_rgb(54, 122, 68);    // A
     if (s >= 80) return make_color_rgb(108, 148, 64);   // B
     if (s >= 70) return make_color_rgb(188, 156, 52);   // C
     if (s >= 60) return make_color_rgb(194, 112, 48);   // D
-    return make_color_rgb(178, 72, 72);                 // F
+    return make_color_rgb(210, 80, 80);                 // F
 }
 
+/// @function scoring_score_to_grade(_score)
+/// @description Convert a 0–100 score to a letter grade (A–F) using thresholds from scoring settings.
+/// @param {real} _score  Score value 0–100
+/// @returns {string}  Letter grade "A".."F"
+/// @reads   global.judge_settings_store (via scoring_ms_overlap_get_effective_settings)
 function scoring_score_to_grade(_score) {
     var s = clamp(real(_score), 0, 100);
     var cfg = scoring_ms_overlap_get_effective_settings();
@@ -427,6 +509,14 @@ function scoring_score_to_grade(_score) {
     return "F";
 }
 
+/// @function scoring_get_measure_visual_style(_measure, _default_color, _default_alpha)
+/// @description Return a visual style struct for a measure based on its last scoring run. Returns default style if no data. Set-mode aware: reads active segment's score map.
+/// @param {real} _measure        Measure number (1-based)
+/// @param {real} _default_color  Fallback color
+/// @param {real} _default_alpha  Fallback alpha
+/// @returns {struct}  {has_score: bool, color, alpha, score}
+/// @reads   global.timeline_state (score_selected_judge, score_measure_maps, score_by_segment), global.playback_context
+/// @callers scr_game_viz (draw path)
 function scoring_get_measure_visual_style(_measure, _default_color, _default_alpha) {
     var out = {
         has_score: false,
@@ -476,10 +566,15 @@ function scoring_get_measure_visual_style(_measure, _default_color, _default_alp
     out.has_score = true;
     out.score = measure_score;
     out.color = scoring_score_to_color(measure_score);
-    out.alpha = clamp(0.48 + ((measure_score / 100) * 0.30), 0.40, 0.90);
+    out.alpha = clamp(0.72 + ((measure_score / 100) * 0.18), 0.68, 0.92);
     return out;
 }
 
+/// @function scoring_get_last_run_summary()
+/// @description Return the most recent scoring run summary struct, or undefined if none yet.
+/// @returns {struct|undefined}  Last run summary from scoring_build_ms_overlap_summary
+/// @reads   global.scoring_last_run
+/// @callers scoring_find_measure_result, scoring_get_ui_overview_rows, scoring_get_judge_table_rows, etc.
 function scoring_get_last_run_summary() {
     if (variable_global_exists("scoring_last_run") && is_struct(global.scoring_last_run)) {
         return global.scoring_last_run;
@@ -487,6 +582,12 @@ function scoring_get_last_run_summary() {
     return undefined;
 }
 
+/// @function scoring_find_measure_result(_measure_num)
+/// @description Find and return the measure result struct for the given measure number. In set mode, reads the active segment's data; otherwise reads global.scoring_last_run.
+/// @param {real} _measure_num  Measure number (1-based)
+/// @returns {struct|undefined}  Measure result {measure, score, matching_ms, ...} or undefined
+/// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
+/// @callers scr_game_viz, scoring_get_detail_popup_rows, scoring_get_panel_focus
 function scoring_find_measure_result(_measure_num) {
     // In set mode, look in the active segment's data so measure numbers 1-N
     // resolve to the correct tune instead of always matching tune 1.
@@ -528,6 +629,9 @@ function scoring_find_measure_result(_measure_num) {
     return undefined;
 }
 
+/// @function scoring_get_ui_overview_rows()
+/// @description Build a string array of overview scoring rows for display in the post-tune result panel.
+/// @returns {array}  String rows like ["Judge: MS Overlap", "Score: 85.5% (B)", ...]
 function scoring_get_ui_overview_rows() {
     var rows = [];
     var summary = scoring_get_last_run_summary();
@@ -547,6 +651,10 @@ function scoring_get_ui_overview_rows() {
     return rows;
 }
 
+/// @function scoring_get_current_context_stats()
+/// @description Build play history stats (play count, best/avg score) for the current tune and context.
+/// Uses dynamic script_execute to read from event_history. Returns a default zero struct if unavailable.
+/// @returns {struct}  {has_context, plays_count, best_score, avg_score}
 function scoring_get_current_context_stats() {
     var out = {
         plays_count: 0,
@@ -609,6 +717,12 @@ function scoring_get_current_context_stats() {
     return out;
 }
 
+/// @function scoring_get_judge_table_rows(_measure_num, _judge_id)
+/// @description Build row data for the judge results table in the scoring UI. Returns one row per active judge with score/grade/best/avg/plays fields.
+/// @param {real}   [_measure_num]  Measure to focus on (-1 = overall)
+/// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
+/// @returns {array}  Array of judge row structs {judge_id, judge_name, score, grade, best, avg, plays}
+/// @reads   global.scoring_last_run (via helpers), global.timeline_state (via scoring_find_measure_result)
 function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "ms_overlap") {
     var rows = [];
     var summary = scoring_get_last_run_summary();
@@ -649,6 +763,12 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "ms_overlap
     return rows;
 }
 
+/// @function scoring_get_detail_popup_rows(_measure_num, _judge_id)
+/// @description Build string rows for the per-measure (or overall) scoring detail popup.
+/// @param {real}   [_measure_num]  Measure to report on (-1 = overall)
+/// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
+/// @returns {array}  String rows for display
+/// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
 function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overlap") {
     var rows = [];
     var judge_id = string(_judge_id);
@@ -726,10 +846,20 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     return rows;
 }
 
+/// @function scoring_get_measure_popup_rows(_measure_num)
+/// @description Delegates to scoring_get_detail_popup_rows for measure-specific popup.
+/// @param {real} _measure_num  Measure number (1-based)
+/// @returns {array}  String rows
 function scoring_get_measure_popup_rows(_measure_num) {
     return scoring_get_detail_popup_rows(_measure_num, "ms_overlap");
 }
 
+/// @function scoring_get_panel_focus(_measure_num, _judge_id)
+/// @description Build a panel focus struct for the scoring panel header (judge name, score %, subtitle).
+/// @param {real}   [_measure_num]  Focused measure (-1 = overall)
+/// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
+/// @returns {struct}  {judge_id, judge_name, score_value, score_percent_text, subtitle}
+/// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
 function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
     var summary = scoring_get_last_run_summary();
     var judge_id = is_string(_judge_id) && string_length(_judge_id) > 0 ? string(_judge_id) : "ms_overlap";
@@ -779,6 +909,11 @@ function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
     };
 }
 
+/// @function scoring_profile_get_player_id(_player_id)
+/// @description Resolve and sanitize player ID (alphanumeric + _ -) for use as a file path component. Falls back to global.current_player_id then "default".
+/// @param {string} [_player_id]  Explicit player ID or undefined
+/// @returns {string}  Lowercase sanitized player ID
+/// @reads   global.current_player_id
 function scoring_profile_get_player_id(_player_id = undefined) {
     var pid = "default";
     if (!is_undefined(_player_id)) pid = string(_player_id);
@@ -803,18 +938,31 @@ function scoring_profile_get_player_id(_player_id = undefined) {
     return string_lower(safe);
 }
 
+/// @function scoring_profile_get_root_folder()
+/// @description Return the root config directory path ("datafiles/config").
+/// @returns {string}  Root folder path
 function scoring_profile_get_root_folder() {
     return "datafiles/config";
 }
 
+/// @function scoring_profile_get_player_folder(_player_id)
+/// @description Return the per-player config directory path.
+/// @returns {string}  Path: "datafiles/config/players/{id}"
 function scoring_profile_get_player_folder(_player_id = undefined) {
     return scoring_profile_get_root_folder() + "/players/" + scoring_profile_get_player_id(_player_id);
 }
 
+/// @function scoring_profile_get_judge_settings_path(_player_id)
+/// @description Return the full path to the judge_settings.json for a player.
+/// @returns {string}  File path
 function scoring_profile_get_judge_settings_path(_player_id = undefined) {
     return scoring_profile_get_player_folder(_player_id) + "/judge_settings.json";
 }
 
+/// @function scoring_profile_ensure_player_folder(_player_id)
+/// @description Create datafiles/config, players/, and per-player directories if they don't exist.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {string}  The player folder path
 function scoring_profile_ensure_player_folder(_player_id = undefined) {
     var root = scoring_profile_get_root_folder();
     if (!directory_exists(root)) directory_create(root);
@@ -827,6 +975,11 @@ function scoring_profile_ensure_player_folder(_player_id = undefined) {
     return folder;
 }
 
+/// @function scoring_json_read_struct(_filepath, _fallback)
+/// @description Read and parse a JSON file from disk. Returns _fallback if file not found, empty, or invalid JSON.
+/// @param {string} _filepath  File path relative to working_directory
+/// @param {struct} _fallback  Return value on failure
+/// @returns {struct}  Parsed struct, or _fallback
 function scoring_json_read_struct(_filepath, _fallback) {
     var f = file_text_open_read(_filepath);
     if (f < 0) return _fallback;
@@ -852,6 +1005,11 @@ function scoring_json_read_struct(_filepath, _fallback) {
     return parsed;
 }
 
+/// @function scoring_json_write_struct(_filepath, _payload)
+/// @description Serialize _payload to JSON and write to disk. Returns true on success.
+/// @param {string} _filepath  Destination file path
+/// @param {struct} _payload   Struct to serialize
+/// @returns {bool}  true if write succeeded
 function scoring_json_write_struct(_filepath, _payload) {
     var f = file_text_open_write(_filepath);
     if (f < 0) {
@@ -863,6 +1021,11 @@ function scoring_json_write_struct(_filepath, _payload) {
     return true;
 }
 
+/// @function scoring_judge_settings_get_store()
+/// @description Return (or lazily create) global.judge_settings_store with default structure.
+/// @returns {struct}  {selected_judge_id, judges: {}}
+/// @reads   global.judge_settings_store
+/// @writes  global.judge_settings_store (if not yet initialized)
 function scoring_judge_settings_get_store() {
     if (!variable_global_exists("judge_settings_store") || !is_struct(global.judge_settings_store)) {
         global.judge_settings_store = {
@@ -879,6 +1042,10 @@ function scoring_judge_settings_get_store() {
     return global.judge_settings_store;
 }
 
+/// @function scoring_judge_settings_get_registry()
+/// @description Build the list of available judges with current settings merged from the store. Currently returns one judge: "ms_overlap".
+/// @returns {array}  Array of {id, name, description, enabled, settings} judge descriptors
+/// @reads   global.judge_settings_store (via get_store)
 function scoring_judge_settings_get_registry() {
     var store = scoring_judge_settings_get_store();
     var enabled = true;
@@ -914,7 +1081,10 @@ function scoring_judge_settings_get_registry() {
     }];
 }
 
-// Returns the effective ms_overlap settings merged with defaults.
+/// @function scoring_ms_overlap_get_effective_settings()
+/// @description Return the active ms_overlap scoring settings struct (count_rests, grade_a/b/c/d) from the registry.
+/// @returns {struct}  {count_rests, grade_a, grade_b, grade_c, grade_d}
+/// @reads   global.judge_settings_store (via scoring_judge_settings_get_registry)
 function scoring_ms_overlap_get_effective_settings() {
     var reg = scoring_judge_settings_get_registry();
     if (array_length(reg) > 0 && is_struct(reg[0]) && variable_struct_exists(reg[0], "settings")) {
@@ -923,6 +1093,11 @@ function scoring_ms_overlap_get_effective_settings() {
     return { count_rests: false, grade_a: 90, grade_b: 80, grade_c: 70, grade_d: 60 };
 }
 
+/// @function scoring_judge_settings_build_payload(_player_id)
+/// @description Build a serializable judge_settings payload struct from current store + registry for disk export.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {struct}  {schema_version, export_type, player_id, selected_judge_id, judges: [...]}
+/// @reads   global.judge_settings_store (via get_store, get_registry)
 function scoring_judge_settings_build_payload(_player_id = undefined) {
     var store = scoring_judge_settings_get_store();
     var judges = scoring_judge_settings_get_registry();
@@ -964,6 +1139,10 @@ function scoring_judge_settings_build_payload(_player_id = undefined) {
     };
 }
 
+/// @function scoring_judge_settings_save_for_player(_player_id)
+/// @description Ensure player folder exists and write judge_settings.json to disk.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {bool}  True if write succeeded
 function scoring_judge_settings_save_for_player(_player_id = undefined) {
     scoring_profile_ensure_player_folder(_player_id);
     var path = scoring_profile_get_judge_settings_path(_player_id);
@@ -971,6 +1150,11 @@ function scoring_judge_settings_save_for_player(_player_id = undefined) {
     return scoring_json_write_struct(path, payload);
 }
 
+/// @function scoring_judge_settings_load_for_player(_player_id)
+/// @description Load judge_settings.json from disk and populate global.judge_settings_store.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {struct}  The updated judge_settings_store
+/// @writes  global.judge_settings_store
 function scoring_judge_settings_load_for_player(_player_id = undefined) {
     var fallback = {
         schema_version: 1,
@@ -1012,14 +1196,25 @@ function scoring_judge_settings_load_for_player(_player_id = undefined) {
     return store;
 }
 
+/// @function scoring_profile_get_app_settings_path(_player_id)
+/// @description Return path to app_settings.json for the given player.
+/// @returns {string}  File path
 function scoring_profile_get_app_settings_path(_player_id = undefined) {
     return scoring_profile_get_player_folder(_player_id) + "/app_settings.json";
 }
 
+/// @function scoring_profile_get_tune_overrides_path(_player_id)
+/// @description Return path to tune_overrides.json for the given player.
+/// @returns {string}  File path
 function scoring_profile_get_tune_overrides_path(_player_id = undefined) {
     return scoring_profile_get_player_folder(_player_id) + "/tune_overrides.json";
 }
 
+/// @function scoring_player_settings_build_payload(_player_id)
+/// @description Build a serializable player app settings payload from current globals (MIDI devices, chanter, metronome, notebeam config).
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {struct}  {schema_version, export_type, player_id, settings: {...}}
+/// @reads   global.midi_input_device, global.midi_input_device_name, global.midi_input_channel, global.midi_output_device, global.midi_output_device_name, global.midi_ouput_channel, global.MIDI_chanter, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.timeline_cfg
 function scoring_player_settings_build_payload(_player_id = undefined) {
     var settings = {
         midi_input_device:       variable_global_exists("midi_input_device") ? real(global.midi_input_device) : 0,
@@ -1044,6 +1239,9 @@ function scoring_player_settings_build_payload(_player_id = undefined) {
     };
 }
 
+/// @function scoring_player_settings_save_for_player(_player_id)
+/// @description Build and write app_settings.json for the given player.
+/// @returns {bool}  True if write succeeded
 function scoring_player_settings_save_for_player(_player_id = undefined) {
     scoring_profile_ensure_player_folder(_player_id);
     var path = scoring_profile_get_app_settings_path(_player_id);
@@ -1051,6 +1249,9 @@ function scoring_player_settings_save_for_player(_player_id = undefined) {
     return scoring_json_write_struct(path, payload);
 }
 
+/// @function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_index)
+/// @description Find the current MIDI input device index by matching saved device name; falls back to saved index.
+/// @returns {real}  Resolved device index (0-based, clamped to available count)
 function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_index) {
     var count = midi_input_device_count();
     if (count <= 0) return 0;
@@ -1065,6 +1266,9 @@ function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_in
     return clamp(floor(real(_saved_index)), 0, count - 1);
 }
 
+/// @function scoring_player_settings_resolve_midi_output_index(_saved_name, _saved_index)
+/// @description Find the current MIDI output device index by matching saved device name; falls back to saved index.
+/// @returns {real}  Resolved device index (0-based, clamped to available count)
 function scoring_player_settings_resolve_midi_output_index(_saved_name, _saved_index) {
     var count = midi_output_device_count();
     if (count <= 0) return 0;
@@ -1079,6 +1283,12 @@ function scoring_player_settings_resolve_midi_output_index(_saved_name, _saved_i
     return clamp(floor(real(_saved_index)), 0, count - 1);
 }
 
+/// @function scoring_player_settings_load_for_player(_player_id)
+/// @description Load app_settings.json and write all player settings to globals (MIDI devices, chanter, metronome, notebeam). Returns true on success.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {bool}  true
+/// @writes  global.midi_input_device, global.midi_input_device_name, global.midi_output_device, global.midi_output_device_name, global.midi_input_channel, global.midi_ouput_channel, global.MIDI_chanter, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.timeline_cfg
+/// @callers obj_game_controller Create
 function scoring_player_settings_load_for_player(_player_id = undefined) {
     var fallback = {
         schema_version: 1,
@@ -1131,6 +1341,11 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
     return true;
 }
 
+/// @function scoring_tune_override_key(_tune_filename)
+/// @description Derive a canonical tune override key from path (basename, lowercase). Reads global.current_tune_filename or global.current_set if filename not provided.
+/// @param {string} [_tune_filename]  Optional explicit path; falls back to current tune/set
+/// @returns {string}  Lowercase filename key (e.g. "scotland_the_brave.json") or ""
+/// @reads   global.current_tune_filename, global.current_set, global.current_set_item_index
 function scoring_tune_override_key(_tune_filename = undefined) {
     var source = "";
     if (!is_undefined(_tune_filename)) {
@@ -1158,6 +1373,11 @@ function scoring_tune_override_key(_tune_filename = undefined) {
     return string_lower(source);
 }
 
+/// @function scoring_tune_overrides_get_store()
+/// @description Return (or lazily create) global.player_tune_overrides.
+/// @returns {struct}  Map of tune_key → {bpm, swing_mult, gracenote_override_ms}
+/// @reads   global.player_tune_overrides
+/// @writes  global.player_tune_overrides (if not initialized)
 function scoring_tune_overrides_get_store() {
     if (!variable_global_exists("player_tune_overrides") || !is_struct(global.player_tune_overrides)) {
         global.player_tune_overrides = {};
@@ -1165,6 +1385,9 @@ function scoring_tune_overrides_get_store() {
     return global.player_tune_overrides;
 }
 
+/// @function scoring_tune_overrides_save_for_player(_player_id)
+/// @description Write current tune override store to tune_overrides.json for the given player.
+/// @returns {bool}  True if write succeeded
 function scoring_tune_overrides_save_for_player(_player_id = undefined) {
     scoring_profile_ensure_player_folder(_player_id);
     var path = scoring_profile_get_tune_overrides_path(_player_id);
@@ -1196,6 +1419,11 @@ function scoring_tune_overrides_save_for_player(_player_id = undefined) {
     return scoring_json_write_struct(path, payload);
 }
 
+/// @function scoring_tune_overrides_load_for_player(_player_id)
+/// @description Load tune_overrides.json for the player and populate global.player_tune_overrides.
+/// @param {string} [_player_id]  Player ID or undefined
+/// @returns {struct}  The updated player_tune_overrides store
+/// @writes  global.player_tune_overrides
 function scoring_tune_overrides_load_for_player(_player_id = undefined) {
     var fallback = {
         schema_version: 1,
@@ -1227,6 +1455,12 @@ function scoring_tune_overrides_load_for_player(_player_id = undefined) {
     return store;
 }
 
+/// @function scoring_tune_override_apply_current(_tune_filename)
+/// @description Apply the stored per-tune override (bpm/swing/gracenote) for the given tune to runtime globals.
+/// @param {string} [_tune_filename]  Tune path; falls back to current tune
+/// @returns {bool}  true if override found and applied, false if not found
+/// @reads   global.player_tune_overrides (via get_store)
+/// @writes  global.current_tune_filename, global.current_bpm, global.swing_mult, global.gracenote_override_ms
 function scoring_tune_override_apply_current(_tune_filename = undefined) {
     var key = scoring_tune_override_key(_tune_filename);
     if (key == "") return false;
@@ -1246,6 +1480,12 @@ function scoring_tune_override_apply_current(_tune_filename = undefined) {
     return true;
 }
 
+/// @function scoring_tune_override_save_current(_tune_filename)
+/// @description Save current runtime bpm/swing/gracenote globals into the tune override store and write to disk.
+/// @param {string} [_tune_filename]  Tune path; falls back to current tune
+/// @returns {bool}  true if saved successfully
+/// @reads   global.current_bpm, global.swing_mult, global.gracenote_override_ms
+/// @writes  global.current_tune_filename, global.player_tune_overrides (via store)
 function scoring_tune_override_save_current(_tune_filename = undefined) {
     var key = scoring_tune_override_key(_tune_filename);
     if (key == "") return false;
@@ -1262,6 +1502,10 @@ function scoring_tune_override_save_current(_tune_filename = undefined) {
     return scoring_tune_overrides_save_for_player();
 }
 
+/// @function scoring_judge_settings_ensure_state()
+/// @description Lazily initialize global.judge_settings_ui_state and sync selected_judge_id from store.
+/// @reads   global.judge_settings_store (via get_store)
+/// @writes  global.judge_settings_ui_state
 function scoring_judge_settings_ensure_state() {
     if (!variable_global_exists("judge_settings_ui_state") || !is_struct(global.judge_settings_ui_state)) {
         global.judge_settings_ui_state = {
@@ -1349,6 +1593,13 @@ function scoring_judge_settings_get_ui_rows() {
     return _rows;
 }
 
+/// @function scoring_judge_settings_draw_list_canvas(_x1, _y1, _x2, _y2)
+/// @description Draw the judge settings list panel (judge tiles with name, description, enabled toggle) within the given canvas bounds.
+/// @param {real} _x1  Left edge
+/// @param {real} _y1  Top edge
+/// @param {real} _x2  Right edge
+/// @param {real} _y2  Bottom edge
+/// @reads   global.judge_settings_ui_state (via scoring_judge_settings_ensure_state)
 function scoring_judge_settings_draw_list_canvas(_x1, _y1, _x2, _y2) {
     var _state = scoring_judge_settings_ensure_state();
     var _rows = scoring_judge_settings_get_ui_rows();
@@ -1431,6 +1682,13 @@ function scoring_judge_settings_draw_list_canvas(_x1, _y1, _x2, _y2) {
     draw_set_valign(_prev_valign);
 }
 
+/// @function scoring_judge_settings_draw_detail_canvas(_x1, _y1, _x2, _y2)
+/// @description Draw the detail panel for the selected judge (settings fields, save button, current context stats).
+/// @param {real} _x1  Left edge
+/// @param {real} _y1  Top edge
+/// @param {real} _x2  Right edge
+/// @param {real} _y2  Bottom edge
+/// @reads   global.judge_settings_ui_state (via scoring_judge_settings_ensure_state), global.judge_settings_store
 function scoring_judge_settings_draw_detail_canvas(_x1, _y1, _x2, _y2) {
     var _state = scoring_judge_settings_ensure_state();
     var _rows = scoring_judge_settings_get_ui_rows();
@@ -1593,6 +1851,13 @@ function scoring_judge_settings_draw_detail_canvas(_x1, _y1, _x2, _y2) {
     draw_set_valign(_prev_valign);
 }
 
+/// @function scoring_judge_settings_handle_list_click(_mx, _my, _x1, _y1, _x2, _y2)
+/// @description Handle mouse click on the judge settings list panel. Updates selected judge in global.judge_settings_ui_state and global.judge_settings_store.
+/// @param {real} _mx,_my  Mouse coordinates
+/// @param {real} _x1,_y1,_x2,_y2  Canvas bounds
+/// @returns {bool}  true if a hit was detected
+/// @reads   global.judge_settings_ui_state
+/// @writes  global.judge_settings_ui_state, global.judge_settings_store (selected_judge_id)
 function scoring_judge_settings_handle_list_click(_mx, _my, _x1, _y1, _x2, _y2) {
     var _state = scoring_judge_settings_ensure_state();
     var _rows = scoring_judge_settings_get_ui_rows();
@@ -1624,6 +1889,12 @@ function scoring_judge_settings_handle_list_click(_mx, _my, _x1, _y1, _x2, _y2) 
     return true;
 }
 
+/// @function scoring_judge_settings_handle_list_scroll(_delta, _mx, _my, _x1, _y1, _x2, _y2)
+/// @description Handle mouse scroll on the judge settings list. Scrolls list view if pointer is within canvas bounds.
+/// @param {real} _delta  Scroll delta
+/// @param {real} _mx,_my  Mouse coordinates
+/// @param {real} _x1,_y1,_x2,_y2  Canvas bounds
+/// @returns {bool}  true if scroll consumed
 function scoring_judge_settings_handle_list_scroll(_delta, _mx, _my, _x1, _y1, _x2, _y2) {
     var _rows = scoring_judge_settings_get_ui_rows();
     if (!is_array(_rows) || array_length(_rows) <= 0) return false;
@@ -1715,4 +1986,361 @@ function scoring_judge_settings_handle_detail_click(_mx, _my, _x1, _y1, _x2, _y2
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Loop Session Scoring Overview
+// ---------------------------------------------------------------------------
+
+/// @function scoring_loop_overview_ensure_state()
+/// @description Return (and lazily initialise) the loop score overview UI state struct.
+/// @returns {struct}  {scroll_row: real}
+/// @reads   global.loop_score_overview_ui_state
+/// @writes  global.loop_score_overview_ui_state
+function scoring_loop_overview_ensure_state() {
+    if (!variable_global_exists("loop_score_overview_ui_state")
+        || !is_struct(global.loop_score_overview_ui_state)) {
+        global.loop_score_overview_ui_state = { scroll_row: 0 };
+    }
+    if (!variable_struct_exists(global.loop_score_overview_ui_state, "scroll_row")) {
+        global.loop_score_overview_ui_state.scroll_row = 0;
+    }
+    return global.loop_score_overview_ui_state;
+}
+
+/// @function scoring_build_loop_iteration_scores()
+/// @description Compute a per-loop-iteration overall score from EVENT_HISTORY + timeline_state spans.
+///              Stores results in global.timeline_state.loop_iteration_scores.
+/// @returns {array}  Array of {iteration, score, grade, start_ms, end_ms} structs
+/// @reads   global.EVENT_HISTORY, global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries)
+/// @writes  global.timeline_state.loop_iteration_scores
+function scoring_build_loop_iteration_scores() {
+    var out = [];
+
+    if (!variable_global_exists("EVENT_HISTORY") || !is_array(global.EVENT_HISTORY)) return out;
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
+
+    // --- Build per-iteration time windows from game events ---
+    var win_map    = {};  // key = string(iter) -> {start_ms, end_ms}
+    var iter_order = [];
+
+    var _hist = global.EVENT_HISTORY;
+    var _hn   = array_length(_hist);
+    for (var i = 0; i < _hn; i++) {
+        var ev = _hist[i];
+        if (!is_struct(ev)) continue;
+        var _iter = floor(real(variable_struct_exists(ev, "loop_iteration") ? ev[$ "loop_iteration"] : 0));
+        if (_iter <= 0) continue;
+        var _src = string(variable_struct_exists(ev, "source") ? ev[$ "source"] : "");
+        if (_src != "game") continue;
+        var _exp = real(variable_struct_exists(ev, "expected_time_ms") ? ev[$ "expected_time_ms"] : 0);
+
+        var _k = string(_iter);
+        if (!variable_struct_exists(win_map, _k)) {
+            win_map[$ _k] = { start_ms: _exp, end_ms: _exp };
+            array_push(iter_order, _iter);
+        } else {
+            var _w = win_map[$ _k];
+            if (_exp < _w.start_ms) _w.start_ms = _exp;
+            if (_exp > _w.end_ms)   _w.end_ms   = _exp;
+        }
+    }
+
+    if (array_length(iter_order) <= 0) {
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+            global.timeline_state.loop_iteration_scores = out;
+        }
+        return out;
+    }
+
+    // Sort iterations ascending
+    array_sort(iter_order, function(_a, _b) { return _a - _b; });
+
+    // --- Get shared spans and settings ---
+    var planned_spans = variable_struct_exists(global.timeline_state, "planned_spans")
+        ? variable_struct_get(global.timeline_state, "planned_spans") : [];
+    var player_spans  = [];
+    if (variable_struct_exists(global.timeline_state, "review_full_trace")
+        && is_array(variable_struct_get(global.timeline_state, "review_full_trace"))
+        && array_length(variable_struct_get(global.timeline_state, "review_full_trace")) > 0) {
+        player_spans = variable_struct_get(global.timeline_state, "review_full_trace");
+    } else if (variable_struct_exists(global.timeline_state, "player_in")
+        && is_array(variable_struct_get(global.timeline_state, "player_in"))) {
+        player_spans = variable_struct_get(global.timeline_state, "player_in");
+    }
+
+    var _settings = scoring_ms_overlap_get_effective_settings();
+    var _count_rests = bool(_settings.count_rests);
+    var all_measures = scoring_measure_entries_from_timeline();
+
+    // --- Score each iteration ---
+    for (var ii = 0; ii < array_length(iter_order); ii++) {
+        var _iter = iter_order[ii];
+        var _k = string(_iter);
+        if (!variable_struct_exists(win_map, _k)) continue;
+        var _win = win_map[$ _k];
+        var _s_ms = real(_win.start_ms);
+        var _e_ms = real(_win.end_ms);
+        if (_e_ms <= _s_ms + 1) continue;
+
+        var _planned = scoring_filter_spans_in_window(planned_spans, _s_ms, _e_ms);
+        var _player  = scoring_filter_spans_in_window(player_spans,  _s_ms, _e_ms);
+
+        // Filter measure entries to this iteration's time window
+        var _iter_measures = [];
+        for (var mi = 0; mi < array_length(all_measures); mi++) {
+            var me = all_measures[mi];
+            if (!is_struct(me)) continue;
+            var me_s = real(me[$ "start_ms"] ?? 0);
+            var me_e = real(me[$ "end_ms"]   ?? me_s);
+            // Include measure if it overlaps the iteration window
+            if (me_e > _s_ms && me_s < _e_ms) {
+                // Clamp the entry to the iteration window
+                var me_clamped = {
+                    measure:   me[$ "measure"]  ?? -1,
+                    part:      me[$ "part"]     ?? 1,
+                    start_ms:  max(me_s, _s_ms),
+                    end_ms:    min(me_e, _e_ms)
+                };
+                array_push(_iter_measures, me_clamped);
+            }
+        }
+
+        var _total = 0;
+        var _match = 0;
+        var _exp   = 0;
+
+        if (array_length(_iter_measures) > 0) {
+            for (var _mj = 0; _mj < array_length(_iter_measures); _mj++) {
+                var _me2 = _iter_measures[_mj];
+                var _ms2 = scoring_score_measure_ms_overlap(_me2, _planned, _player, _settings);
+                _total += real(_ms2[$ "total_ms"]            ?? 0);
+                _match += real(_ms2[$ "matching_ms"]         ?? 0);
+                _exp   += real(_ms2[$ "expected_active_ms"]  ?? 0);
+            }
+        } else {
+            // Fallback: raw window overlap (no measure boundaries available)
+            var _raw_total = _e_ms - _s_ms;
+            var _raw_match = 0;
+            // Accumulate player time that overlaps planned spans in window
+            for (var _fpi = 0; _fpi < array_length(_player); _fpi++) {
+                var _fps = _player[_fpi];
+                if (!is_struct(_fps)) continue;
+                var _fps1 = max(real(_fps[$ "start_ms"] ?? 0), _s_ms);
+                var _fps2 = min(real(_fps[$ "end_ms"]   ?? _fps1), _e_ms);
+                for (var _fqi = 0; _fqi < array_length(_planned); _fqi++) {
+                    var _fpl = _planned[_fqi];
+                    if (!is_struct(_fpl)) continue;
+                    var _fpl1 = max(real(_fpl[$ "start_ms"] ?? 0), _s_ms);
+                    var _fpl2 = min(real(_fpl[$ "end_ms"]   ?? _fpl1), _e_ms);
+                    if (real(_fpl[$ "lane_idx"] ?? -999) != real(_fps[$ "lane_idx"] ?? -998)) continue;
+                    var _fov = max(0, min(_fps2, _fpl2) - max(_fps1, _fpl1));
+                    _raw_match += _fov;
+                }
+            }
+            _total = _raw_total;
+            _match = _raw_match;
+            _exp   = _raw_total;
+        }
+
+        var _denom = _count_rests ? max(1, _total) : max(1, _exp);
+        var _score = clamp((_match / _denom) * 100, 0, 100);
+        var _grade = scoring_score_to_grade(_score);
+
+        array_push(out, {
+            iteration: _iter,
+            score:     _score,
+            grade:     _grade,
+            start_ms:  _s_ms,
+            end_ms:    _e_ms
+        });
+    }
+
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.loop_iteration_scores = out;
+    }
+    return out;
+}
+
+/// @function scoring_loop_overview_handle_scroll(_delta, _mx, _my, _bx1, _by1, _bx2, _by2)
+/// @description Handle mouse-wheel scroll inside the loop score overview canvas. Advances scroll_row.
+/// @param {real} _delta   +1 = scroll down, -1 = scroll up
+/// @param {real} _mx      Mouse X (unused but reserved for bounds check)
+/// @param {real} _my      Mouse Y
+/// @param {real} _bx1     Canvas bbox left
+/// @param {real} _by1     Canvas bbox top
+/// @param {real} _bx2     Canvas bbox right
+/// @param {real} _by2     Canvas bbox bottom
+/// @reads   global.timeline_state.loop_iteration_scores
+/// @writes  global.loop_score_overview_ui_state.scroll_row
+function scoring_loop_overview_handle_scroll(_delta, _mx, _my, _bx1, _by1, _bx2, _by2) {
+    if (_mx < _bx1 || _mx > _bx2 || _my < _by1 || _my > _by2) return;
+
+    var _state = scoring_loop_overview_ensure_state();
+    var _scores = (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "loop_iteration_scores"))
+        ? global.timeline_state.loop_iteration_scores : [];
+    var _n_rows = is_array(_scores) ? array_length(_scores) : 0;
+
+    var _row_h = 22;
+    var _view_h = max(1, _by2 - _by1) - 48;  // approx header height
+    var _visible = max(1, floor(_view_h / _row_h));
+    var _max_scroll = max(0, _n_rows - _visible);
+
+    _state.scroll_row = clamp(floor(real(_state.scroll_row)) + _delta, 0, _max_scroll);
+}
+
+/// @function scoring_loop_overview_draw_canvas(_x1, _y1, _x2, _y2)
+/// @description Draw the loop score overview matrix: rows = loop iterations, columns = judges.
+/// @param {real} _x1  Canvas left
+/// @param {real} _y1  Canvas top
+/// @param {real} _x2  Canvas right
+/// @param {real} _y2  Canvas bottom
+/// @reads   global.timeline_state.loop_iteration_scores, global.loop_score_overview_ui_state
+function scoring_loop_overview_draw_canvas(_x1, _y1, _x2, _y2) {
+    var _prev_font   = draw_get_font();
+    var _prev_col    = draw_get_color();
+    var _prev_alpha  = draw_get_alpha();
+    var _prev_halign = draw_get_halign();
+    var _prev_valign = draw_get_valign();
+
+    var _w = max(1, _x2 - _x1);
+    var _h = max(1, _y2 - _y1);
+    var _pad   = 8;
+    var _t_scl = 0.84;   // title scale
+    var _b_scl = 0.70;   // body scale
+
+    draw_set_alpha(0.92);
+    draw_set_color(make_color_rgb(20, 24, 30));
+    draw_rectangle(_x1, _y1, _x2, _y2, false);
+    draw_set_alpha(1);
+
+    draw_set_font(fnt_setting);
+    draw_set_halign(fa_left);
+    draw_set_valign(fa_top);
+
+    var _state = scoring_loop_overview_ensure_state();
+
+    // Fetch loop iteration scores
+    var _scores = [];
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "loop_iteration_scores")) {
+        _scores = global.timeline_state.loop_iteration_scores;
+    }
+    if (!is_array(_scores)) _scores = [];
+    var _n_iters = array_length(_scores);
+
+    // Column definitions: keep judge naming consistent with the scoring table window.
+    var _judge_name = "MS Overlap";
+    if (is_undefined(scoring_get_judge_table_rows) == false) {
+        var _judge_rows = scoring_get_judge_table_rows(-1, "ms_overlap");
+        if (is_array(_judge_rows) && array_length(_judge_rows) > 0 && is_struct(_judge_rows[0])) {
+            var _row_name = string(_judge_rows[0][$ "judge_name"] ?? "");
+            if (string_length(_row_name) > 0) _judge_name = _row_name;
+        }
+    }
+    var _judges = [{ id: "ms_overlap", name: _judge_name }];
+    var _n_judges = array_length(_judges);
+
+    // Layout
+    var _title_h   = max(18, floor(string_height("Ag") * _t_scl)) + 4;
+    var _header_h  = max(14, floor(string_height("Ag") * _b_scl)) + 4;
+    var _row_h     = max(18, floor(string_height("Ag") * _b_scl)) + 6;
+    var _loop_col_w = 52;   // width of "Loop #" column
+    var _judge_col_w = max(80, floor((_w - _loop_col_w - _pad * 2) / _n_judges));
+
+    var _content_y0 = _y1 + _pad + _title_h + _header_h;
+
+    var _visible_rows = max(1, floor((_y2 - _content_y0 - _pad) / _row_h));
+    var _max_scroll   = max(0, _n_iters - _visible_rows);
+    _state.scroll_row = clamp(floor(real(_state.scroll_row)), 0, _max_scroll);
+    var _scroll = _state.scroll_row;
+
+    // --- Title ---
+    draw_set_color(make_color_rgb(236, 236, 236));
+    draw_text_transformed(_x1 + _pad, _y1 + _pad, "Loop Scores", _t_scl, _t_scl, 0);
+
+    if (_n_iters <= 0) {
+        draw_set_color(make_color_rgb(160, 160, 160));
+        draw_text_transformed(_x1 + _pad, _y1 + _pad + _title_h + 4, "No loop data yet.", _b_scl, _b_scl, 0);
+        draw_set_font(_prev_font); draw_set_color(_prev_col);
+        draw_set_alpha(_prev_alpha); draw_set_halign(_prev_halign);
+        draw_set_valign(_prev_valign);
+        return;
+    }
+
+    // --- Column header row ---
+    var _hdr_y = _y1 + _pad + _title_h;
+    draw_set_color(make_color_rgb(56, 62, 72));
+    draw_rectangle(_x1 + _pad, _hdr_y, _x2 - _pad, _hdr_y + _header_h, false);
+
+    draw_set_color(make_color_rgb(190, 190, 190));
+    draw_text_transformed(_x1 + _pad + 2, _hdr_y + 2, "Loop", _b_scl, _b_scl, 0);
+    for (var ji = 0; ji < _n_judges; ji++) {
+        var _jx = _x1 + _pad + _loop_col_w + ji * _judge_col_w;
+        draw_set_halign(fa_center);
+        draw_text_transformed(_jx + floor(_judge_col_w * 0.5), _hdr_y + 2, string(_judges[ji].name), _b_scl, _b_scl, 0);
+        draw_set_halign(fa_left);
+    }
+
+    // Divider
+    draw_set_color(make_color_rgb(74, 74, 82));
+    draw_line(_x1 + _pad, _hdr_y + _header_h, _x2 - _pad, _hdr_y + _header_h);
+
+    // --- Data rows ---
+    for (var ri = 0; ri < _visible_rows; ri++) {
+        var _data_idx = ri + _scroll;
+        if (_data_idx >= _n_iters) break;
+
+        var _entry = _scores[_data_idx];
+        if (!is_struct(_entry)) continue;
+        var _score_val = real(_entry[$ "score"] ?? 0);
+        var _grade_str = string(_entry[$ "grade"] ?? "-");
+        var _iter_num  = floor(real(_entry[$ "iteration"] ?? (_data_idx + 1)));
+
+        var _row_y = _content_y0 + ri * _row_h;
+        var _row_bg = (_data_idx mod 2 == 0)
+            ? make_color_rgb(28, 33, 40)
+            : make_color_rgb(34, 39, 48);
+        draw_set_alpha(0.80);
+        draw_set_color(_row_bg);
+        draw_rectangle(_x1 + _pad, _row_y, _x2 - _pad, _row_y + _row_h - 1, false);
+        draw_set_alpha(1);
+
+        // Loop # label
+        draw_set_color(make_color_rgb(190, 190, 190));
+        draw_text_transformed(_x1 + _pad + 2, _row_y + 2, string(_iter_num), _b_scl, _b_scl, 0);
+
+        // Score cell (one per judge — currently just ms_overlap)
+        for (var ji = 0; ji < _n_judges; ji++) {
+            var _jx = _x1 + _pad + _loop_col_w + ji * _judge_col_w;
+            var _score_color = scoring_score_to_color(_score_val);
+            var _cell_text   = string(floor(_score_val)) + "% " + _grade_str;
+            draw_set_halign(fa_center);
+            draw_set_color(_score_color);
+            draw_text_transformed(_jx + floor(_judge_col_w * 0.5), _row_y + 2, _cell_text, _b_scl, _b_scl, 0);
+            draw_set_halign(fa_left);
+        }
+    }
+
+    // --- Scroll indicator (thin bar on right edge) ---
+    if (_n_iters > _visible_rows) {
+        var _bar_x = _x2 - _pad - 4;
+        var _bar_h = max(1, _y2 - _content_y0 - _pad);
+        var _thumb_h = max(12, floor(_bar_h * (_visible_rows / _n_iters)));
+        var _thumb_y = _content_y0 + floor((_scroll / max(1, _max_scroll)) * (_bar_h - _thumb_h));
+        draw_set_alpha(0.30);
+        draw_set_color(c_gray);
+        draw_rectangle(_bar_x, _content_y0, _bar_x + 4, _y2 - _pad, false);
+        draw_set_alpha(0.70);
+        draw_set_color(c_ltgray);
+        draw_rectangle(_bar_x, _thumb_y, _bar_x + 4, _thumb_y + _thumb_h, false);
+        draw_set_alpha(1);
+    }
+
+    draw_set_font(_prev_font);
+    draw_set_color(_prev_col);
+    draw_set_alpha(_prev_alpha);
+    draw_set_halign(_prev_halign);
+    draw_set_valign(_prev_valign);
 }

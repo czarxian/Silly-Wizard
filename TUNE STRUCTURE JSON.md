@@ -108,7 +108,7 @@ transcription note
 
 user defined
 
-2. Event Schema (Canonical 21-Column Layout)
+2. Event Schema (Canonical 23-Column Layout)
 
 Each event row in Excel maps directly to JSON and then to a GML struct.
 
@@ -172,11 +172,15 @@ total_units
 
 embellishment
 
-name
+preceding_note
 
 embellishment
 
-positions
+literal
+
+embellishment
+
+target_note
 
 embellishment
 
@@ -185,6 +189,10 @@ alt_anchor
 embellishment
 
 alt_timing
+
+timing
+
+broken_dir
 
 timing
 
@@ -197,6 +205,10 @@ end_time_ms
 timing
 
 tempo
+
+voice
+
+voice
 
 3. JSON Output Schema
 
@@ -226,9 +238,13 @@ Each event becomes a JSON object with the following structure:
   "emb_alt_anchor": <number> or "",
   "emb_alt_timing": <number> or "",
 
+  "broken_dir": ">" or "<" or "",
+
   "start_time_ms": <number>,
   "end_time_ms": <number>,
-  "tempo": <number>
+  "tempo": <number>,
+
+  "voice": "pipes_melody" | "pipes_harmony1" | "pipes_harmony2" | "pipes_harmony3" | "drums" | ""
 }
 
 Rules

@@ -1,10 +1,14 @@
 // obj_game_controller — Project controller
 // Purpose: Central global state & references hub. Initializes tune library and MIDI/global game state.
 // Key responsibilities:
-//  - Calls old_scr_tune_library() to initialize tune library.
 //  - Sets global.ID_game_handler, global.metronome, global.ID_player, global.tune_picker, global.tune.
 //  - Initializes MIDI device lists and MIDI event counters used by scr_MIDI and scr_button_scripts.
 // Related scripts: scripts/scr_tune_library/, scripts/scr_MIDI/, scripts/scr_button_scripts/
+
+show_debug_message("=== RUNTIME PATHS ===");
+show_debug_message("working_directory: " + working_directory);
+show_debug_message("Export tunes to: " + working_directory + "tunes/");
+show_debug_message("=====================");
 
 // Set step rate for gameplay/update loop.
 // Higher FPS lowers frame-quantized scheduler jitter (at CPU cost).
@@ -29,9 +33,8 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
 }
 
 //Create Globals
-	//old_scr_tune_library();
-	//scr_build_tune_library("datafiles/tunes/");
-	scr_build_tune_library("tunes/");
+	// Sandbox disabled — scan project datafiles directly so new exports are always found without GMS registration
+	scr_build_tune_library("C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/");
 	global.emb_library = load_embellishment_library("embellishments.json");
 
 	// Initialize game visualization controls

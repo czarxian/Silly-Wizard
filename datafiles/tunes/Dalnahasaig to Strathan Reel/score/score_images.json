@@ -1,0 +1,111 @@
+{
+  "tune": "Dalnahasaig to Strathan Reel",
+  "score_manifest_version": 3,
+  "is_transition": true,
+  "transition_refs": {
+    "prior_tune": "T_Dal",
+    "following_tune": "T_SR",
+    "tail_cut_measures": "1",
+    "head_cut_measures": "0"
+  },
+  "transition_images": {
+    "prior_replace": {
+      "tune": "Dalnahasaig",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "images": [
+        "pr_m000.png"
+      ],
+      "image_meta": [
+        {
+          "file": "pr_m000.png",
+          "width_px": 800,
+          "height_px": 80,
+          "staff_top_px": 24,
+          "staff_bottom_px": 55.7,
+          "content_left_px": 0,
+          "content_right_px": 274.93,
+          "duration_units": 8,
+          "is_pickup": false,
+          "beat_anchors": [
+            69.66,
+            112.09,
+            179.64,
+            237.6
+          ]
+        }
+      ],
+      "pickup_image_index": -1,
+      "group": "prior_replace",
+      "playback_to_image": [
+        0
+      ],
+      "snippet_durations": [
+        8
+      ]
+    },
+    "bridge": {
+      "tune": "Dalnahasaig to Strathan Reel",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "images": [
+        "br_m000.png"
+      ],
+      "image_meta": [
+        {
+          "file": "br_m000.png",
+          "width_px": 800,
+          "height_px": 80,
+          "staff_top_px": 24,
+          "staff_bottom_px": 55.7,
+          "content_left_px": 0,
+          "content_right_px": 87,
+          "duration_units": 2,
+          "is_pickup": false,
+          "beat_anchors": [
+            49.66,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "pickup_image_index": -1,
+      "group": "bridge",
+      "playback_to_image": [
+        0
+      ],
+      "snippet_durations": [
+        2
+      ]
+    }
+  },
+  "images": [
+    "br_m000.png"
+  ],
+  "image_meta": [
+    {
+      "file": "br_m000.png",
+      "width_px": 800,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 87,
+      "duration_units": 2,
+      "is_pickup": false,
+      "beat_anchors": [
+        49.66,
+        null,
+        null,
+        null
+      ]
+    }
+  ],
+  "pickup_image_index": -1,
+  "playback_to_image": [
+    0
+  ],
+  "beats_per_measure": 4,
+  "units_per_measure": 8
+}

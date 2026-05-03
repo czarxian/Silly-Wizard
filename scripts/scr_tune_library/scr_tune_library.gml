@@ -5,6 +5,13 @@
 
 // Script assets have changed for v2.3.0 see
 // https://help.yoyogames.com/hc/en-us/articles/360005277377 for more information
+/// @function scr_load_tune_library()
+/// @description Load tune_library.json from disk. Triggers scr_build_tune_library if player_part_channels metadata is missing. Merges play history stats into each entry.
+/// @returns {struct}  Library struct: {tunes: [], root: string}; empty fallback on failure
+/// @reads   global.current_player_id (via scr_tune_library_merge_history)
+/// @writes  none (caller stores result into global.tune_library)
+/// @objects none
+/// @callers obj_game_controller Create_0 (via scr_build_tune_library), scr_button_scripts
 function scr_load_tune_library()
 {
     var candidates = array_create(0);
@@ -72,6 +79,10 @@ function scr_load_tune_library()
     return { tunes: [], root: "tunes/" };
 }
 
+/// @function scr_tune_picker_get_tune_id(_entry)
+/// @description Derive a stable lowercase string ID for a tune entry: uses explicit id field, then filename, then title prefix.
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {string}  Stable tune ID, or "" if entry is invalid
 function scr_tune_picker_get_tune_id(_entry)
 {
     if (!is_struct(_entry)) return "";
@@ -98,11 +109,20 @@ function scr_tune_picker_get_tune_id(_entry)
     return "";
 }
 
+/// @function scr_tune_picker_voice_to_part_channel(_voice)
+/// @description Convert a voice name string to its MIDI channel number. "pipes_melody"=2, "pipes_harmony1"=3, "pipes_harmony2"=4, "pipes_harmony3"=5.
+/// @param {string} _voice  Voice name (e.g. "pipes_melody", "pipes_harmony1")
+/// @returns {real}  MIDI channel number, or -1 if unrecognized
 function scr_tune_picker_voice_to_part_channel(_voice)
 {
     var v = string_lower(string(_voice ?? ""));
     switch (v) {
-        case "pipes": return 2;
+        case "pipes_melody":   return 2;
+        case "pipes_harmony1": return 3;
+        case "pipes_harmony2": return 4;
+        case "pipes_harmony3": return 5;
+        // DEPRECATED — remove after re-exporting all tunes
+        case "pipes":    return 2;
         case "harmony1": return 3;
         case "harmony2": return 4;
         case "harmony3": return 5;
@@ -110,6 +130,10 @@ function scr_tune_picker_voice_to_part_channel(_voice)
     }
 }
 
+/// @function scr_tune_picker_collect_player_part_channels(_data)
+/// @description Scan tune event data to collect distinct player MIDI channels (2-5). Used when building the tune library to generate player_part_channels metadata.
+/// @param {array|struct} _data  Raw events array or struct with .events array
+/// @returns {array}  Sorted array of channel numbers (e.g. [2, 3]); [2] as default if none found
 function scr_tune_picker_collect_player_part_channels(_data)
 {
     var channels = [];
@@ -163,6 +187,10 @@ function scr_tune_picker_collect_player_part_channels(_data)
     return channels;
 }
 
+/// @function scr_tune_picker_get_entry_part_channels(_entry)
+/// @description Get the player MIDI channels available for a tune entry. Reads player_part_channels if present, falls back to player_part_count.
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {array}  Array of channel numbers; [2] as default
 function scr_tune_picker_get_entry_part_channels(_entry)
 {
     if (is_struct(_entry) && variable_struct_exists(_entry, "player_part_channels")) {
@@ -184,11 +212,22 @@ function scr_tune_picker_get_entry_part_channels(_entry)
     return [2];
 }
 
+/// @function scr_tune_picker_get_entry_part_count(_entry)
+/// @description Count available player parts for a tune entry.
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {real}  Number of available parts (at least 1)
 function scr_tune_picker_get_entry_part_count(_entry)
 {
     return array_length(scr_tune_picker_get_entry_part_channels(_entry));
 }
 
+/// @function scr_tune_picker_get_selected_part_channel()
+/// @description Get the currently selected player MIDI channel from the picker instance, or global.selected_player_tune_channel as fallback.
+/// @returns {real}  Selected channel number, or -1 if none
+/// @reads   global.selected_player_tune_channel
+/// @writes  none
+/// @objects obj_tune_picker (read)
+/// @callers scr_tune_picker_get_selected_entry, scr_button_scripts
 function scr_tune_picker_get_selected_part_channel()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -202,6 +241,11 @@ function scr_tune_picker_get_selected_part_channel()
     return floor(real(scr_tune_picker_get_instance_var(picker, "selected_part_channel", -1)));
 }
 
+/// @function scr_tune_picker_find_part_index(_entry, _channel)
+/// @description Find the 0-based index of a channel in the entry's part_channels list.
+/// @param {struct} _entry  Tune library entry struct
+/// @param {real} _channel  MIDI channel number to find
+/// @returns {real}  Index in part_channels array, or -1 if not found
 function scr_tune_picker_find_part_index(_entry, _channel)
 {
     var part_channels = scr_tune_picker_get_entry_part_channels(_entry);
@@ -214,6 +258,11 @@ function scr_tune_picker_find_part_index(_entry, _channel)
     return -1;
 }
 
+/// @function scr_tune_picker_get_part_label(_entry, _channel)
+/// @description Get a short display label (e.g. "P1") for a given channel within a tune entry.
+/// @param {struct} _entry  Tune library entry struct
+/// @param {real} _channel  MIDI channel number
+/// @returns {string}  Label string or "" if not found
 function scr_tune_picker_get_part_label(_entry, _channel)
 {
     var part_index = scr_tune_picker_find_part_index(_entry, _channel);
@@ -221,6 +270,15 @@ function scr_tune_picker_get_part_label(_entry, _channel)
     return "P" + string(part_index + 1);
 }
 
+/// @function scr_tune_picker_set_selected_part_channel(_entry, _channel)
+/// @description Set the selected player part channel on the picker instance and global. Validates against entry part list; falls back to first available channel.
+/// @param {struct} _entry  Tune library entry struct
+/// @param {real} _channel  Desired MIDI channel (-1 = use first available)
+/// @returns {bool}  true on success, false if picker not found
+/// @reads   none
+/// @writes  global.selected_player_tune_channel
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_set_selected_by_index, scr_tune_picker_clear_selection
 function scr_tune_picker_set_selected_part_channel(_entry, _channel = -1)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -241,6 +299,11 @@ function scr_tune_picker_set_selected_part_channel(_entry, _channel = -1)
     return true;
 }
 
+/// @function scr_tune_library_find_history_index(_history_index, _tune_id)
+/// @description Search a history index struct for a given tune ID. Matches by id field then filename.
+/// @param {struct} _history_index  History index struct with .tunes array (from event_history_load_tune_history_index)
+/// @param {string} _tune_id  Lowercase tune ID to find
+/// @returns {real}  Index in history_index.tunes, or -1 if not found
 function scr_tune_library_find_history_index(_history_index, _tune_id)
 {
     if (!is_struct(_history_index)
@@ -270,6 +333,11 @@ function scr_tune_library_find_history_index(_history_index, _tune_id)
     return -1;
 }
 
+/// @function scr_tune_library_apply_history_entry(_entry, _history_entry)
+/// @description Copy play stats from a history entry into a tune library entry (plays_count, last_played, score, etc.).
+/// @param {struct} _entry  Tune library entry struct to update (mutated in place)
+/// @param {struct} _history_entry  History entry struct with stat fields
+/// @returns {struct}  Updated _entry
 function scr_tune_library_apply_history_entry(_entry, _history_entry)
 {
     if (!is_struct(_entry) || !is_struct(_history_entry)) return _entry;
@@ -313,6 +381,14 @@ function scr_tune_library_apply_history_entry(_entry, _history_entry)
     return _entry;
 }
 
+/// @function scr_tune_library_merge_history(_library)
+/// @description Merge play history stats into all tune entries in the library. Reads per-player context if available.
+/// @param {struct} _library  Library struct with .tunes array (mutated in place)
+/// @returns {struct}  Updated library struct
+/// @reads   global.current_player_id
+/// @writes  none (mutates passed-in library struct)
+/// @objects none
+/// @callers scr_load_tune_library
 function scr_tune_library_merge_history(_library)
 {
     var library_tunes = scr_tune_library_get_tunes(_library);
@@ -395,6 +471,11 @@ function scr_tune_library_merge_history(_library)
     return _library;
 }
 
+/// @function scr_tune_picker_find_index_by_id(_library, _tune_id)
+/// @description Search a library struct for a tune entry matching the given ID.
+/// @param {struct} _library  Library struct with .tunes array
+/// @param {string} _tune_id  Lowercase tune ID to find
+/// @returns {real}  Index in tunes array, or -1 if not found
 function scr_tune_picker_find_index_by_id(_library, _tune_id)
 {
     var tunes = scr_tune_library_get_tunes(_library);
@@ -414,6 +495,10 @@ function scr_tune_picker_find_index_by_id(_library, _tune_id)
     return -1;
 }
 
+/// @function scr_tune_library_get_tunes(_library)
+/// @description Safe accessor for the tunes array within a library struct.
+/// @param {struct} _library  Library struct
+/// @returns {array|undefined}  Tunes array or undefined if missing/invalid
 function scr_tune_library_get_tunes(_library)
 {
     if (!is_struct(_library)) return undefined;
@@ -425,6 +510,12 @@ function scr_tune_library_get_tunes(_library)
     return tunes;
 }
 
+/// @function scr_tune_struct_get(_struct, _key, _default)
+/// @description Safe struct field accessor with a default fallback.
+/// @param {struct} _struct  Any struct
+/// @param {string} _key  Field name
+/// @param _default  Value returned if field is missing
+/// @returns  Field value or _default
 function scr_tune_struct_get(_struct, _key, _default = undefined)
 {
     if (!is_struct(_struct)) return _default;
@@ -432,6 +523,12 @@ function scr_tune_struct_get(_struct, _key, _default = undefined)
     return variable_struct_get(_struct, _key);
 }
 
+/// @function scr_tune_picker_get_instance_var(_picker, _name, _default)
+/// @description Safe instance variable getter for the picker instance. Returns _default if instance is noone or variable doesn't exist.
+/// @param _picker  obj_tune_picker instance id or noone
+/// @param {string} _name  Variable name
+/// @param _default  Fallback value
+/// @returns  Variable value or _default
 function scr_tune_picker_get_instance_var(_picker, _name, _default = undefined)
 {
     if (_picker == noone) return _default;
@@ -439,6 +536,12 @@ function scr_tune_picker_get_instance_var(_picker, _name, _default = undefined)
     return variable_instance_get(_picker, _name);
 }
 
+/// @function scr_tune_picker_set_instance_var(_picker, _name, _value)
+/// @description Safe instance variable setter for the picker instance.
+/// @param _picker  obj_tune_picker instance id or noone
+/// @param {string} _name  Variable name
+/// @param _value  Value to set
+/// @returns {bool}  true on success, false if picker is noone
 function scr_tune_picker_set_instance_var(_picker, _name, _value)
 {
     if (_picker == noone) return false;
@@ -446,6 +549,12 @@ function scr_tune_picker_set_instance_var(_picker, _name, _value)
     return true;
 }
 
+/// @function scr_tune_instance_get(_inst, _name, _default)
+/// @description Safe instance variable getter for any instance. Returns _default if instance doesn't exist or variable is missing.
+/// @param _inst  Any instance id
+/// @param {string} _name  Variable name
+/// @param _default  Fallback value
+/// @returns  Variable value or _default
 function scr_tune_instance_get(_inst, _name, _default = undefined)
 {
     if (_inst == noone || !instance_exists(_inst)) return _default;
@@ -453,6 +562,12 @@ function scr_tune_instance_get(_inst, _name, _default = undefined)
     return variable_instance_get(_inst, _name);
 }
 
+/// @function scr_tune_instance_set(_inst, _name, _value)
+/// @description Safe instance variable setter for any instance.
+/// @param _inst  Any instance id
+/// @param {string} _name  Variable name
+/// @param _value  Value to set
+/// @returns {bool}  true on success, false if instance doesn't exist
 function scr_tune_instance_set(_inst, _name, _value)
 {
     if (_inst == noone || !instance_exists(_inst)) return false;
@@ -460,6 +575,15 @@ function scr_tune_instance_set(_inst, _name, _value)
     return true;
 }
 
+/// @function scr_tune_picker_find_instance_by_ui_name(_obj, _ui_name)
+/// @description Find the first instance of _obj whose ui_name property matches _ui_name.
+/// @param _obj  Object asset to search
+/// @param {string} _ui_name  Target ui_name string
+/// @returns  Matching instance id, or noone if not found
+/// @reads   none
+/// @writes  none
+/// @objects _obj (read all instances)
+/// @callers scr_tune_picker_sync_selected_entry_ui, scr_tune_picker_get_explicit_canvas_anchor
 function scr_tune_picker_find_instance_by_ui_name(_obj, _ui_name)
 {
     var count = instance_number(_obj);
@@ -472,6 +596,10 @@ function scr_tune_picker_find_instance_by_ui_name(_obj, _ui_name)
     return noone;
 }
 
+/// @function scr_tune_picker_get_library(_picker)
+/// @description Get the library struct from a picker instance, validated.
+/// @param _picker  obj_tune_picker instance id
+/// @returns {struct|undefined}  Library struct or undefined if picker/library invalid
 function scr_tune_picker_get_library(_picker)
 {
     var library = scr_tune_picker_get_instance_var(_picker, "library", undefined);
@@ -480,6 +608,13 @@ function scr_tune_picker_get_library(_picker)
     return library;
 }
 
+/// @function scr_tune_picker_clear_selection()
+/// @description Clear the current tune/part selection on the picker instance and related globals.
+/// @returns {bool}  false if picker not found (still clears globals)
+/// @reads   none
+/// @writes  global.tune_selection, global.selected_player_tune_channel
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_set_selected_by_index, scr_tune_picker_activate_index
 function scr_tune_picker_clear_selection()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -498,6 +633,15 @@ function scr_tune_picker_clear_selection()
     return true;
 }
 
+/// @function scr_tune_picker_set_selected_by_index(_index, _part_channel)
+/// @description Select a tune by its index in the library. Stores selection on picker instance and updates global.tune_selection.
+/// @param {real} _index  Zero-based index in the tunes array
+/// @param {real} _part_channel  Preferred part channel; -1 = use first available
+/// @returns {bool}  true on success, false if picker/index invalid
+/// @reads   none
+/// @writes  global.tune_selection, global.selected_player_tune_channel
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_select_index, scr_tune_picker_activate_index, scr_tune_picker_set_selected_by_id
 function scr_tune_picker_set_selected_by_index(_index, _part_channel = -1)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -527,6 +671,14 @@ function scr_tune_picker_set_selected_by_index(_index, _part_channel = -1)
     return true;
 }
 
+/// @function scr_tune_picker_set_selected_by_id(_tune_id)
+/// @description Select a tune by its string ID. Finds the index then delegates to scr_tune_picker_set_selected_by_index.
+/// @param {string} _tune_id  Lowercase tune ID string
+/// @returns {bool}  true on success, false if not found or picker missing
+/// @reads   none
+/// @writes  global.tune_selection, global.selected_player_tune_channel
+/// @objects obj_tune_picker (write)
+/// @callers scr_button_scripts (restore selection after library reload)
 function scr_tune_picker_set_selected_by_id(_tune_id)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -538,6 +690,13 @@ function scr_tune_picker_set_selected_by_id(_tune_id)
     return scr_tune_picker_set_selected_by_index(idx);
 }
 
+/// @function scr_tune_picker_get_selected_entry()
+/// @description Get the currently selected tune entry struct. Prefers ID-based lookup so selection survives reordering.
+/// @returns {struct|undefined}  Selected tune entry struct, or undefined if no valid selection
+/// @reads   none
+/// @writes  none (may update selected_index on picker to resync with id)
+/// @objects obj_tune_picker (read+write)
+/// @callers scr_button_scripts scr_tune_OK, scr_tune_picker_sync_selected_entry_ui
 function scr_tune_picker_get_selected_entry()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -575,6 +734,10 @@ function scr_tune_picker_get_selected_entry()
     return entry;
 }
 
+/// @function scr_tune_picker_get_tune_title(_entry)
+/// @description Extract display title from a tune library entry; falls back to filename.
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {string}  Title string or ""
 function scr_tune_picker_get_tune_title(_entry)
 {
     if (!is_struct(_entry)) return "";
@@ -591,6 +754,10 @@ function scr_tune_picker_get_tune_title(_entry)
     return "";
 }
 
+/// @function scr_tune_picker_get_tune_rhythm_key(_entry)
+/// @description Get the lowercase rhythm key for a tune entry (e.g. "reel", "jig").
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {string}  Lowercase rhythm key, or "unknown" if missing
 function scr_tune_picker_get_tune_rhythm_key(_entry)
 {
     if (!is_struct(_entry)) return "unknown";
@@ -606,6 +773,10 @@ function scr_tune_picker_get_tune_rhythm_key(_entry)
     return rhythm;
 }
 
+/// @function scr_tune_picker_format_label(_raw)
+/// @description Convert a raw snake_case or slugged string to Title Case display label.
+/// @param {string} _raw  Raw string (e.g. "march_slow")
+/// @returns {string}  Formatted label (e.g. "March Slow")
 function scr_tune_picker_format_label(_raw)
 {
     var text = string_trim(string(_raw ?? ""));
@@ -629,6 +800,10 @@ function scr_tune_picker_format_label(_raw)
     return out;
 }
 
+/// @function scr_tune_picker_get_rhythm_label(_rhythm_key)
+/// @description Get a human-readable label for a rhythm filter key.
+/// @param {string} _rhythm_key  Lowercase rhythm key (e.g. "reel", "all")
+/// @returns {string}  Display label (e.g. "All Rhythms", "Reel")
 function scr_tune_picker_get_rhythm_label(_rhythm_key)
 {
     var key = string_lower(string_trim(string(_rhythm_key ?? "all")));
@@ -637,12 +812,20 @@ function scr_tune_picker_get_rhythm_label(_rhythm_key)
     return scr_tune_picker_format_label(key);
 }
 
+/// @function scr_tune_picker_get_sort_mode_label(_sort_mode)
+/// @description Get a human-readable label for a sort mode key.
+/// @param {string} _sort_mode  Sort mode key ("title_asc" or "title_desc")
+/// @returns {string}  Label string
 function scr_tune_picker_get_sort_mode_label(_sort_mode)
 {
     var mode = string_lower(string_trim(string(_sort_mode ?? "title_asc")));
     return (mode == "title_desc") ? "Title Z-A" : "Title A-Z";
 }
 
+/// @function scr_tune_picker_get_tune_meta_line(_entry)
+/// @description Format a compact one-line metadata string for a tune entry (rhythm | meter).
+/// @param {struct} _entry  Tune library entry struct
+/// @returns {string}  Formatted meta line (e.g. "Reel  |  4/4")
 function scr_tune_picker_get_tune_meta_line(_entry)
 {
     if (!is_struct(_entry)) return "";
@@ -654,6 +837,12 @@ function scr_tune_picker_get_tune_meta_line(_entry)
     return rhythm + "  |  " + meter;
 }
 
+/// @function scr_tune_picker_get_struct_value(_entry, _keys, _fallback)
+/// @description Read the first non-empty value from a struct by trying multiple key names in order.
+/// @param {struct} _entry  Any struct
+/// @param {array} _keys  Array of key name strings to try in order
+/// @param _fallback  Default value if none found (default "--")
+/// @returns {string}  First matching non-empty value as string, or fallback
 function scr_tune_picker_get_struct_value(_entry, _keys, _fallback = "--")
 {
     if (!is_struct(_entry) || !is_array(_keys)) return string(_fallback);
@@ -669,6 +858,11 @@ function scr_tune_picker_get_struct_value(_entry, _keys, _fallback = "--")
     return string(_fallback);
 }
 
+/// @function scr_tune_picker_get_tune_meta_cells(_entry, _part_label)
+/// @description Build a 6-element display cell array for a tune row: [rhythm, meter, plays, last_date, score, part_label].
+/// @param {struct} _entry  Tune library entry struct
+/// @param {string} _part_label  Part label suffix (e.g. "P2"); optional
+/// @returns {array}  6-element string array for row display
 function scr_tune_picker_get_tune_meta_cells(_entry, _part_label = "")
 {
     var rhythm = scr_tune_picker_get_rhythm_label(scr_tune_picker_get_tune_rhythm_key(_entry));
@@ -715,6 +909,11 @@ function scr_tune_picker_get_tune_meta_cells(_entry, _part_label = "")
     ];
 }
 
+/// @function scr_tune_picker_fit_text(_text, _max_width)
+/// @description Clip a string to fit within a pixel width, appending "..." if truncated.
+/// @param {string} _text  Text to fit
+/// @param {real} _max_width  Max pixel width (uses current font)
+/// @returns {string}  Fitted string
 function scr_tune_picker_fit_text(_text, _max_width)
 {
     var text = string(_text ?? "");
@@ -731,6 +930,12 @@ function scr_tune_picker_fit_text(_text, _max_width)
     return clipped + ellipsis;
 }
 
+/// @function scr_tune_picker_fit_text_scaled(_text, _max_width, _scale_x)
+/// @description Clip a string to fit within a pixel width accounting for horizontal draw scale.
+/// @param {string} _text  Text to fit
+/// @param {real} _max_width  Max pixel width
+/// @param {real} _scale_x  Horizontal draw scale factor
+/// @returns {string}  Fitted string
 function scr_tune_picker_fit_text_scaled(_text, _max_width, _scale_x)
 {
     var text = string(_text ?? "");
@@ -748,6 +953,13 @@ function scr_tune_picker_fit_text_scaled(_text, _max_width, _scale_x)
     return clipped + ellipsis;
 }
 
+/// @function scr_tune_picker_draw_text_scaled(_x, _y, _text, _scale_x, _scale_y)
+/// @description Draw text at position with explicit x/y scale via draw_text_transformed.
+/// @param {real} _x  Draw x
+/// @param {real} _y  Draw y
+/// @param {string} _text  Text string
+/// @param {real} _scale_x  Horizontal scale
+/// @param {real} _scale_y  Vertical scale
 function scr_tune_picker_draw_text_scaled(_x, _y, _text, _scale_x, _scale_y)
 {
     var sx = max(real(_scale_x), 0.05);
@@ -755,6 +967,13 @@ function scr_tune_picker_draw_text_scaled(_x, _y, _text, _scale_x, _scale_y)
     draw_text_transformed(_x, _y, string(_text ?? ""), sx, sy, 0);
 }
 
+/// @function scr_tune_picker_make_rect(_x1, _y1, _x2, _y2)
+/// @description Create a normalized rectangle struct from two corner points.
+/// @param {real} _x1  First corner x
+/// @param {real} _y1  First corner y
+/// @param {real} _x2  Opposite corner x
+/// @param {real} _y2  Opposite corner y
+/// @returns {struct}  {x1, y1, x2, y2, w, h} with x1<=x2 and y1<=y2
 function scr_tune_picker_make_rect(_x1, _y1, _x2, _y2)
 {
     var x1 = floor(min(_x1, _x2));
@@ -772,24 +991,44 @@ function scr_tune_picker_make_rect(_x1, _y1, _x2, _y2)
     };
 }
 
+/// @function scr_tune_picker_rect_contains(_rect, _x, _y)
+/// @description Test whether a point falls within a rect struct.
+/// @param {struct} _rect  Rectangle struct from scr_tune_picker_make_rect
+/// @param {real} _x  Point x
+/// @param {real} _y  Point y
+/// @returns {bool}
 function scr_tune_picker_rect_contains(_rect, _x, _y)
 {
     if (!is_struct(_rect)) return false;
     return (_x >= _rect.x1 && _x <= _rect.x2 && _y >= _rect.y1 && _y <= _rect.y2);
 }
 
+/// @function scr_tune_picker_get_mouse_gui_x()
+/// @description Get the mouse x position in GUI space. Uses device_mouse_x_to_gui if available.
+/// @returns {real}  Mouse x in GUI coordinates
 function scr_tune_picker_get_mouse_gui_x()
 {
     if (is_undefined(device_mouse_x_to_gui) == false) return device_mouse_x_to_gui(0);
     return display_mouse_get_x();
 }
 
+/// @function scr_tune_picker_get_mouse_gui_y()
+/// @description Get the mouse y position in GUI space. Uses device_mouse_y_to_gui if available.
+/// @returns {real}  Mouse y in GUI coordinates
 function scr_tune_picker_get_mouse_gui_y()
 {
     if (is_undefined(device_mouse_y_to_gui) == false) return device_mouse_y_to_gui(0);
     return display_mouse_get_y();
 }
 
+/// @function scr_tune_picker_collect_canvas_anchor_bounds(_tune_layer)
+/// @description Scan all obj_UI_parent instances on a layer to compute the bounding region for the tune picker canvas, plus special rows for close/metro/ok buttons.
+/// @param {real} _tune_layer  UI layer number to filter by; -1 = no filter
+/// @returns {struct}  Bounds struct: {left, top, right, bottom, close_bottom, metro_top, ok_top, count}
+/// @reads   none
+/// @writes  none
+/// @objects obj_UI_parent (read all instances)
+/// @callers scr_tune_picker_get_canvas_fallback_bounds
 function scr_tune_picker_collect_canvas_anchor_bounds(_tune_layer)
 {
     var result = {
@@ -850,6 +1089,14 @@ function scr_tune_picker_collect_canvas_anchor_bounds(_tune_layer)
     return result;
 }
 
+/// @function scr_tune_picker_get_explicit_canvas_anchor(_tune_layer)
+/// @description Find the "tune_library_canvas_anchor" instance and return its bounding rect.
+/// @param {real} _tune_layer  UI layer number (for filtering)
+/// @returns {struct|undefined}  Rect struct or undefined if anchor not found or too small
+/// @reads   none
+/// @writes  none
+/// @objects obj_UI_parent (read)
+/// @callers scr_tune_picker_get_canvas_fallback_bounds
 function scr_tune_picker_get_explicit_canvas_anchor(_tune_layer)
 {
     var anchor = scr_tune_picker_find_instance_by_ui_name(obj_UI_parent, "tune_library_canvas_anchor");
@@ -865,6 +1112,15 @@ function scr_tune_picker_get_explicit_canvas_anchor(_tune_layer)
     return scr_tune_picker_make_rect(ax1, ay1, ax2, ay2);
 }
 
+/// @function scr_tune_picker_get_canvas_fallback_bounds(_tune_layer, _prefer_window_bounds)
+/// @description Compute the canvas drawing area for the tune picker. Uses explicit anchor first, then scans obj_UI_parent bounds, then falls back to a fixed proportional region.
+/// @param {real} _tune_layer  UI layer number for anchor search
+/// @param {bool} _prefer_window_bounds  If true, requires 3+ anchors (stricter window detection)
+/// @returns {struct|undefined}  Rect struct or undefined if no viable region found
+/// @reads   none
+/// @writes  none
+/// @objects obj_UI_parent (read)
+/// @callers scr_tune_picker_update_canvas_layout
 function scr_tune_picker_get_canvas_fallback_bounds(_tune_layer, _prefer_window_bounds = false)
 {
     var explicit_anchor = scr_tune_picker_get_explicit_canvas_anchor(_tune_layer);
@@ -942,6 +1198,13 @@ function scr_tune_picker_get_canvas_fallback_bounds(_tune_layer, _prefer_window_
     return scr_tune_picker_make_rect(list_left, list_top, list_right, list_bottom);
 }
 
+/// @function scr_tune_picker_sync_selected_entry_ui()
+/// @description Sync the UI fields for the currently selected tune entry (title display, BPM field, time sig, pattern list).
+/// @returns {bool}  true if a valid entry was synced, false otherwise
+/// @reads   global.metronome_pattern_selection, global.metronome_pattern_options
+/// @writes  global.gameinfo_title, global.selected_tune_time_sig, global.metronome_pattern_options, global.metronome_pattern_selection (via metronome_update_pattern_list)
+/// @objects obj_tune_picker (read), obj_field_base metro_field_2/3 (write)
+/// @callers scr_tune_picker_select_index, scr_tune_picker_activate_index
 function scr_tune_picker_sync_selected_entry_ui()
 {
     var entry = scr_tune_picker_get_selected_entry();
@@ -975,6 +1238,14 @@ function scr_tune_picker_sync_selected_entry_ui()
     return true;
 }
 
+/// @function scr_tune_picker_select_index(_index)
+/// @description Select a tune by index, sync the UI fields, and refresh visible rows.
+/// @param {real} _index  Zero-based index in the filtered tunes array
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  global.tune_selection, global.gameinfo_title, global.selected_tune_time_sig
+/// @objects obj_tune_picker (write), obj_field_base (write)
+/// @callers scr_tune_picker_activate_index, scr_tune_picker_handle_click
 function scr_tune_picker_select_index(_index)
 {
     if (!scr_tune_picker_set_selected_by_index(_index)) return false;
@@ -984,6 +1255,14 @@ function scr_tune_picker_select_index(_index)
     return true;
 }
 
+/// @function scr_tune_picker_activate_index(_index)
+/// @description Single-click selection or multi-part cycling. First click selects the tune; second click advances to next part; clicking last part clears selection.
+/// @param {real} _index  Zero-based index in the library tunes array
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  global.tune_selection, global.selected_player_tune_channel, global.gameinfo_title, global.selected_tune_time_sig
+/// @objects obj_tune_picker (write), obj_field_base (write)
+/// @callers scr_tune_picker_handle_click
 function scr_tune_picker_activate_index(_index)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1022,6 +1301,14 @@ function scr_tune_picker_activate_index(_index)
     return true;
 }
 
+/// @function scr_tune_picker_get_visible_source_index(_row_idx)
+/// @description Map a visible row index (0-based from top of list) to the corresponding source index in the library tunes array, accounting for scroll offset and filter.
+/// @param {real} _row_idx  0-based row index in the visible list
+/// @returns {real}  Source index in tunes array, or -1 if out of range
+/// @reads   none
+/// @writes  none
+/// @objects obj_tune_picker (read)
+/// @callers scr_tune_picker_handle_click, scr_tune_picker_draw_canvas
 function scr_tune_picker_get_visible_source_index(_row_idx)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1051,6 +1338,13 @@ function scr_tune_picker_get_visible_source_index(_row_idx)
     return source_idx;
 }
 
+/// @function scr_tune_picker_rebuild_view_model()
+/// @description Rebuild the picker's filtered/sorted index list. Also refreshes rhythm_options and clamps scroll offset.
+/// @returns {bool}  true on success, false if picker/library not available
+/// @reads   none
+/// @writes  none (mutates picker instance vars: view_filtered_indices, view_rhythm_options, view_scroll_offset, view_sort_mode, view_filter_rhythm)
+/// @objects obj_tune_picker (read+write)
+/// @callers scr_tune_picker_set_filter_rhythm, scr_tune_picker_set_sort_mode, scr_tune_picker_refresh_visible_rows
 function scr_tune_picker_rebuild_view_model()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1142,6 +1436,14 @@ function scr_tune_picker_rebuild_view_model()
     return true;
 }
 
+/// @function scr_tune_picker_set_filter_rhythm(_rhythm_key)
+/// @description Set the rhythm filter key on the picker, reset scroll, and refresh visible rows.
+/// @param {string} _rhythm_key  Rhythm key (e.g. "reel", "all")
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker instance: view_filter_rhythm, view_scroll_offset)
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_cycle_filter_rhythm, scr_button_scripts
 function scr_tune_picker_set_filter_rhythm(_rhythm_key)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1155,6 +1457,14 @@ function scr_tune_picker_set_filter_rhythm(_rhythm_key)
     return scr_tune_picker_refresh_visible_rows();
 }
 
+/// @function scr_tune_picker_set_sort_mode(_sort_mode)
+/// @description Set the sort mode on the picker and refresh visible rows.
+/// @param {string} _sort_mode  "title_asc" or "title_desc"
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker instance: view_sort_mode)
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_cycle_sort_mode, scr_button_scripts
 function scr_tune_picker_set_sort_mode(_sort_mode)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1167,6 +1477,14 @@ function scr_tune_picker_set_sort_mode(_sort_mode)
     return scr_tune_picker_refresh_visible_rows();
 }
 
+/// @function scr_tune_picker_scroll_rows(_delta_rows)
+/// @description Scroll the picker list by a number of rows, clamped to valid range.
+/// @param {real} _delta_rows  Rows to scroll (positive = down, negative = up)
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker instance: view_scroll_offset)
+/// @objects obj_tune_picker (write)
+/// @callers obj_tune_picker (mouse wheel event), scr_button_scripts
 function scr_tune_picker_scroll_rows(_delta_rows)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1189,6 +1507,14 @@ function scr_tune_picker_scroll_rows(_delta_rows)
     return true;
 }
 
+/// @function scr_tune_picker_cycle_filter_rhythm(_delta)
+/// @description Advance the rhythm filter by _delta steps through available rhythm options.
+/// @param {real} _delta  Steps to advance (+1 or -1 typically)
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker: view_filter_rhythm, view_scroll_offset)
+/// @objects obj_tune_picker (write)
+/// @callers scr_button_scripts (filter arrow buttons)
 function scr_tune_picker_cycle_filter_rhythm(_delta)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1218,6 +1544,14 @@ function scr_tune_picker_cycle_filter_rhythm(_delta)
     return scr_tune_picker_set_filter_rhythm(options[next_idx]);
 }
 
+/// @function scr_tune_picker_cycle_sort_mode(_delta)
+/// @description Cycle through available sort modes by _delta steps.
+/// @param {real} _delta  Steps to advance
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker: view_sort_mode)
+/// @objects obj_tune_picker (write)
+/// @callers scr_button_scripts (sort toggle button)
 function scr_tune_picker_cycle_sort_mode(_delta)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1234,6 +1568,13 @@ function scr_tune_picker_cycle_sort_mode(_delta)
     return scr_tune_picker_set_sort_mode(modes[next_idx]);
 }
 
+/// @function scr_tune_picker_update_canvas_layout()
+/// @description Recompute the canvas bounds, row height, and visible row count for the picker. Stores layout state on the picker instance. Also hides legacy row UI instances.
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker instance: canvas_rect, row_height, view_visible_rows, etc.)
+/// @objects obj_tune_picker (write), obj_field_base (hide legacy), obj_btn_check (hide legacy)
+/// @callers obj_tune_picker Draw event, scr_tune_picker_draw_canvas bootstrap
 function scr_tune_picker_update_canvas_layout()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1479,6 +1820,13 @@ function scr_tune_picker_update_canvas_layout()
     return true;
 }
 
+/// @function scr_tune_picker_draw_box(_rect, _sprite, _hovered, _selected, _outline)
+/// @description Draw a background sprite stretched to a rect, with optional hover/selected tinting and outline.
+/// @param {struct} _rect  Rectangle struct from scr_tune_picker_make_rect
+/// @param _sprite  Sprite asset to draw as background
+/// @param {bool} _hovered  Apply hover colour tint if true
+/// @param {bool} _selected  Apply selected colour tint if true
+/// @param {bool} _outline  Draw border outline if true
 function scr_tune_picker_draw_box(_rect, _sprite, _hovered = false, _selected = false, _outline = true)
 {
     if (!is_struct(_rect) || _rect.w <= 0 || _rect.h <= 0) return;
@@ -1522,6 +1870,13 @@ function scr_tune_picker_draw_box(_rect, _sprite, _hovered = false, _selected = 
     draw_set_color(c_white);
 }
 
+/// @function scr_tune_picker_draw_center_text(_rect, _text, _font, _colour, _scale)
+/// @description Draw text centred within a rect using a given font, colour, and scale.
+/// @param {struct} _rect  Rectangle struct
+/// @param {string} _text  Text to draw
+/// @param _font  Font asset
+/// @param {real} _colour  Draw colour
+/// @param {real} _scale  Uniform scale factor (default 1)
 function scr_tune_picker_draw_center_text(_rect, _text, _font, _colour, _scale = 1)
 {
     if (!is_struct(_rect)) return;
@@ -1542,6 +1897,15 @@ function scr_tune_picker_draw_center_text(_rect, _text, _font, _colour, _scale =
     draw_set_color(c_white);
 }
 
+/// @function scr_tune_picker_is_pointer_over_list(_x, _y)
+/// @description Test whether a GUI-space point is within the picker's current list rows rect.
+/// @param {real} _x  GUI mouse x
+/// @param {real} _y  GUI mouse y
+/// @returns {bool}
+/// @reads   none
+/// @writes  none
+/// @objects obj_tune_picker (read)
+/// @callers obj_tune_picker Step event (hover detection)
 function scr_tune_picker_is_pointer_over_list(_x, _y)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1555,6 +1919,15 @@ function scr_tune_picker_is_pointer_over_list(_x, _y)
         || scr_tune_picker_rect_contains(scrollbar_rect, _x, _y);
 }
 
+/// @function scr_tune_picker_handle_click(_gui_x, _gui_y)
+/// @description Route a GUI-space click to the appropriate picker action: tune selection, scroll, filter, or sort.
+/// @param {real} _gui_x  GUI mouse x at click
+/// @param {real} _gui_y  GUI mouse y at click
+/// @returns {bool}  true if click was handled
+/// @reads   none
+/// @writes  global.tune_selection, global.selected_player_tune_channel, global.gameinfo_title, global.selected_tune_time_sig
+/// @objects obj_tune_picker (read+write)
+/// @callers obj_tune_picker Mouse_1 event
 function scr_tune_picker_handle_click(_gui_x, _gui_y)
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1687,6 +2060,12 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
     return scr_tune_picker_rect_contains(bounds, _gui_x, _gui_y);
 }
 
+/// @function scr_tune_picker_draw_canvas()
+/// @description Draw the complete tune picker canvas: header, filter/sort controls, tune rows, and scrollbar. Calls update_canvas_layout if needed.
+/// @reads   global.tune_selection, global.selected_player_tune_channel
+/// @writes  none
+/// @objects obj_tune_picker (read), obj_field_base (legacy row hide)
+/// @callers obj_tune_picker Draw GUI event
 function scr_tune_picker_draw_canvas()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -1962,6 +2341,13 @@ function scr_tune_picker_draw_canvas()
     return true;
 }
 
+/// @function scr_tune_picker_refresh_visible_rows()
+/// @description Rebuild the view model and trigger a canvas redraw. Main entry point after any state change that affects the displayed list.
+/// @returns {bool}  true on success
+/// @reads   none
+/// @writes  none (mutates picker view model vars)
+/// @objects obj_tune_picker (write)
+/// @callers scr_tune_picker_select_index, scr_tune_picker_set_filter_rhythm, scr_tune_picker_scroll_rows, scr_tune_picker_sync_selected_entry_ui
 function scr_tune_picker_refresh_visible_rows()
 {
     var picker = instance_find(obj_tune_picker, 0);
@@ -2169,6 +2555,9 @@ function scr_tune_picker_populate()
         scr_tune_picker_set_instance_var(picker, "selected_tune_id", "");
         scr_tune_picker_set_instance_var(picker, "selected_tune_filename", "");
         scr_tune_picker_set_instance_var(picker, "selected_part_channel", -1);
+        // Always open picker in tunes mode so the user can select a tune after playing a set
+        scr_tune_picker_set_instance_var(picker, "view_mode", "tunes");
+        scr_tune_picker_set_instance_var(picker, "view_layout", undefined); // force layout rebuild
     }
 
     if (picker != noone && string_length(previous_selected_id) > 0) {
@@ -2208,8 +2597,10 @@ function scr_tune_scan_dir(_folder)
             if (string_copy(entry, 1, 1) != ".") {
                 var fp = _folder + entry;
                 if (!directory_exists(fp)) {
+                    var entry_lower = string_lower(entry);
                     var ext = string_lower(string_copy(entry, string_length(entry) - 4, 5));
-                    if (ext == ".json" && entry != "tune_library.json" && entry != "score_images.json") {
+                    var is_score_snippets = string_pos(".score_snippets.json", entry_lower) > 0;
+                    if (ext == ".json" && entry != "tune_library.json" && entry != "score_images.json" && !is_score_snippets) {
                         show_debug_message("  found tune: " + fp);
                         array_push(found, fp);
                     }
@@ -2644,10 +3035,12 @@ function scr_set_builder_save(_name)
         array_push(tunes_out, save_entry);
     }
 
+    var _bpm_pct = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
     var payload = {
         set:    { title: name, id: slug, description: "" },
         tunes:  tunes_out,
-        ending: { type: "none" }
+        ending: { type: "none" },
+        playback_overrides: { bpm_percent: _bpm_pct }
     };
 
     if (!directory_exists(folder)) directory_create(folder);
@@ -2744,12 +3137,37 @@ function scr_set_builder_draw_right_pane(_x1, _y1, _x2, _y2, _layout)
     var save_col = save_active ? c_white : make_color_rgb(90, 100, 115);
     scr_tune_picker_draw_center_text(save_rect, save_label, fnt_button, save_col, control_scale);
 
+    // --- Set speed row ---
+    var speed_pct    = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
+    var speed_row_h  = 26;
+    var speed_row_y1 = name_rect.y2 + 6;
+    var speed_row_y2 = speed_row_y1 + speed_row_h;
+    var speed_btn_w  = 22;
+    var speed_minus_rect = scr_tune_picker_make_rect(_x1 + pad, speed_row_y1 + 2, _x1 + pad + speed_btn_w, speed_row_y2 - 2);
+    var speed_plus_rect  = scr_tune_picker_make_rect(_x2 - pad - speed_btn_w, speed_row_y1 + 2, _x2 - pad, speed_row_y2 - 2);
+    var speed_label_rect = scr_tune_picker_make_rect(speed_minus_rect.x2 + 2, speed_row_y1, speed_plus_rect.x1 - 2, speed_row_y2);
+    scr_tune_picker_set_instance_var(picker, "_sb_speed_minus_rect", speed_minus_rect);
+    scr_tune_picker_set_instance_var(picker, "_sb_speed_plus_rect",  speed_plus_rect);
+
+    var sm_hov = scr_tune_picker_rect_contains(speed_minus_rect, gui_x, gui_y);
+    var sp_hov = scr_tune_picker_rect_contains(speed_plus_rect,  gui_x, gui_y);
+    draw_set_alpha(0.9);
+    draw_set_color(sm_hov ? make_color_rgb(80, 100, 130) : make_color_rgb(50, 60, 75));
+    draw_rectangle(speed_minus_rect.x1, speed_minus_rect.y1, speed_minus_rect.x2, speed_minus_rect.y2, false);
+    draw_set_color(sp_hov ? make_color_rgb(80, 100, 130) : make_color_rgb(50, 60, 75));
+    draw_rectangle(speed_plus_rect.x1, speed_plus_rect.y1, speed_plus_rect.x2, speed_plus_rect.y2, false);
+    draw_set_alpha(1);
+    scr_tune_picker_draw_center_text(speed_minus_rect, "-", fnt_button, c_white, control_scale);
+    scr_tune_picker_draw_center_text(speed_plus_rect,  "+", fnt_button, c_white, control_scale);
+    var speed_col = (speed_pct == 1.0) ? c_ltgray : make_color_rgb(255, 210, 100);
+    scr_tune_picker_draw_center_text(speed_label_rect, "Set speed: " + string(round(speed_pct * 100)) + "%", fnt_button, speed_col, control_scale);
+
     // --- Slot list ---
     var slot_row_h   = 36;
     var slot_row_gap = 4;
     var btn_w        = 18;
     var btn_gap      = 3;
-    var slot_list_y1 = name_rect.y2 + 6;
+    var slot_list_y1 = speed_row_y2 + 4;
     var slot_list_y2 = save_rect.y1 - 6;
     var slot_stride  = slot_row_h + slot_row_gap;
     var slot_visible_rows = max(1, floor((max(0, slot_list_y2 - slot_list_y1) + slot_row_gap) / slot_stride));
@@ -3020,6 +3438,20 @@ function scr_set_builder_handle_click_right(_gui_x, _gui_y)
     // Click outside name field stops editing
     scr_tune_picker_set_instance_var(picker, "set_name_editing", false);
 
+    // --- Set speed −/+ ---
+    var speed_minus_r = scr_tune_picker_get_instance_var(picker, "_sb_speed_minus_rect", undefined);
+    var speed_plus_r  = scr_tune_picker_get_instance_var(picker, "_sb_speed_plus_rect",  undefined);
+    if (scr_tune_picker_rect_contains(speed_minus_r, _gui_x, _gui_y)) {
+        var cur_sp = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
+        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", clamp(round((cur_sp - 0.05) * 100) / 100, 0.5, 2.0));
+        return true;
+    }
+    if (scr_tune_picker_rect_contains(speed_plus_r, _gui_x, _gui_y)) {
+        var cur_sp = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
+        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", clamp(round((cur_sp + 0.05) * 100) / 100, 0.5, 2.0));
+        return true;
+    }
+
     // --- Save button ---
     var save_rect = scr_tune_picker_get_instance_var(picker, "_sb_save_rect", undefined);
     if (scr_tune_picker_rect_contains(save_rect, _gui_x, _gui_y)) {
@@ -3199,12 +3631,15 @@ function scr_set_builder_load_from_file(_filepath)
     }
 
     var set_title = is_struct(set_meta) ? string(scr_tune_struct_get(set_meta, "title", "Set")) : "Set";
+    var _loaded_overrides = scr_tune_struct_get(parsed, "playback_overrides", undefined);
+    var _loaded_bpm_pct   = is_struct(_loaded_overrides) ? real(scr_tune_struct_get(_loaded_overrides, "bpm_percent", 1.0)) : 1.0;
     scr_tune_picker_set_instance_var(picker, "set_builder_slots",    new_slots);
     scr_tune_picker_set_instance_var(picker, "set_name_text",        set_title);
     scr_tune_picker_set_instance_var(picker, "set_builder_sel_slot", -1);
     scr_tune_picker_set_instance_var(picker, "set_builder_scroll_offset", 0);
     scr_tune_picker_set_instance_var(picker, "set_confirm_overwrite", false);
     scr_tune_picker_set_instance_var(picker, "_sb_pane_view",        "build");
+    scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent",  _loaded_bpm_pct);
     return true;
 }
 
@@ -3348,9 +3783,10 @@ function scr_set_builder_arm_for_play()
         array_push(tunes_out, tune_entry);
     }
 
-    global.active_set.title    = set_name;
-    global.active_set.id       = slug;
-    global.active_set.tunes    = tunes_out;
+    global.active_set.title           = set_name;
+    global.active_set.id              = slug;
+    global.active_set.tunes           = tunes_out;
+    global.active_set.set_bpm_percent = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
     // is_loaded stays false until scr_set_preprocess_and_build_playback succeeds
 
     // Apply first slot's BPM to the global so the main-menu UI shows a sensible value

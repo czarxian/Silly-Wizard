@@ -1,8 +1,10 @@
 Excel Tune Structure Specification
 
-This document captures the complete metadata and event-grid structure used for tune definition in the Silly Wizard project. It consolidates the 48-row metadata block, the 19-column event structure, and the embellishment library into a single authoritative reference.
+This document captures the complete metadata and event-grid structure used for tune definition in the Silly Wizard project. It consolidates the 48-row metadata block, the 23-column event structure, and the embellishment library into a single authoritative reference.
 
 **Architecture Note**: This document reflects a pattern-based embellishment system (Model B) where ABC sequences remain literal in Excel, and GameMaker performs intelligent pattern matching to identify embellishment types, apply timing, and handle variants.
+
+For transition-tune authoring rules (cut metadata, set ordering, ABC phrase patterns, and validation), see `TRANSITION_TUNE_TEMPLATE.md`.
 
 1. Metadata Block (Rows 1–48)
 
@@ -56,7 +58,7 @@ time_sig_den
 
 abc_source
 
-1.2 Metronome Metadata
+1.2 Metronome Metadata (legacy block)
 
 enabled
 
@@ -75,6 +77,8 @@ click_duration_ms
 channel
 
 velocity
+
+Note: These rows are currently exported/loaded but not consumed by runtime metronome logic. Transition metadata now uses the dedicated Transition category rows described below.
 
 1.3 Performance Metadata
 
@@ -120,7 +124,43 @@ transcription note (Z)
 
 user defined (U)
 
-2. Event Grid (Rows 49–50 onward)
+1.5 Parts Table (Columns G-K, rows 2-25)
+
+The parts table sits alongside the metadata block in the same rows. Each used row defines one voice part for the parser to process.
+
+| Column | Field | Purpose |
+|---|---|---|
+| G | Type | Part role: `metadata` (ABC header block), `melody`, `harmony1`, `harmony2`, etc. |
+| H | Voice | Instrument label: `pipes_melody`, `pipes_harmony1`, etc. |
+| I | ABC | Main part ABC (for transition tunes this is the bridge segment) |
+| J | Tail Add | Optional transition-tail replacement ABC (borrowed from prior tune context) |
+| K | Head Add | Optional transition-head replacement ABC (borrowed from following tune context) |
+
+Rules:
+- The row with Type=`metadata` provides the ABC header block (`X:`, `T:`, `M:`, `L:`, `R:`, `C:`, `Q:`, `K:` fields). Required exactly once.
+- Non-transition tunes use column I only (columns J/K blank).
+- Transition tunes use explicit segmented authoring on the melody row: `Tail Add` (col J), bridge (`ABC`, col I), `Head Add` (col K).
+- For transition tunes, parser order is tail -> bridge -> head.
+- The VBA parser (`ParseAllParts`) scans rows 2-25 and reads columns G/H/I/J/K.
+- The parts table is populated manually when setting up a new tune sheet.
+
+1.6 Transition Metadata Rows
+
+Transition rows are authored in the metadata block (rows 2-48) under category `Transition`.
+
+| Variable | Purpose |
+|---|---|
+| prior_tune | Required reference to the prior tune worksheet name/code |
+| following_tune | Required reference to the following tune worksheet name/code |
+| tail_cut_measures | Number of whole measures replaced at the prior tune tail |
+| head_cut_measures | Number of whole measures replaced at the following tune head |
+
+Rules:
+- `prior_tune` and `following_tune` are authoritative references; key/meter context for Tail Add and Head Add is resolved from those referenced tune sheets.
+- `tail_cut_measures` and `head_cut_measures` are measure counts (not beats).
+- Bridge length is inferred from parsed bridge ABC; no separate `bridge_measures` field is required.
+
+2. Event Grid (Header row 50, data from row 51)
 
 Each row represents a musical event. These columns define timing, structure, ornamentation, and playback behavior.
 
@@ -133,45 +173,35 @@ Each row represents a musical event. These columns define timing, structure, orn
 
 This structure enables both automated pattern matching and instance-specific customization.
 
-2.1 Event Columns
+2.1 Event Columns (23-column schema)
 
-part
+Columns are in order left-to-right. VBA constant names are in `Excel - Parse_ABC.txt`.
 
-measure
-
-beat
-
-division
-
-type
-
-note_letter
-
-note_midi
-
-written_duration_units
-
-adjusted_duration_units
-
-embellishment_literal
-
-embellishment_preceding_note
-
-embellishment_target_note
-
-embellishment_alt_anchor
-
-embellishment_alt_timing
-
-structure
-
-total_units
-
-start_time_ms
-
-end_time_ms
-
-tempo_bpm
+| Col | Group | Field | Notes |
+|---|---|---|---|
+| 1 | event | event_ID | Sequential integer |
+| 2 | event | type | `note`, `embellishment`, `structure` |
+| 3 | event | structure | `bar` for barlines, blank otherwise |
+| 4 | location | part | Part number (1-based) |
+| 5 | location | measure | Measure number within part |
+| 6 | location | beat | Beat position (0-based within measure) |
+| 7 | location | division | Sub-beat offset (fractional beat, e.g. 0.75) |
+| 8 | location | phrase | Phrase tag (currently unpopulated) |
+| 9 | note | letter | Note letter A–g, blank for embellishments/bars |
+| 10 | note | midi_value | MIDI note number, blank for embellishments/bars |
+| 11 | duration | written | Written duration units |
+| 12 | duration | adjusted | Adjusted duration units (after broken rhythm, etc.) |
+| 13 | duration | total_units | Running total of units from tune start |
+| 14 | embellishment | preceding_note | Note letter immediately before embellishment |
+| 15 | embellishment | literal | Raw ABC grace sequence e.g. `{gBd}` |
+| 16 | embellishment | target_note | Main melody note being embellished |
+| 17 | embellishment | alt_anchor | Per-instance override of library anchor_index (blank = use library) |
+| 18 | embellishment | alt_timing | Per-instance override of timing multiplier (blank = use library) |
+| 19 | timing | broken_dir | Broken rhythm direction: `>` (dotted), `<` (cut), blank |
+| 20 | timing | start_time_ms | Note on time in milliseconds from tune start |
+| 21 | timing | end_time_ms | Note off time in milliseconds from tune start |
+| 22 | timing | tempo_bpm | Tempo at this event |
+| 23 | voice | voice | Voice/instrument: `pipes`, or other identifier |
 
 3. Embellishment Library Sheet
 

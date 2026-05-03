@@ -297,24 +297,41 @@ if (!variable_global_exists("METRONOME_CONFIG")) {
 }
 
 /// @function metronome_normalize_time_sig(_time_sig)
-/// @description Normalize common time symbols and missing meters to a "n/d" string.
+/// @description Normalize common time symbols and missing meters to a canonical "n/d" string. Delegates to timing_normalize_time_sig.
+/// @param {string} _time_sig  Raw time signature (e.g. "C", "C|", "6/8", "")
+/// @returns {string}  Canonical time signature e.g. "4/4"
+/// @reads   none
+/// @writes  none
+/// @objects none
+/// @callers metronome_generate_events, metronome_set_pattern, metronome_update_pattern_list, scr_set_scripts
 
 function metronome_normalize_time_sig(_time_sig) {
     return timing_normalize_time_sig(_time_sig);
 }
 
 /// @function metronome_get_effective_quarter_bpm(_bpm, _time_sig)
-/// @description Convert displayed BPM to quarter-note BPM used for timing.
-/// In cut time (2/2), BPM is interpreted as half-note BPM.
+/// @description Convert displayed BPM to quarter-note BPM used for timing. In cut time (2/2), BPM is interpreted as half-note BPM. Delegates to timing_get_effective_quarter_bpm.
+/// @param {real} _bpm  Displayed tempo from tune metadata
+/// @param {string} _time_sig  Canonical time signature string
+/// @returns {real}  Quarter-note BPM for ms-per-beat calculations
+/// @reads   none
+/// @writes  none
+/// @objects none
+/// @callers metronome_generate_events, metronome_generate_countin_events
 
 function metronome_get_effective_quarter_bpm(_bpm, _time_sig) {
     return timing_get_effective_quarter_bpm(_bpm, _time_sig);
 }
 
-/// @function metronome_generate_events(_tune)
-/// @description Generate metronome MIDI events based on tune BPM and time signature
-/// @param _tune Tune struct with .bpm, .time_signature, and event timing
-/// @returns Array of MIDI event objects for metronome beats
+/// @function metronome_generate_events(_tune, _settings)
+/// @description Generate metronome MIDI events for all beats in a tune. Settings override the current globals per-call.
+/// @param {struct} _tune  Tune struct (obj_tune instance or equivalent) with .tune_data.tune_metadata
+/// @param {struct} _settings  Optional per-call overrides: {bpm, metronome_mode, metronome_pattern, metronome_volume}
+/// @returns {array}  Array of MIDI event structs for all metronome beats in the tune
+/// @reads   global.METRONOME_CONFIG, global.metronome_mode, global.metronome_mode_options, global.metronome_pattern_selection, global.metronome_pattern_options, global.metronome_volume
+/// @writes  global.METRONOME_CONFIG (velocity fields synced from volume on each call)
+/// @objects none
+/// @callers scr_tune_scripts tune_build_events, scr_button_scripts, scr_set_scripts
 
 function metronome_generate_events(_tune, _settings) {
     // Apply optional overrides (from set item)
@@ -408,121 +425,239 @@ function metronome_generate_events(_tune, _settings) {
         return [];
     }
     
-    // Find where measure 1, beat 1 starts
-    // Prefer the preprocessed structure marker for bar/measure 1.
-    // This avoids false offsets for tunes that legitimately start at time 0.
-    var measure_1_start_ms = 0;
     var preprocessed = _tune.events;  // These have the calculated .time field
 
-    // First pass: explicit bar marker for measure 1.
+    // Calculate total tune duration
+    var tune_length_ms = 0;
     for (var i = 0; i < array_length(preprocessed); i++) {
-        var ev = preprocessed[i];
-        if (ev.type == "marker"
-            && (ev.marker_type ?? "") == "bar"
-            && real(ev.measure ?? 0) == 1) {
-            measure_1_start_ms = ev.time;
-            show_debug_message("Found measure 1 bar marker at " + string(measure_1_start_ms) + " ms");
-            break;
+        if (preprocessed[i].time > tune_length_ms) {
+            tune_length_ms = preprocessed[i].time;
         }
     }
 
-    // Fallback: first note in measure 1 if marker is unavailable.
-    if (measure_1_start_ms == 0) {
-        for (var i = 0; i < array_length(preprocessed); i++) {
-            var ev = preprocessed[i];
-            if (ev.type == "note_on" && real(ev.measure ?? 0) >= 1) {
-                measure_1_start_ms = ev.time;
-                show_debug_message("Fallback measure 1 note_on at " + string(measure_1_start_ms) + " ms");
-                break;
-            }
-        }
-    }
-    
-    // Calculate total tune duration
-    var tune_length_ms = 0;
-    for (var i = 0; i < array_length(_tune.events); i++) {
-        if (_tune.events[i].time > tune_length_ms) {
-            tune_length_ms = _tune.events[i].time;
-        }
-    }
-    
     // Calculate measure duration from time signature
     var time_sig_parts = string_split(time_sig, "/");
     var beats_per_measure = real(time_sig_parts[0]);  // e.g., 4 in "4/4"
     var denom = real(time_sig_parts[1]);
     var beat_unit_ms = ms_per_quarter * (4 / denom);
     var measure_duration_ms = beats_per_measure * beat_unit_ms;
-    
-    // Generate metronome events for entire tune duration
+
+    // Prefer explicit beat markers from preprocessing.
+    // This preserves pickup alignment, so accents follow the real beat phase.
+    var beat_markers = [];
+    for (var i = 0; i < array_length(preprocessed); i++) {
+        var ev = preprocessed[i];
+        if (!is_struct(ev)) continue;
+        if ((ev.type ?? "") != "marker") continue;
+        if ((ev.marker_type ?? "") != "beat") continue;
+        if (real(ev.measure ?? 0) < 1) continue;
+        array_push(beat_markers, ev);
+    }
+
+    // Map measure:beat -> earliest note_on onset in that beat.
+    // This lets beat clicks align with opening gracenotes when they precede
+    // the principal melody note at beat start.
+    var earliest_note_on_by_beat = {};
+    for (var i = 0; i < array_length(preprocessed); i++) {
+        var nev = preprocessed[i];
+        if (!is_struct(nev)) continue;
+        if ((nev.type ?? "") != "note_on") continue;
+        var n_measure = floor(real(nev.measure ?? 0));
+        var n_beat = floor(real(nev.beat ?? 0));
+        if (n_measure < 1 || n_beat < 1) continue;
+        var n_time = real(nev.time ?? 0);
+        var beat_key = string(n_measure) + ":" + string(n_beat);
+        if (!variable_struct_exists(earliest_note_on_by_beat, beat_key)
+            || n_time < real(earliest_note_on_by_beat[$ beat_key])) {
+            earliest_note_on_by_beat[$ beat_key] = n_time;
+        }
+    }
+
     var metro_events = [];
-    var current_measure = 1;  // Start at measure 1
-    var current_time_ms = measure_1_start_ms;  // Start where measure 1 begins
-    
-    while (current_time_ms < tune_length_ms) {
-        // Play each beat in the pattern for this measure
-        for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
-            var beat_def = pattern[beat_idx];
-            var beat_time_ms = current_time_ms + (beat_def.beat_position * beat_unit_ms);
-            
-            // Add a beat marker event (for logging, separate from MIDI)
-            var beat_number = floor(beat_def.beat_position) + 1;  // 1-based beat number
-            var beat_fraction = beat_def.beat_position - floor(beat_def.beat_position);
+
+    if (array_length(beat_markers) > 0) {
+        for (var bmi = 0; bmi < array_length(beat_markers); bmi++) {
+            var bmk = beat_markers[bmi];
+            var beat_time_ms = real(bmk.time ?? 0);
+            var beat_number = max(1, floor(real(bmk.beat ?? 1)));
+            var beat_fraction = real(bmk.beat_fraction ?? 0);
+            var measure_number = max(1, floor(real(bmk.measure ?? 1)));
+
+            // Allow the click to lead to the first note_on in the same beat
+            // (commonly a gracenote cluster), but cap the shift to avoid
+            // unintended jumps from unrelated early events.
+            var marker_key = string(measure_number) + ":" + string(beat_number);
+            if (variable_struct_exists(earliest_note_on_by_beat, marker_key)) {
+                var candidate_time = real(earliest_note_on_by_beat[$ marker_key]);
+                var lead_ms = beat_time_ms - candidate_time;
+                if (lead_ms > 0 && lead_ms <= 300) {
+                    beat_time_ms = candidate_time;
+                }
+            }
+
             array_push(metro_events, {
                 time: beat_time_ms,
                 type: "marker",
                 marker_type: "beat",
-                measure: current_measure,
+                measure: measure_number,
                 beat: beat_number,
                 beat_fraction: beat_fraction,
                 event_id: 0
             });
-            
-            // Create a MIDI note_on event for each drum sound in this beat
-            for (var sound_idx = 0; sound_idx < array_length(beat_def.drum_notes); sound_idx++) {
-                var note_key = beat_def.drum_notes[sound_idx];
-                var note = note_key;
-                if (is_string(note_key)) {
-                    if (variable_struct_exists(config.drums, note_key)) {
-                        note = config.drums[$ note_key];
-                    } else {
-                        continue;
+
+            var beat_defs = [];
+            for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
+                var beat_def = pattern[beat_idx];
+                var beat_pos = real(beat_def.beat_position ?? 0);
+                var pat_beat_number = floor(beat_pos) + 1;
+                var pat_beat_fraction = beat_pos - floor(beat_pos);
+                if (pat_beat_number == beat_number && abs(pat_beat_fraction - beat_fraction) <= 0.001) {
+                    array_push(beat_defs, beat_def);
+                }
+            }
+
+            if (array_length(beat_defs) <= 0) {
+                for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
+                    var beat_def_fallback = pattern[beat_idx];
+                    var beat_pos_fallback = real(beat_def_fallback.beat_position ?? 0);
+                    if ((floor(beat_pos_fallback) + 1) == beat_number) {
+                        array_push(beat_defs, beat_def_fallback);
+                        break;
                     }
                 }
-                var is_light = (variable_struct_exists(beat_def, "light") && beat_def.light);
-                var velocity = beat_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
-                
-                array_push(metro_events, {
-                    time: beat_time_ms,
-                    type: "note_on",
-                    channel: config.channel,
-                    note: note,
-                    velocity: velocity
-                });
-                
-                // Also add note_off event shortly after (50ms duration)
-                array_push(metro_events, {
-                    time: beat_time_ms + 50,
-                    type: "note_off",
-                    channel: config.channel,
-                    note: note,
-                    velocity: 0
-                });
+            }
+
+            if (array_length(beat_defs) <= 0 && array_length(pattern) > 0) {
+                array_push(beat_defs, pattern[0]);
+            }
+
+            for (var bdi = 0; bdi < array_length(beat_defs); bdi++) {
+                var use_def = beat_defs[bdi];
+                for (var sound_idx = 0; sound_idx < array_length(use_def.drum_notes); sound_idx++) {
+                    var note_key = use_def.drum_notes[sound_idx];
+                    var note = note_key;
+                    if (is_string(note_key)) {
+                        if (variable_struct_exists(config.drums, note_key)) {
+                            note = config.drums[$ note_key];
+                        } else {
+                            continue;
+                        }
+                    }
+                    var is_light = (variable_struct_exists(use_def, "light") && use_def.light);
+                    var velocity = use_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
+
+                    array_push(metro_events, {
+                        time: beat_time_ms,
+                        type: "note_on",
+                        channel: config.channel,
+                        note: note,
+                        velocity: velocity
+                    });
+                    array_push(metro_events, {
+                        time: beat_time_ms + 50,
+                        type: "note_off",
+                        channel: config.channel,
+                        note: note,
+                        velocity: 0
+                    });
+                }
             }
         }
-        
-        // Move to next measure
-        current_measure++;
-        current_time_ms += measure_duration_ms;
+    } else {
+        // Fallback for tunes that do not provide beat markers.
+        var measure_1_start_ms = 0;
+        for (var i = 0; i < array_length(preprocessed); i++) {
+            var ev = preprocessed[i];
+            if (!is_struct(ev)) continue;
+            if (ev.type == "marker"
+                && (ev.marker_type ?? "") == "bar"
+                && real(ev.measure ?? 0) == 1) {
+                measure_1_start_ms = ev.time;
+                break;
+            }
+        }
+        if (measure_1_start_ms == 0) {
+            for (var i = 0; i < array_length(preprocessed); i++) {
+                var ev = preprocessed[i];
+                if (!is_struct(ev)) continue;
+                if (ev.type == "note_on" && real(ev.measure ?? 0) >= 1) {
+                    measure_1_start_ms = ev.time;
+                    break;
+                }
+            }
+        }
+
+        var current_measure = 1;
+        var current_time_ms = measure_1_start_ms;
+        while (current_time_ms < tune_length_ms) {
+            for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
+                var beat_def = pattern[beat_idx];
+                var beat_time_ms = current_time_ms + (beat_def.beat_position * beat_unit_ms);
+
+                var beat_number = floor(beat_def.beat_position) + 1;
+                var beat_fraction = beat_def.beat_position - floor(beat_def.beat_position);
+                array_push(metro_events, {
+                    time: beat_time_ms,
+                    type: "marker",
+                    marker_type: "beat",
+                    measure: current_measure,
+                    beat: beat_number,
+                    beat_fraction: beat_fraction,
+                    event_id: 0
+                });
+
+                for (var sound_idx = 0; sound_idx < array_length(beat_def.drum_notes); sound_idx++) {
+                    var note_key = beat_def.drum_notes[sound_idx];
+                    var note = note_key;
+                    if (is_string(note_key)) {
+                        if (variable_struct_exists(config.drums, note_key)) {
+                            note = config.drums[$ note_key];
+                        } else {
+                            continue;
+                        }
+                    }
+                    var is_light = (variable_struct_exists(beat_def, "light") && beat_def.light);
+                    var velocity = beat_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
+
+                    array_push(metro_events, {
+                        time: beat_time_ms,
+                        type: "note_on",
+                        channel: config.channel,
+                        note: note,
+                        velocity: velocity
+                    });
+                    array_push(metro_events, {
+                        time: beat_time_ms + 50,
+                        type: "note_off",
+                        channel: config.channel,
+                        note: note,
+                        velocity: 0
+                    });
+                }
+            }
+
+            current_measure++;
+            current_time_ms += measure_duration_ms;
+        }
     }
+
+    array_sort(metro_events, function(a, b) {
+        return real(a[$ "time"] ?? 0) - real(b[$ "time"] ?? 0);
+    });
     
     show_debug_message("✓ Metronome: Generated " + string(array_length(metro_events)) + " events for " + time_sig + " at " + string(bpm) + " BPM (effective quarter BPM " + string(effective_quarter_bpm) + ")");
     return metro_events;
 }
 
 /// @function metronome_set_pattern(_time_sig, _variant_name)
-/// @description Set the active metronome pattern
-/// @param _time_sig Time signature (e.g., "4/4")
-/// @param _variant_name Pattern variant name (e.g., "emphasis_beat_beat_beat")
+/// @description Set the active metronome pattern by time signature and variant name. Updates global.metronome_pattern_selection.
+/// @param {string} _time_sig  Time signature (e.g. "4/4")
+/// @param {string} _variant_name  Pattern variant name (e.g. "emphasis_beat_beat_beat")
+/// @returns {bool}  true on success, false if pattern not found
+/// @reads   global.METRONOME_CONFIG, global.metronome_mode, global.metronome_mode_options, global.metronome_pattern_options
+/// @writes  global.METRONOME_CONFIG.current_pattern, global.METRONOME_CONFIG.current_variant, global.metronome_pattern_selection
+/// @objects none
+/// @callers scr_button_scripts
 
 function metronome_set_pattern(_time_sig, _variant_name) {
     var config = global.METRONOME_CONFIG;
@@ -571,8 +706,12 @@ function metronome_set_pattern(_time_sig, _variant_name) {
 }
 
 /// @function metronome_toggle(_enabled)
-/// @description Enable or disable metronome
-/// @param _enabled Boolean
+/// @description Enable or disable the metronome globally.
+/// @param {bool} _enabled  true = enabled, false = disabled
+/// @reads   none
+/// @writes  global.METRONOME_CONFIG.enabled
+/// @objects none
+/// @callers scr_button_scripts
 
 function metronome_toggle(_enabled) {
     global.METRONOME_CONFIG.enabled = _enabled;
@@ -580,8 +719,12 @@ function metronome_toggle(_enabled) {
 }
 
 /// @function metronome_list_patterns()
-/// @description Return list of available patterns
-/// @returns Struct with available time signatures and variants
+/// @description Return all available patterns organized by mode and time signature. Useful for UI population and debug.
+/// @returns {struct}  Nested struct: {mode: {time_sig: [variant_name, ...]}}
+/// @reads   global.METRONOME_CONFIG.patterns
+/// @writes  none
+/// @objects none
+/// @callers debug / UI population
 
 function metronome_list_patterns() {
     var result = {};
@@ -603,9 +746,13 @@ function metronome_list_patterns() {
 }
 
 /// @function metronome_pattern_to_symbols(_pattern)
-/// @description Convert a pattern definition to symbolic notation for display
-/// @param _pattern Array of beat definitions {beat_position, drum_notes[], emphasis, light (optional)}
-/// @returns String using ● (emphasis), ○ (normal), · (light)
+/// @description Convert a beat pattern definition to a symbolic display string using ●, ○, · characters.
+/// @param {array} _pattern  Array of beat definition structs: [{beat_position, drum_notes[], emphasis, light?}]
+/// @returns {string}  Symbol string e.g. "●○○○"
+/// @reads   none
+/// @writes  none
+/// @objects none
+/// @callers scr_UI_scripts (pattern display), debug
 
 function metronome_pattern_to_symbols(_pattern) {
     var symbols = "";
@@ -628,8 +775,12 @@ function metronome_pattern_to_symbols(_pattern) {
 }
 
 /// @function metronome_update_pattern_list(_time_sig)
-/// @description Update global.metronome_pattern_options based on current tune's time signature and mode
-/// @param _time_sig Time signature of current tune (e.g., "4/4"), or undefined to use default
+/// @description Rebuild global.metronome_pattern_options for the current mode and given time signature. Resets selection to Auto if current selection is out of range.
+/// @param {string} _time_sig  Time signature of current tune (e.g. "4/4"), or undefined to default to 4/4
+/// @reads   global.METRONOME_CONFIG.patterns, global.metronome_mode, global.metronome_mode_options, global.metronome_pattern_selection
+/// @writes  global.metronome_pattern_options, global.metronome_pattern_selection
+/// @objects none
+/// @callers scr_button_scripts (on tune select/mode change), scr_tune_library (after library load)
 
 function metronome_update_pattern_list(_time_sig) {
     // Default to 4/4 if no tune loaded
@@ -674,11 +825,15 @@ function metronome_update_pattern_list(_time_sig) {
 }
 
 /// @function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
-/// @description Generate metronome events for a count-in before the tune starts
-/// @param _tune Tune struct with .tune_data metadata
-/// @param _settings Optional overrides (bpm, metronome_mode, metronome_pattern, metronome_volume)
-/// @param _count_in_measures Number of measures to count in
-/// @returns Array of MIDI event objects for count-in beats
+/// @description Generate metronome MIDI events for a count-in period before the tune starts. Events have negative time_ms values so they precede time 0.
+/// @param {struct} _tune  Tune struct with .tune_data.tune_metadata (used for BPM and time sig)
+/// @param {struct} _settings  Optional per-call overrides: {bpm, metronome_mode, metronome_pattern, metronome_volume}
+/// @param {real} _count_in_measures  Number of measures to count in; returns [] if <= 0
+/// @returns {array}  Array of MIDI event structs with time_ms < 0
+/// @reads   global.METRONOME_CONFIG, global.metronome_mode, global.metronome_mode_options, global.metronome_pattern_selection, global.metronome_pattern_options, global.metronome_volume
+/// @writes  global.METRONOME_CONFIG (velocity fields synced from volume on each call)
+/// @objects none
+/// @callers scr_set_scripts, scr_button_scripts
 
 function metronome_generate_countin_events(_tune, _settings, _count_in_measures) {
     if (_count_in_measures <= 0) return [];

@@ -53,6 +53,11 @@
 
 
 //Start manual checking
+	/// @function MIDI_start_manual_check_messages()
+	/// @description Enable manual MIDI input/error checking and initialize timing diagnostic globals. Plays a brief E note to prime the output buffer.
+	/// @reads   global.MIDI_TIMING_DIAG_ENABLED
+	/// @writes  global.MIDI_TIMING_DIAG_ENABLED, global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS, global.midi_input_clock_offset_ms, global.midi_timing_delay_buf, global.midi_timing_skew_buf, global.midi_timing_delay_head, global.midi_timing_delay_count, global.midi_timing_diag_last_log_ms, global.midi_timing_diag_zero_count, global.midi_timing_diag_negative_raw_count, global.midi_timing_diag_source_midi_count, global.midi_timing_diag_source_wall_count
+	/// @callers obj_game_controller Create
 	function MIDI_start_manual_check_messages()
 	{
 		midi_input_message_manual_checking(1);//Enables manual checking of MIDI Messages
@@ -90,6 +95,13 @@
 		show_debug_message("stop playing initial E");
 	}
 
+/// @function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms, _clock_source)
+/// @description Record a MIDI poll delay sample into the rolling diagnostic buffer. No-ops if MIDI_TIMING_DIAG_ENABLED is false.
+/// @param {real}   _delay_ms      Processing delay from message timestamp to now (ms)
+/// @param {real}   [_raw_skew_ms] Raw clock skew in ms
+/// @param {string} [_clock_source] Clock source label
+/// @reads   global.MIDI_TIMING_DIAG_ENABLED, global.midi_timing_delay_buf, global.midi_timing_skew_buf, global.midi_timing_delay_head, global.midi_timing_delay_count, global.midi_timing_diag_last_log_ms
+/// @writes  global.midi_timing_delay_buf, global.midi_timing_skew_buf, global.midi_timing_delay_head, global.midi_timing_delay_count, global.midi_timing_diag_last_log_ms, global.midi_timing_diag_zero_count, global.midi_timing_diag_negative_raw_count, global.midi_timing_diag_source_midi_count, global.midi_timing_diag_source_wall_count
 function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_source = "") {
 	if (!variable_global_exists("MIDI_TIMING_DIAG_ENABLED") || !global.MIDI_TIMING_DIAG_ENABLED) return;
 	if (!variable_global_exists("midi_timing_delay_buf") || !is_array(global.midi_timing_delay_buf)) return;
@@ -166,6 +178,12 @@ function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_
 
 //```
 
+/// @function MIDI_process_messages()
+/// @description Process all buffered MIDI input messages for the current frame. Converts raw MIDI to canonical notes, routes to game viz (gv_on_player_note_on/off), passes through to MIDI output, and optionally logs to event history.
+/// @reads   global.midi_input_device, global.midi_output_device, global.chanter_channel, global.midi_input_clock_offset_ms, global.MIDI_chanter, global.tune_start_real, global.EVENT_HISTORY_ENABLED, global.enable_current_note_layer, global.current_tune_name
+/// @writes  global.midi_input_clock_offset_ms (re-anchor on drift)
+/// @objects none (calls gv_on_player_note_on/off, cn_panel_on_player_note_on/off, event_history_add)
+/// @callers obj_game_controller Step (called every frame during active MIDI session)
 function MIDI_process_messages()
 	{
 		////Loops through each MIDI Input Message…
@@ -349,6 +367,10 @@ function MIDI_process_messages()
 	}
 }
 
+/// @function MIDI_send_off()
+/// @description Send MIDI note-off for all 128 notes on all 16 channels to the current output device. Call on tune end or stop.
+/// @reads   global.midi_output_device
+/// @callers scr_button_scripts (stop/end-of-tune path), obj_game_controller Destroy
 function MIDI_send_off() 	{
 	// Send note-off to all notes on all channels on the main output device
 	if (!variable_global_exists("midi_output_device")) {
@@ -366,7 +388,9 @@ function MIDI_send_off() 	{
 	show_debug_message("✓ All notes stopped on all channels");
 }
 
-//Check MIDI errors on each step
+/// @function MIDI_check_errors()
+/// @description Poll and log any pending MIDI error messages. Call each step when MIDI checking is active.
+/// @callers obj_game_controller Step
 function MIDI_check_errors() 	{
 	var errors, e;
 	errors = midi_error_count();
@@ -375,7 +399,9 @@ function MIDI_check_errors() 	{
 	}
 }
 
-//Stop checking MIDI messages
+/// @function MIDI_stop_checking_messages_and_errors()
+/// @description Disable manual MIDI checking and close all input/output devices.
+/// @callers obj_game_controller Destroy, scr_button_scripts
 function MIDI_stop_checking_messages_and_errors()  {
 	midi_input_message_manual_checking(0);//Disables manual checking of MIDI Messages
 	midi_error_manual_checking(0);//Disables manual checking of MIDI errors
@@ -401,6 +427,8 @@ function MIDI_stop_checking_messages_and_errors()  {
 //		show_debug_message(global.chantername + " set to: " + string(global.chanternumber));	
 //	}
 
+/// @function MIDI_show_input_devices()
+/// @description Show a dialog listing all available MIDI input device names (debug utility).
 function MIDI_show_input_devices() {
 	    var str, i;
 		str = "MIDI INPUT DEVICES\n\n";
@@ -410,6 +438,10 @@ function MIDI_show_input_devices() {
 		show_message(str);
 }
 
+/// @function MIDI_scan_input_devices()
+/// @description Populate global.midi_input_devices with current device name list.
+/// @writes  global.midi_input_devices
+/// @callers obj_game_controller Create, obj_ui_controller (device settings)
 function MIDI_scan_input_devices() {
 	global.midi_input_devices = [];
 	var device_count = midi_input_device_count();
@@ -418,6 +450,10 @@ function MIDI_scan_input_devices() {
 	}
 }
 
+/// @function MIDI_scan_output_devices()
+/// @description Populate global.midi_output_devices with current device name list.
+/// @writes  global.midi_output_devices
+/// @callers obj_game_controller Create, obj_ui_controller (device settings)
 function MIDI_scan_output_devices() {
 	global.midi_output_devices = [];
 	var device_count = midi_output_device_count();
@@ -426,6 +462,8 @@ function MIDI_scan_output_devices() {
 	}
 }
 	
+/// @function MIDI_show_output_devices()
+/// @description Show a dialog listing all available MIDI output device names (debug utility).
 function MIDI_show_output_devices() {
 	str = "MIDI OUTPUT DEVICES\n\n";
 	for(i=0; i<midi_output_device_count(); i++)  {

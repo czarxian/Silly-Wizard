@@ -33,6 +33,9 @@ if (!variable_global_exists("current_player_id")) {
 /// @description Add a new event to the history log.
 /// @param _event_struct Struct with timing, note, source, and context data
 /// @returns (none)
+/// @reads global.EVENT_HISTORY_ENABLED, global.loop_runtime_active, global.loop_runtime_current_iteration
+/// @writes global.EVENT_HISTORY
+/// @callers MIDI_process_messages
 /// 
 /// Expected struct format:
 /// {
@@ -67,6 +70,8 @@ function event_history_add(_event_struct) {
 
 /// @function event_history_clear()
 /// @description Clear all logged events. Call before starting a new tune playback.
+/// @writes global.EVENT_HISTORY, global.EVENT_HISTORY_EXPORTED, global.EVENT_HISTORY_LIBRARY_UPDATED
+/// @callers scr_button_scripts (before tune start)
 
 function event_history_clear() {
     global.EVENT_HISTORY = array_create(0);
@@ -79,6 +84,8 @@ function event_history_clear() {
 /// @description Retrieve the most recent N events from history.
 /// @param _count Number of events to retrieve (e.g., 10 for last 10 events)
 /// @returns Array of event structs (or empty array if history is shorter than _count)
+/// @reads global.EVENT_HISTORY
+/// @callers scr_UI_scripts (event log panel display)
 
 function event_history_get_recent(_count) {
     var history_length = array_length(global.EVENT_HISTORY);
@@ -131,6 +138,9 @@ function event_history_sanitize_name(_name) {
 
 /// @function event_history_get_tune_title()
 /// @description Resolve the tune title from metadata when available.
+/// @reads global.current_tune_name
+/// @objects obj_tune (reads tune_data.tune_metadata and tune_data.filename)
+/// @callers event_history_get_export_info
 function event_history_get_tune_title() {
     var title = "";
     if (instance_exists(obj_tune)) {
@@ -356,6 +366,8 @@ function event_history_try_score_real(_value) {
 
 /// @function event_history_get_export_score(_export_info)
 /// @description Resolve an optional score value from export metadata or future globals.
+/// @reads global.scoring_last_run, global.last_score, global.run_score, global.performance_score, global.final_score, global.overall_score (first match wins)
+/// @callers event_history_get_export_info, event_history_update_tune_history_index
 function event_history_get_export_score(_export_info = undefined) {
     if (is_struct(_export_info)) {
         if (variable_struct_exists(_export_info, "score")) return variable_struct_get(_export_info, "score");
@@ -388,6 +400,8 @@ function event_history_get_export_score(_export_info = undefined) {
 
 /// @function event_history_get_export_info(_timestamp)
 /// @description Build shared metadata for CSV and summary exports.
+/// @reads global.current_tune_name, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.current_player_id
+/// @callers event_history_export_csv, event_history_export_summary_json, event_history_export_loop_session_json
 function event_history_get_export_info(_timestamp = "") {
     var tune_name = variable_global_exists("current_tune_name")
         ? string(global.current_tune_name)
@@ -442,6 +456,8 @@ function event_history_get_export_info(_timestamp = "") {
 
 /// @function event_history_update_tune_history_index(_export_info)
 /// @description Update the persistent tune-library history index using the current run export metadata.
+/// @reads global.EVENT_HISTORY (checks length before proceeding)
+/// @callers scr_button_scripts (export at end of tune)
 function event_history_update_tune_history_index(_export_info = undefined) {
     if (!variable_global_exists("EVENT_HISTORY") || array_length(global.EVENT_HISTORY) <= 0) {
         return false;
@@ -607,6 +623,8 @@ function event_history_update_tune_history_index(_export_info = undefined) {
 
 /// @function event_history_build_summary_player_spans()
 /// @description Build a compact per-note span array for review overlays.
+/// @reads global.timeline_state (review_full_trace or player_in span arrays)
+/// @callers event_history_export_summary_json
 function event_history_build_summary_player_spans() {
     var spans_out = array_create(0);
 
@@ -650,8 +668,105 @@ function event_history_build_summary_player_spans() {
     return spans_out;
 }
 
+/// @function event_history_build_structure_debug_snapshot(_entry_limit, _beat_limit)
+/// @description Capture timeline structure state (measure nav, structural starts, beat labels) for troubleshooting and include it in run summary exports.
+/// @param {real} _entry_limit  Max number of nav/structure entries to record.
+/// @param {real} _beat_limit   Max number of beat-lane entries to record.
+/// @returns {struct}  Snapshot struct safe for JSON export.
+/// @reads  global.timeline_state.measure_nav_entries, global.timeline_state.structural_measure_starts, global.timeline_beat_positions, global.playback_context
+function event_history_build_structure_debug_snapshot(_entry_limit = 80, _beat_limit = 120) {
+    var entry_limit = max(1, floor(real(_entry_limit)));
+    var beat_limit = max(1, floor(real(_beat_limit)));
+
+    var out = {
+        created_at: event_history_format_timestamp(),
+        has_timeline_state: false,
+        playback_context_mode: "",
+        playback_context_active_segment: -1,
+        playback_context_segment_count: 0,
+        measure_nav_count: 0,
+        structural_start_count: 0,
+        beat_positions_count: 0,
+        measure_nav_entries_head: [],
+        structural_measure_starts_head: [],
+        beat_positions_head: [],
+        beat_labels_head: []
+    };
+
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        out.playback_context_mode = string(event_history_struct_get(global.playback_context, "mode", ""));
+        out.playback_context_active_segment = floor(real(event_history_struct_get(global.playback_context, "active_segment", -1)));
+        var segs = event_history_struct_get(global.playback_context, "segments", []);
+        out.playback_context_segment_count = is_array(segs) ? array_length(segs) : 0;
+    }
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) {
+        return out;
+    }
+
+    out.has_timeline_state = true;
+
+    var nav_entries = event_history_struct_get(global.timeline_state, "measure_nav_entries", []);
+    if (is_array(nav_entries)) {
+        out.measure_nav_count = array_length(nav_entries);
+        var nav_n = min(entry_limit, out.measure_nav_count);
+        for (var i = 0; i < nav_n; i++) {
+            var e = nav_entries[i];
+            if (!is_struct(e)) continue;
+            array_push(out.measure_nav_entries_head, {
+                i: i,
+                measure: floor(real(event_history_struct_get(e, "measure", -1))),
+                part: floor(real(event_history_struct_get(e, "part", -1))),
+                start_ms: real(event_history_struct_get(e, "start_ms", 0)),
+                end_ms: real(event_history_struct_get(e, "end_ms", 0))
+            });
+        }
+    }
+
+    var structural = event_history_struct_get(global.timeline_state, "structural_measure_starts", []);
+    if (is_array(structural)) {
+        out.structural_start_count = array_length(structural);
+        var st_n = min(entry_limit, out.structural_start_count);
+        for (var s = 0; s < st_n; s++) {
+            var st = structural[s];
+            if (!is_struct(st)) continue;
+            array_push(out.structural_measure_starts_head, {
+                i: s,
+                m: floor(real(event_history_struct_get(st, "m", -1))),
+                t: real(event_history_struct_get(st, "t", 0)),
+                seq: floor(real(event_history_struct_get(st, "seq", -1)))
+            });
+        }
+    }
+
+    if (variable_global_exists("timeline_beat_positions") && is_array(global.timeline_beat_positions)) {
+        var beats = global.timeline_beat_positions;
+        out.beat_positions_count = array_length(beats);
+        var beat_n = min(beat_limit, out.beat_positions_count);
+        for (var b = 0; b < beat_n; b++) {
+            var bp = beats[b];
+            if (!is_struct(bp)) continue;
+            var label = string(event_history_struct_get(bp, "label", ""));
+            var rec = {
+                i: b,
+                time_ms: real(event_history_struct_get(bp, "time_ms", 0)),
+                is_major: event_history_struct_get(bp, "is_major", false),
+                label: label
+            };
+            array_push(out.beat_positions_head, rec);
+            if (string_length(label) > 0) {
+                array_push(out.beat_labels_head, rec);
+            }
+        }
+    }
+
+    return out;
+}
+
 /// @function event_history_export_summary_json(_filename_or_path, _export_info)
 /// @description Write a compact per-run summary JSON for review overlays.
+/// @reads global.timeline_state (via event_history_build_summary_player_spans)
+/// @callers scr_button_scripts or scr_tune_scripts (end-of-tune export)
 function event_history_export_summary_json(_filename_or_path, _export_info = undefined) {
     var filepath = _filename_or_path;
     if (string_pos("datafiles/", filepath) != 1) {
@@ -667,9 +782,9 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
     }
 
     var player_spans = event_history_build_summary_player_spans();
-    if (array_length(player_spans) <= 0) {
-        show_debug_message("[REVIEW_HISTORY] Skipping summary export because no player spans were captured.");
-        return false;
+    var has_player_spans = array_length(player_spans) > 0;
+    if (!has_player_spans) {
+        show_debug_message("[REVIEW_HISTORY] No player spans captured; exporting summary with debug_structure only.");
     }
 
     var scoring_summary = undefined;
@@ -692,6 +807,8 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         grace_override_ms: event_history_struct_get(export_info, "grace_override_ms", 0),
         player_spans: player_spans
     };
+    variable_struct_set(payload, "has_player_spans", has_player_spans);
+    variable_struct_set(payload, "debug_structure", event_history_build_structure_debug_snapshot(120, 200));
     if (is_struct(scoring_summary)) {
         variable_struct_set(payload, "scoring", scoring_summary);
     }
@@ -705,12 +822,20 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
 
     file_text_write_string(file, json_stringify(payload));
     file_text_close(file);
-    show_debug_message("✓ Exported review summary to: " + filepath);
+
+    var resolved_path = filepath;
+    if (string_pos("datafiles/", filepath) == 1) {
+        resolved_path = working_directory + filepath;
+    }
+    show_debug_message("✓ Exported review summary to: " + resolved_path);
     return true;
 }
 
 /// @function event_history_export_loop_session_json(_export_info)
 /// @description Export one loop-session JSON with each loop iteration grouped separately.
+/// @reads global.loop_runtime_active, global.EVENT_HISTORY, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.timeline_state
+/// @writes global.timeline_state.loop_session_runs
+/// @callers scr_button_scripts or scr_tune_scripts (end-of-loop export)
 function event_history_export_loop_session_json(_export_info = undefined) {
     if (!variable_global_exists("loop_runtime_active") || !global.loop_runtime_active) {
         return false;
@@ -878,6 +1003,7 @@ function event_history_sort_summaries_desc(_summaries) {
 
 /// @function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm, _match_swing, _player_id, _match_player)
 /// @description Load recent matching summary JSON files for review overlays.
+/// @callers scr_game_viz (review overlay) or scr_UI_scripts
 function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_count, _match_bpm = true, _match_swing = true, _player_id = "", _match_player = true) {
     var results = array_create(0);
     var clean_tune = string(_clean_tune ?? "");
@@ -943,6 +1069,8 @@ function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_cou
 /// @description Create a derived copy of events with enrichment (note letters, measure/beat forward-fill, etc.)
 /// @param {array} _events Raw event history array
 /// @returns Array of enriched event structs
+/// @reads global.MIDI_chanter (via chanter_midi_to_canonical)
+/// @callers event_history_export_csv
 
 function event_history_enrich(_events) {
     var enriched = array_create(0);
@@ -1035,6 +1163,8 @@ function event_history_enrich(_events) {
 /// @description Write entire event history to a CSV file.
 /// @param _filename_or_path Filename ("event_history.csv") or full path ("datafiles/...")
 /// @returns (none)
+/// @reads global.EVENT_HISTORY
+/// @callers scr_button_scripts (end-of-tune export)
 
 function event_history_export_csv(_filename_or_path) {
     var filepath = _filename_or_path;

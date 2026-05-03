@@ -1,0 +1,51 @@
+{
+  "tune": "Dalnahasaig to Strathan Reel",
+  "score_manifest_version": 3,
+  "is_transition": true,
+  "transition_refs": {
+    "prior_tune": "T_Dal",
+    "following_tune": "T_SR",
+    "tail_cut_measures": "1",
+    "head_cut_measures": "0"
+  },
+  "transition_score": {
+    "prior_replace": {
+      "tune": "Dalnahasaig",
+      "group": "prior_replace",
+      "header": "X:1\nT:Dalnahasaig\nM:C\nL:1/8\nR:Strathspey\nC:Arr. Hamish Moore\nQ:106\nK:HP",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "group": "prior_replace",
+          "group_index": 0,
+          "body": "{gf}g2{ef}e3/2g/2{cd}c3/2g/2e2",
+          "duration_units": 8,
+          "is_pickup": false
+        }
+      ]
+    },
+    "bridge": {
+      "tune": "Dalnahasaig to Strathan Reel",
+      "group": "bridge",
+      "header": "X:1\nT:Dalnahasaig to Strathan Reel\nM:C\nL:1/8\nR:Transition\nQ:106\nK:HP",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "group": "bridge",
+          "group_index": 0,
+          "body": "e2",
+          "duration_units": 2,
+          "is_pickup": false
+        }
+      ]
+    }
+  }
+}

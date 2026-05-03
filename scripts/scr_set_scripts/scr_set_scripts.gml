@@ -3,11 +3,17 @@
 //          per-tune overrides, stitch into a single contiguous playback_events
 //          array, and track which tune segment is active during playback.
 //
-// Phase 1: direct and gap transitions only.
-//          Transition content (alt endings, mini-tune fragments) is Phase 3.
+// ──── TRANSITION-AUTHORITATIVE MODEL (Phase 1-2, May 2026) ────
+// Transition tunes are the single source of truth for boundary behavior:
+//  1. Transition exports must declare explicit replacement counts (prior/bridge/follow).
+//  2. Each declared replacement group must have matching exported score images/payloads.
+//  3. Set assembly builds a deterministic boundary plan from these declarations.
+//  4. Runtime applies no inference from mixed event types (marker+note-on); only measure-index mapping.
+//  5. Contract violations fail fast at preprocess time.
+// See scr_set_validate_transition_contract() and scr_set_build_boundary_plan().
 //
 // Global state written:
-//   global.active_set       — loaded set metadata + segments (see scr_set_init_global)
+//   global.active_set       — loaded set metadata + segments + boundary_plan (see scr_set_init_global)
 //   global.playback_events  — stitched event array (shared with single-tune path)
 //   global.playback_context — thin wrapper consumed by viz/scoring/export
 
@@ -17,6 +23,10 @@
 
 /// @function scr_set_init_global()
 /// @description Initialise global.active_set and global.playback_context to clean unloaded states.
+/// @reads   none
+/// @writes  global.active_set, global.playback_context
+/// @objects none
+/// @callers obj_game_controller Create
 function scr_set_init_global() {
     global.active_set = {
         is_loaded:    false,
@@ -26,6 +36,8 @@ function scr_set_init_global() {
         description:  "",
         tunes:        [],
         segments:     [],
+        score_override_plan: [],
+        boundary_plan:       [],  // NEW: explicit transition-authoritative boundary plan
         active_segment_index: 0,
         first_bpm:    120,
         first_meter:  "4/4",
@@ -35,6 +47,147 @@ function scr_set_init_global() {
         set_count_in_measures:    0           // count-in measures before first tune only
     };
     scr_playback_context_init();
+    global.score_segments_sprites = []; // per-segment sprite cache for multi-segment score display
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transition Contract Validation (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// @function scr_set_validate_transition_contract(_tune_struct)
+/// @description Validate that a transition tune export includes required contract fields.
+///              Fails if: declared replacement counts > 0 but no matching group is exported.
+/// @param _tune_struct  Loaded tune struct from scr_tune_load_to_struct()
+/// @returns bool — true if valid, false on violation
+function scr_set_validate_transition_contract(_tune_struct) {
+    if (!is_struct(_tune_struct)) return true; // not a loaded tune, skip
+    
+    var meta = _tune_struct[$ "tune_data"] ?? {};
+    var rhythm = string(meta[$ "rhythm"] ?? "");
+    
+    if (rhythm != "transition") return true; // not a transition, always valid
+    
+    // Extract declared replacement counts from metadata
+    var prior_count = floor(real(meta[$ "head_cut_measures"] ?? 0));
+    var bridge_count = floor(real(meta[$ "bridge_measures"] ?? 0));
+    var follow_count = floor(real(meta[$ "tail_cut_measures"] ?? 0));
+    
+    // Check if score manifest exists
+    var manifest = meta[$ "score_manifest"] ?? undefined;
+    if (!is_struct(manifest)) {
+        show_debug_message("  [VALIDATION] WARNING: transition tune has no score_manifest; replacement boundaries may be undefined");
+        return true; // warn but don't fail (older exports)
+    }
+    
+    var trans_score = manifest[$ "transition_score"] ?? {};
+    if (!is_struct(trans_score)) {
+        show_debug_message("  [VALIDATION] WARNING: transition score manifest has no transition_score object");
+        return true;
+    }
+    
+    // Validate each declared replacement group exists with matching content
+    var violations = [];
+    
+    if (prior_count > 0) {
+        var prior_group = trans_score[$ "prior_replace"] ?? undefined;
+        if (!is_struct(prior_group)) {
+            array_push(violations, "prior replacement declared (" + string(prior_count) + " measures) but prior_replace group missing");
+        }
+    }
+    
+    if (bridge_count > 0) {
+        var bridge_group = trans_score[$ "bridge"] ?? undefined;
+        if (!is_struct(bridge_group)) {
+            array_push(violations, "bridge declared (" + string(bridge_count) + " measures) but bridge group missing");
+        }
+    }
+    
+    if (follow_count > 0) {
+        var follow_group = trans_score[$ "follow_replace"] ?? undefined;
+        if (!is_struct(follow_group)) {
+            array_push(violations, "follow replacement declared (" + string(follow_count) + " measures) but follow_replace group missing");
+        }
+    }
+    
+    if (array_length(violations) > 0) {
+        show_debug_message("  [VALIDATION ERROR] Transition contract violations:");
+        for (var vi = 0; vi < array_length(violations); vi++) {
+            show_debug_message("    - " + violations[vi]);
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+/// @function scr_set_build_boundary_plan(_tunes, _segments)
+/// @description Build an explicit boundary plan for each transition boundary.
+///              Plan defines: prior measures replaced, bridge inserted, follow measures replaced.
+///              Fails if any transition violates the contract.
+/// @param _tunes     Array of tune filenames from global.active_set.tunes[]
+/// @param _segments  Array of segment structs from global.active_set.segments[]
+/// @returns struct array OR false on contract violation
+function scr_set_build_boundary_plan(_tunes, _segments) {
+    var n = array_length(_segments);
+    var plan = array_create(n);
+    
+    // Initialize: no replacement for any boundary
+    for (var i = 0; i < n; i++) {
+        plan[i] = {
+            boundary_type: "none",
+            transition_segment_index: -1,
+            prior_measures_replaced: 0,
+            bridge_measures_inserted: 0,
+            follow_measures_replaced: 0
+        };
+    }
+    
+    // Scan each segment to find transitions and validate contract
+    for (var ti = 0; ti < n; ti++) {
+        var seg = _segments[ti];
+        if (!is_struct(seg)) continue;
+        
+        var tune_file = string(seg[$ "tune_file"] ?? seg[$ "filename"] ?? "");
+        var is_transition = (string(seg[$ "tune_rhythm"] ?? "") == "transition");
+        
+        if (!is_transition) continue;
+        
+        // Load full tune struct to validate contract
+        var tune_path = scr_set_resolve_tune_path(tune_file);
+        var tune_struct = scr_tune_load_to_struct(tune_path);
+        
+        if (!scr_set_validate_transition_contract(tune_struct)) {
+            show_debug_message("  [BOUNDARY PLAN] FAILED: transition at segment " + string(ti) + " violates contract");
+            return false;
+        }
+        
+        // Extract declared replacement counts
+        if (!is_struct(tune_struct)) continue;
+        var meta = is_struct(tune_struct[$ "tune_data"] ?? undefined) ? tune_struct[$ "tune_data"] : {};
+        var prior_count = floor(real(meta[$ "head_cut_measures"] ?? 0));
+        var bridge_count = floor(real(meta[$ "bridge_measures"] ?? 0));
+        var follow_count = floor(real(meta[$ "tail_cut_measures"] ?? 0));
+        
+        // Apply boundary plan using struct accessor notation
+        if (ti > 0) {
+            plan[ti - 1][$ "boundary_type"] = "transition";
+            plan[ti - 1][$ "transition_segment_index"] = ti;
+            plan[ti - 1][$ "prior_measures_replaced"] = prior_count;
+        }
+        
+        plan[ti][$ "boundary_type"] = "transition";
+        plan[ti][$ "transition_segment_index"] = ti;
+        plan[ti][$ "bridge_measures_inserted"] = bridge_count;
+        
+        if (ti < n - 1) {
+            plan[ti + 1][$ "boundary_type"] = "transition";
+            plan[ti + 1][$ "transition_segment_index"] = ti;
+            plan[ti + 1][$ "follow_measures_replaced"] = follow_count;
+        }
+    }
+    
+    show_debug_message("  [BOUNDARY PLAN] Built plan for " + string(n) + " segments");
+    return plan;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +198,10 @@ function scr_set_init_global() {
 /// @description Parse and validate a set JSON file, populate global.active_set.
 /// @param _filename  Path relative to working_directory (e.g. "sets/my_msr.json")
 /// @returns bool — true on success
+/// @reads   none
+/// @writes  global.active_set (is_loaded, filename, title, id, description, tunes, set_bpm_percent, etc.)
+/// @objects none
+/// @callers scr_button_scripts (set selection path)
 function scr_set_load_json(_filename) {
     show_debug_message("=== scr_set_load_json: " + string(_filename) + " ===");
 
@@ -88,6 +245,7 @@ function scr_set_load_json(_filename) {
     global.active_set.description = string(set_meta[$ "description"] ?? "");
     global.active_set.tunes       = tunes;
     global.active_set.segments    = [];
+    global.active_set.score_override_plan = [];
     global.active_set.active_segment_index = 0;
 
     // ── set-level playback overrides ───────────────────────────────────────
@@ -112,6 +270,10 @@ function scr_set_load_json(_filename) {
 ///              global.playback_events.  Also populates global.active_set.segments.
 /// @param _count_in_measures  Metronome count-in beats before the FIRST tune (0 = none)
 /// @returns bool — true on success
+/// @reads   global.active_set (tunes, set_bpm_percent, set_gracenote_override_ms), global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume
+/// @writes  global.playback_events, global.active_set.segments, global.active_set.active_segment_index, global.active_set.is_loaded, global.active_set.first_bpm, global.active_set.first_meter
+/// @objects none
+/// @callers scr_button_scripts (set play path)
 function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
     if (!is_struct(global.active_set) || array_length(global.active_set.tunes) == 0) {
         show_debug_message("ERROR: scr_set_preprocess_and_build_playback — no set loaded");
@@ -127,8 +289,10 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
         var first_entry  = global.active_set.tunes[0];
         var first_struct = scr_tune_load_to_struct(scr_set_resolve_tune_path(string(first_entry[$ "filename"] ?? "")));
         if (!is_undefined(first_struct)) {
-            var ci_bpm    = scr_set_entry_bpm(first_entry, first_struct);
-            var ci_meter  = metronome_normalize_time_sig(string(first_struct.tune_data.tune_metadata[$ "meter"] ?? "4/4"));
+            var ci_bpm    = scr_set_entry_bpm(first_entry, first_struct) * real(global.active_set.set_bpm_percent ?? 1.0);
+            var _td = first_struct[$ "tune_data"] ?? {};
+            var _tm = _td[$ "tune_metadata"] ?? {};
+            var ci_meter  = metronome_normalize_time_sig(string(_tm[$ "meter"] ?? "4/4"));
             var ci_beats_per_measure = real(string_split(ci_meter, "/")[0]);
             var ci_settings = {
                 bpm:                ci_bpm,
@@ -162,10 +326,46 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
         // build overrides from set entry (all optional)
         var overrides = scr_set_entry_overrides(entry, tune_struct);
 
+        // Transition tune metadata defines cuts for neighbors, not for itself
+        // when stitched as part of a set.
+        if (scr_set_is_transition_tune(entry, tune_struct)) {
+            overrides.head_cut_beats = 0;
+            overrides.tail_cut_beats = 0;
+        }
+
+        // Transition-tune semantics:
+        // If adjacent entry is a transition tune, its metadata defines cuts on
+        // neighboring tunes (tail on previous, head on next).
+        if (ti > 0) {
+            var prev_entry = global.active_set.tunes[ti - 1];
+            var prev_file = scr_set_resolve_tune_path(string(prev_entry[$ "filename"] ?? ""));
+            var prev_struct = scr_tune_load_to_struct(prev_file);
+            if (!is_undefined(prev_struct) && scr_set_is_transition_tune(prev_entry, prev_struct)) {
+                var prev_cuts = scr_set_get_transition_cuts(prev_struct);
+                if (is_struct(prev_cuts) && real(prev_cuts[$ "head_cut_beats"] ?? 0) > 0) {
+                    overrides[$ "head_cut_beats"] = prev_cuts[$ "head_cut_beats"];
+                }
+            }
+        }
+
+        if (ti < tune_count - 1) {
+            var next_entry = global.active_set.tunes[ti + 1];
+            var next_file = scr_set_resolve_tune_path(string(next_entry[$ "filename"] ?? ""));
+            var next_struct = scr_tune_load_to_struct(next_file);
+            if (!is_undefined(next_struct) && scr_set_is_transition_tune(next_entry, next_struct)) {
+                var next_cuts = scr_set_get_transition_cuts(next_struct);
+                if (is_struct(next_cuts) && real(next_cuts[$ "tail_cut_beats"] ?? 0) > 0) {
+                    overrides[$ "tail_cut_beats"] = next_cuts[$ "tail_cut_beats"];
+                }
+            }
+        }
+
         // capture first tune's timing for timeline binding in start_play
         if (ti == 0) {
             global.active_set.first_bpm   = scr_set_entry_bpm(entry, tune_struct);
-            global.active_set.first_meter = metronome_normalize_time_sig(string(tune_struct.tune_data.tune_metadata[$ "meter"] ?? "4/4"));
+            var _td2 = tune_struct[$ "tune_data"] ?? {};
+            var _tm2 = _td2[$ "tune_metadata"] ?? {};
+            global.active_set.first_meter = metronome_normalize_time_sig(string(_tm2[$ "meter"] ?? "4/4"));
         }
 
         // preprocess → tune events (0-based times)
@@ -173,14 +373,14 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
 
         // generate metronome events aligned to these tune events
         var metro_settings = {
-            bpm: overrides.bpm,
+            bpm: overrides[$ "bpm"],
             metronome_mode:    global.metronome_mode,
             metronome_pattern: global.metronome_pattern_selection,
             metronome_volume:  global.metronome_volume
         };
         var metro_events = metronome_generate_events({
             events:    tune_events,
-            tune_data: tune_struct.tune_data
+            tune_data: tune_struct[$ "tune_data"]
         }, metro_settings);
 
         // tune duration = last event time (add a small tail so next tune doesn't overlap)
@@ -190,17 +390,38 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
         // Including note events alongside bar/beat markers ensures gv_build_measure_nav_map
         // can fill in any measure that has no explicit marker, preventing gap skips
         // (e.g. measure 4 → 6) in the tune-structure panel.
+        // Keep pickup bucket (measure 0) when present so score playback maps remain
+        // index-aligned (seq 0 = pickup image, seq 1 = first full measure).
         var seg_bar_events = [];
+        var seg_note_anchor_seen = {};
         var _te_n = array_length(tune_events);
         for (var _bei = 0; _bei < _te_n; _bei++) {
             var _bev = tune_events[_bei];
             if (!is_struct(_bev)) continue;
             var _bm = real(_bev[$ "measure"] ?? 0);
-            if (_bm >= 1) array_push(seg_bar_events, _bev);
+            if (_bm < 0) continue;
+
+            var _bt = string(_bev[$ "type"] ?? "");
+            if (_bt == "marker") {
+                array_push(seg_bar_events, _bev);
+                continue;
+            }
+
+            // Keep one representative note anchor per measure to let nav-map
+            // fallback infer missing marker boundaries without multi-voice spam.
+            if (_bt == "note_on") {
+                var _mkey = string(floor(_bm));
+                if (!variable_struct_exists(seg_note_anchor_seen, _mkey)) {
+                    seg_note_anchor_seen[$ _mkey] = true;
+                    array_push(seg_bar_events, _bev);
+                }
+            }
         }
 
         // record segment BEFORE offsetting
-        var seg_title = string(tune_struct.tune_data.tune_metadata[$ "title"] ?? filename);
+        var _td4 = tune_struct[$ "tune_data"] ?? {};
+        var _tm4 = _td4[$ "tune_metadata"] ?? {};
+        var seg_title = string(_tm4[$ "title"] ?? filename);
         var seg_bpm   = scr_set_entry_bpm(entry, tune_struct);
         var seg_bpm_percent = real(global.active_set.set_bpm_percent ?? 1.0);
         array_push(segments, {
@@ -208,7 +429,8 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
             filename:    filename,
             title:       seg_title,
             bpm:         seg_bpm * seg_bpm_percent,
-            meter:       metronome_normalize_time_sig(string(tune_struct.tune_data.tune_metadata[$ "meter"] ?? "4/4")),
+            meter:       metronome_normalize_time_sig(string(_tm4[$ "meter"] ?? "4/4")),
+            score_manifest: _td4[$ "score_manifest"] ?? {},
             start_ms:    offset_ms,
             end_ms:      offset_ms + tune_end_ms,
             bar_events:  seg_bar_events  // 0-based times — add start_ms to get absolute
@@ -230,8 +452,10 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
                 var next_entry  = global.active_set.tunes[ti + 1];
                 var next_struct = scr_tune_load_to_struct(scr_set_resolve_tune_path(string(next_entry[$ "filename"] ?? "")));
                 if (!is_undefined(next_struct)) {
-                    var gap_bpm   = scr_set_entry_bpm(next_entry, next_struct);
-                    var gap_meter = metronome_normalize_time_sig(string(next_struct.tune_data.tune_metadata[$ "meter"] ?? "4/4"));
+                    var gap_bpm   = scr_set_entry_bpm(next_entry, next_struct) * real(global.active_set.set_bpm_percent ?? 1.0);
+                    var _td3 = next_struct[$ "tune_data"] ?? {};
+                    var _tm3 = _td3[$ "tune_metadata"] ?? {};
+                    var gap_meter = metronome_normalize_time_sig(string(_tm3[$ "meter"] ?? "4/4"));
                     var gap_beats_per_measure = real(string_split(gap_meter, "/")[0]);
                     // Round up to full measures so the gap uses the pattern grid
                     var gap_measures = max(1, ceil(gap_beats / gap_beats_per_measure));
@@ -258,6 +482,17 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
 
     global.playback_events = all_events;
     global.active_set.segments = segments;
+    
+    // Build transition-authoritative boundary plan (Phase 2)
+    var boundary_plan = scr_set_build_boundary_plan(global.active_set.tunes, segments);
+    if (boundary_plan == false) {
+        show_debug_message("Set preprocess FAILED: boundary plan validation error");
+        return false;
+    }
+    global.active_set.boundary_plan = boundary_plan;
+    
+    // Keep legacy score override plan for backward compat (will deprecate in Phase 5)
+    global.active_set.score_override_plan = scr_set_build_score_override_plan(segments);
     global.active_set.active_segment_index = 0;
     global.active_set.is_loaded = true;
 
@@ -275,6 +510,8 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
 /// @function scr_set_get_active_segment_index(_elapsed_ms)
 /// @description Return the segment index whose time window contains _elapsed_ms.
 ///              Returns the last segment if past the end.
+/// @reads   global.active_set.segments
+/// @callers scr_set_update_active_segment
 function scr_set_get_active_segment_index(_elapsed_ms) {
     var segs = global.active_set.segments;
     var n = array_length(segs);
@@ -289,6 +526,9 @@ function scr_set_get_active_segment_index(_elapsed_ms) {
 /// @function scr_set_update_active_segment(_elapsed_ms)
 /// @description Update global.active_set.active_segment_index; returns true if
 ///              the index changed (caller can react to tune boundary crossing).
+/// @reads   global.active_set.active_segment_index
+/// @writes  global.active_set.active_segment_index
+/// @callers obj_game_controller Step
 function scr_set_update_active_segment(_elapsed_ms) {
     var new_idx = scr_set_get_active_segment_index(_elapsed_ms);
     if (new_idx != global.active_set.active_segment_index) {
@@ -308,18 +548,24 @@ function scr_set_update_active_segment(_elapsed_ms) {
 
 /// @function scr_playback_context_init()
 /// @description Reset global.playback_context to an empty state.
+/// @writes  global.playback_context
+/// @callers scr_set_init_global, scr_button_scripts
 function scr_playback_context_init() {
     global.playback_context = {
         mode:           "none",   // "tune" | "set"
         display_title:  "",
         active_segment: 0,
-        segments:       []
+        segments:       [],
+        score_override_plan: []
     };
 }
 
 /// @function scr_playback_context_build_for_tune(_tune_struct)
 /// @description Populate global.playback_context from a single loaded tune.
 /// @param _tune_struct  The struct returned by scr_tune_load_to_struct, or global.tune
+/// @reads   global.playback_events (bar/beat markers)
+/// @writes  global.playback_context
+/// @callers scr_button_scripts (single-tune play path)
 function scr_playback_context_build_for_tune(_tune_struct) {
     var meta  = _tune_struct.tune_data.tune_metadata;
     var title = string(meta[$ "title"] ?? "");
@@ -345,6 +591,7 @@ function scr_playback_context_build_for_tune(_tune_struct) {
         mode:           "tune",
         display_title:  title,
         active_segment: 0,
+        score_override_plan: [],
         segments: [{
             tune_index:  0,
             filename:    string(_tune_struct.tune_data.filename ?? ""),
@@ -360,6 +607,9 @@ function scr_playback_context_build_for_tune(_tune_struct) {
 
 /// @function scr_playback_context_build_for_set()
 /// @description Populate global.playback_context from global.active_set after preprocess.
+/// @reads   global.active_set.segments, global.active_set.title
+/// @writes  global.playback_context
+/// @callers scr_button_scripts (set play path)
 function scr_playback_context_build_for_set() {
     var segs_src = global.active_set.segments;
     var n        = array_length(segs_src);
@@ -402,13 +652,86 @@ function scr_playback_context_build_for_set() {
         mode:           "set",
         display_title:  global.active_set.title,
         active_segment: 0,
-        segments:       segs_out
+        segments:       segs_out,
+        score_override_plan: global.active_set.score_override_plan
     };
+}
+
+/// @function scr_set_transition_group(_score_manifest, _group_name)
+/// @description Return a transition image group manifest from a score manifest, or undefined.
+function scr_set_transition_group(_score_manifest, _group_name) {
+    if (!is_struct(_score_manifest)) return undefined;
+    var groups = _score_manifest[$ "transition_images"] ?? undefined;
+    if (!is_struct(groups) || !variable_struct_exists(groups, _group_name)) return undefined;
+    return groups[$ _group_name];
+}
+
+/// @function scr_set_build_score_override_plan(_segments)
+/// @description Build a per-segment score override plan from transition score manifests.
+///              This is metadata only; draw-time application happens elsewhere.
+function scr_set_build_score_override_plan(_segments) {
+    var n = array_length(_segments);
+    var plan = array_create(n);
+
+    for (var i = 0; i < n; i++) {
+        plan[i] = {
+            tail_override: undefined,
+            bridge_override: undefined,
+            head_override: undefined
+        };
+    }
+
+    for (var ti = 0; ti < n; ti++) {
+        var seg = _segments[ti];
+        if (!is_struct(seg)) continue;
+        var manifest = seg[$ "score_manifest"] ?? undefined;
+        if (!is_struct(manifest)) continue;
+        if (!(manifest[$ "is_transition"] ?? false)) continue;
+
+        var refs = manifest[$ "transition_refs"] ?? {};
+        var _tailRaw = refs[$ "tail_cut_measures"] ?? 0;
+        var _headRaw = refs[$ "head_cut_measures"] ?? 0;
+        var tailMeasures = (is_string(_tailRaw) && _tailRaw == "") ? 0 : real(_tailRaw);
+        var headMeasures = (is_string(_headRaw) && _headRaw == "") ? 0 : real(_headRaw);
+        var priorGroup = scr_set_transition_group(manifest, "prior_replace");
+        var bridgeGroup = scr_set_transition_group(manifest, "bridge");
+        var followGroup = scr_set_transition_group(manifest, "follow_replace");
+
+        if (ti > 0 && is_struct(priorGroup)) {
+            plan[ti - 1][$ "tail_override"] = {
+                transition_segment_index: ti,
+                count_measures: max(0, tailMeasures),
+                refs: refs,
+                manifest_group: priorGroup
+            };
+        }
+
+        if (is_struct(bridgeGroup)) {
+            plan[ti][$ "bridge_override"] = {
+                transition_segment_index: ti,
+                refs: refs,
+                manifest_group: bridgeGroup
+            };
+        }
+
+        if (ti < n - 1 && is_struct(followGroup)) {
+            plan[ti + 1][$ "head_override"] = {
+                transition_segment_index: ti,
+                count_measures: max(0, headMeasures),
+                refs: refs,
+                manifest_group: followGroup
+            };
+        }
+    }
+
+    return plan;
 }
 
 
 /// @function scr_playback_context_get_active_segment()
 /// @description Returns the active segment struct, or undefined if none.
+/// @reads   global.playback_context
+/// @callers scr_game_viz, scr_scoring, scr_UI_scripts
 function scr_playback_context_get_active_segment() {
     if (!variable_global_exists("playback_context")) return undefined;
     var ctx = global.playback_context;
@@ -420,6 +743,8 @@ function scr_playback_context_get_active_segment() {
 /// @function scr_set_is_active()
 /// @description Returns true when a set JSON has been loaded (tunes populated).
 ///              Does NOT require preprocess to have completed yet.
+/// @reads   global.active_set
+/// @callers scr_UI_scripts, scr_game_viz, scr_button_scripts
 function scr_set_is_active() {
     return is_struct(global.active_set)
         && is_array(global.active_set.tunes)
@@ -430,6 +755,9 @@ function scr_set_is_active() {
 /// @description Update the gameinfo window title field based on the current
 ///              playback context. In set mode: "Set Title — Tune Title".
 ///              In tune mode: just the tune title. Safe to call at any time.
+/// @reads   global.playback_context
+/// @writes  global.gameinfo_title
+/// @callers scr_set_update_active_segment, scr_button_scripts
 function scr_gameinfo_update_title(_seg_index) {
     if (!variable_global_exists("playback_context") || !is_struct(global.playback_context)) return;
 
@@ -456,12 +784,19 @@ function scr_gameinfo_update_title(_seg_index) {
 }
 
 /// @function scr_set_resolve_tune_path(_filename)
-/// @description Prepend "tunes/" prefix if the filename has no path separator.
+/// @description Resolve a tune filename to the subfolder structure:
+///              tunes/TuneName/TuneName.json
+///              If the filename already contains a path separator it is returned as-is.
 function scr_set_resolve_tune_path(_filename) {
     if (string_pos("/", _filename) > 0 || string_pos("\\", _filename) > 0) {
         return _filename;
     }
-    return "tunes/" + _filename;
+    // Strip .json extension to get the folder/file stem
+    var _stem = _filename;
+    if (string_lower(string_copy(_stem, string_length(_stem) - 4, 5)) == ".json") {
+        _stem = string_copy(_stem, 1, string_length(_stem) - 5);
+    }
+    return "tunes/" + _stem + "/" + _stem + ".json";
 }
 
 /// @function scr_set_entry_bpm(_entry, _tune_struct)
@@ -479,6 +814,8 @@ function scr_set_entry_bpm(_entry, _tune_struct) {
 /// @function scr_set_entry_overrides(_entry, _tune_struct)
 /// @description Build an overrides struct for scr_preprocess_tune from a set tune entry.
 ///              Priority: tune-entry > set-level > tune-JSON default.
+/// @reads   global.active_set.set_bpm_percent, global.active_set.set_gracenote_override_ms
+/// @callers scr_set_preprocess_and_build_playback
 function scr_set_entry_overrides(_entry, _tune_struct) {
     // Resolve BPM: entry bpm × set bpm_percent (entry wins if specified, then scale)
     var entry_bpm = _entry[$ "bpm"] ?? undefined;
@@ -498,6 +835,78 @@ function scr_set_entry_overrides(_entry, _tune_struct) {
         swing_mult:            _entry[$ "swing"] ?? undefined,
         gracenote_override_ms: grace
     };
+}
+
+/// @function scr_set_parse_cut_beats(_raw)
+/// @description Parse cut-beat metadata into a non-negative real.
+function scr_set_parse_cut_beats(_raw) {
+    var s = string_trim(string(_raw ?? ""));
+    if (string_length(s) <= 0) return 0;
+    var v = real(s);
+    if (v < 0) v = 0;
+    return v;
+}
+
+/// @function scr_set_transition_beats_per_measure(_tune_struct)
+/// @description Resolve beats-per-measure for a transition tune from its meter metadata.
+function scr_set_transition_beats_per_measure(_tune_struct) {
+    var meta = _tune_struct.tune_data.tune_metadata;
+    var meter = metronome_normalize_time_sig(string(meta[$ "meter"] ?? "4/4"));
+    var parts = string_split(meter, "/");
+    var beats = (array_length(parts) >= 1) ? real(parts[0]) : 4;
+    if (beats <= 0) beats = 4;
+    return beats;
+}
+
+/// @function scr_set_parse_cut_measures_to_beats(_raw_measures, _beats_per_measure)
+/// @description Parse cut-measure metadata into beats (non-negative real).
+function scr_set_parse_cut_measures_to_beats(_raw_measures, _beats_per_measure) {
+    var measures = scr_set_parse_cut_beats(_raw_measures);
+    if (measures <= 0) return 0;
+    var bpm = max(1, real(_beats_per_measure));
+    return measures * bpm;
+}
+
+/// @function scr_set_get_transition_cuts(_tune_struct)
+/// @description Read tail/head cut values from transition metadata.
+///              Supports legacy *_cut_beats and new *_cut_measures (converted to beats).
+function scr_set_get_transition_cuts(_tune_struct) {
+    var meta = _tune_struct.tune_data.tune_metadata;
+    var beats_per_measure = scr_set_transition_beats_per_measure(_tune_struct);
+
+    var tail_cut_beats = scr_set_parse_cut_beats(meta[$ "tail_cut_beats"] ?? "");
+    var head_cut_beats = scr_set_parse_cut_beats(meta[$ "head_cut_beats"] ?? "");
+
+    if (tail_cut_beats <= 0) {
+        tail_cut_beats = scr_set_parse_cut_measures_to_beats(meta[$ "tail_cut_measures"] ?? "", beats_per_measure);
+    }
+    if (head_cut_beats <= 0) {
+        head_cut_beats = scr_set_parse_cut_measures_to_beats(meta[$ "head_cut_measures"] ?? "", beats_per_measure);
+    }
+
+    return {
+        tail_cut_beats: tail_cut_beats,
+        head_cut_beats: head_cut_beats
+    };
+}
+
+/// @function scr_set_is_transition_tune(_entry, _tune_struct)
+/// @description Heuristic to identify transition tunes in a set.
+function scr_set_is_transition_tune(_entry, _tune_struct) {
+    if (!is_undefined(_tune_struct)) {
+        var meta = _tune_struct.tune_data.tune_metadata;
+        var rhythm = string_lower(string_trim(string(meta[$ "rhythm"] ?? "")));
+        if (rhythm == "transition") return true;
+
+        var title = string_lower(string_trim(string(meta[$ "title"] ?? "")));
+        if (string_pos("transition", title) > 0) return true;
+    }
+
+    var fn = string_lower(string(_entry[$ "filename"] ?? ""));
+    if (string_copy(fn, 1, 2) == "t_") return true;
+    if (string_pos("transition", fn) > 0) return true;
+
+    return false;
 }
 
 /// @function scr_set_max_event_time(_events)

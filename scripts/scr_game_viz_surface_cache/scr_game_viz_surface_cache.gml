@@ -2,6 +2,10 @@
 // Strategy: render all visible player spans to off-screen surface, blit each frame
 // Cache invalidates when playhead moves significantly or spans change
 
+/// @function gv_invalidate_player_surface_cache()
+/// @description Free the cached player-spans surface and mark the cache as invalid.
+/// @writes global.player_surface_cache, global.player_surface_cache_valid
+/// @callers scr_game_viz (on playhead jump or span update)
 function gv_invalidate_player_surface_cache() {
     if (variable_global_exists("player_surface_cache") && surface_exists(global.player_surface_cache)) {
         surface_free(global.player_surface_cache);
@@ -10,6 +14,14 @@ function gv_invalidate_player_surface_cache() {
     global.player_surface_cache_valid = false;
 }
 
+/// @function gv_ensure_player_surface_cache(_width, _height)
+/// @description Return the shared player-spans surface, recreating it if the size changed.
+/// @param _width Desired surface width in pixels
+/// @param _height Desired surface height in pixels
+/// @returns Surface ID (global.player_surface_cache)
+/// @reads global.player_surface_cache
+/// @writes global.player_surface_cache
+/// @callers gv_draw_player_row_to_surface
 function gv_ensure_player_surface_cache(_width, _height) {
     // Safely create or recreate surface if size changed
     if (surface_exists(global.player_surface_cache)) {
@@ -25,6 +37,19 @@ function gv_ensure_player_surface_cache(_width, _height) {
     return global.player_surface_cache;
 }
 
+/// @function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1, _ry1, _rx2, _ry2, _playhead_ms)
+/// @description Render all completed and pending player spans into an off-screen surface.
+/// @param _surface Target draw surface
+/// @param _surf_width Surface width
+/// @param _surf_height Surface height
+/// @param _rx1 Left clip boundary (row x1)
+/// @param _ry1 Top clip boundary (row y1)
+/// @param _rx2 Right clip boundary (row x2)
+/// @param _ry2 Bottom clip boundary (row y2)
+/// @param _playhead_ms Current playhead position in milliseconds
+/// @reads global.timeline_state (player_in, pending_player, ms_behind, ms_ahead)
+/// @reads global.timeline_cfg (player_bar_color, player_bar_alpha, player_time_offset_ms, etc.)
+/// @callers scr_game_viz (Draw event, replaces per-frame span loop)
 function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1, _ry1, _rx2, _ry2, _playhead_ms) {
     // Render all player spans to cached surface (replaces gv_draw_player_row inner loop logic)
     if (!surface_exists(_surface)) return;
@@ -185,6 +210,13 @@ function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1
     surface_reset_target();
 }
 
+/// @function gv_blit_player_surface_cache(_surface, _screen_x1, _screen_y1)
+/// @description Blit the pre-rendered player-spans surface to the screen at the given position.
+/// @param _surface The cached surface to blit
+/// @param _screen_x1 Screen destination X
+/// @param _screen_y1 Screen destination Y
+/// @returns true if surface was drawn; false if surface no longer exists
+/// @callers scr_game_viz (Draw event)
 function gv_blit_player_surface_cache(_surface, _screen_x1, _screen_y1) {
     // Fast blit cached player spans from surface to screen
     if (!surface_exists(_surface)) return false;

@@ -5,7 +5,8 @@
 /// @desc UI Layer Utilities
 //test//
 /// @function GetLayerNameFromIndex(_index)
-	// @desc Returns the layer name string for a given index, or "unknown layer" if invalid.
+	/// @description Return the layer name string for a given index, or "unknown layer" if invalid.
+	/// @reads global.ui_layer_names
 	function GetLayerNameFromIndex(_index) {
 	    if (_index >= 0 && _index < array_length(global.ui_layer_names)) {
 	        return global.ui_layer_names[_index];
@@ -14,7 +15,8 @@
 	}
 
 /// @function GetLayerIndexFromName(_name)
-	// @desc Returns the numeric index for a given layer name, or -1 if not found.
+	/// @description Return the numeric index for a given layer name, or -1 if not found.
+	/// @reads global.ui_layer_names
 	function GetLayerIndexFromName(_name) {
 	    var len = array_length(global.ui_layer_names);
 	    for (var i = 0; i < len; i++) {
@@ -27,7 +29,10 @@
 
 	
 	/// @function scr_hide_window(_target, _inst)
-	// @desc Safely hide a UI layer based on a button's label, a layer name, or a layer index. Returns true if a layer was hidden.
+	/// @description Safely hide a UI layer by name, index, or fallback to inst.ui_layer_num. Returns true if hidden.
+	/// @param _target Layer name string, layer index number, or undefined
+	/// @param _inst Optional context instance with ui_layer_num fallback
+	/// @returns true if a layer was successfully hidden
 	function scr_hide_window(_target, _inst) {
 	    var hid = false;
 	
@@ -73,7 +78,13 @@
 	    return false;
 	}
 	
-		function scr_update_fields(_ui_layer_num) {
+	/// @function scr_update_fields(_ui_layer_num)
+	/// @description Refresh all field instances in a given UI layer from their target global arrays.
+	/// @param _ui_layer_num Layer index to refresh
+	/// @reads global.ui_assets[_ui_layer_num]
+	/// @objects field instances in the layer (sets field_contents)
+	/// @callers scr_open_window, scr_tune_OK, scr_button_apply_post_tune_load_ui
+	function scr_update_fields(_ui_layer_num) {
 	    var assets = global.ui_assets[_ui_layer_num];
 	
 	    for (var i = 0; i < array_length(assets); i++) {
@@ -102,6 +113,11 @@
 	    }
 	}
 	
+	/// @function scr_ui_refresh(_layer_num)
+	/// @description Re-link any stale instance IDs in the ui_assets array for a given layer.
+	/// @reads global.ui_assets[_layer_num]
+	/// @writes global.ui_assets[_layer_num] (replaces stale IDs with live obj_UI_parent instances)
+	/// @objects obj_UI_parent (iterates to find matching ui_num)
 	function scr_ui_refresh(_layer_num) {
 	    if (!is_array(global.ui_assets) || !is_array(global.ui_assets[_layer_num])) return;
 	
@@ -120,6 +136,11 @@
 	    }
 	}
 
+/// @function cn_panel_init_state()
+/// @description Initialise global.current_note_panel to its default empty state.
+/// @reads global.timeline_cfg (reads filter_noise_ms)
+/// @writes global.current_note_panel
+/// @callers cn_panel_try_bind_refs, cn_panel_prepare_tune_plan (lazy init)
 function cn_panel_init_state() {
 	var panel_min_note_ms = 15;
 	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "filter_noise_ms")) {
@@ -151,10 +172,18 @@ function cn_panel_init_state() {
 	};
 }
 
+/// @function cn_panel_note_key(_channel, _note_midi)
+/// @description Build a unique string key for a channel+MIDI note pair.
 function cn_panel_note_key(_channel, _note_midi) {
 	return string(_channel) + ":" + string(_note_midi);
 }
 
+/// @function cn_panel_append_note(_map, _measure, _note, _note_class)
+/// @description Append a note token to the given measure in a note-map struct.
+/// @param _map The measure→slot struct to modify (e.g. tune_plan_by_measure)
+/// @param _measure Integer measure number (ignored if < 1)
+/// @param _note Note display string to append
+/// @param _note_class CSS-like class tag for rendering (default "normal")
 function cn_panel_append_note(_map, _measure, _note, _note_class = "normal") {
 	if (_measure < 1) return;
 	var key = string(_measure);
@@ -186,11 +215,16 @@ function cn_panel_append_note(_map, _measure, _note, _note_class = "normal") {
 	_map[$ key] = slot;
 }
 
+/// @function cn_panel_append_separator(_map, _measure)
+/// @description Append a "|" beat-separator token to the given measure in a note-map.
 function cn_panel_append_separator(_map, _measure) {
 	if (_measure < 1) return;
 	cn_panel_append_note(_map, _measure, "|", "separator");
 }
 
+/// @function cn_panel_append_filtered_marker(_map, _measure)
+/// @description Append the noise-filter marker symbol (default "^") to a measure in a note-map.
+/// @reads global.current_note_panel (reads filter_marker_symbol)
 function cn_panel_append_filtered_marker(_map, _measure) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	var marker = string(global.current_note_panel.filter_marker_symbol ?? "^");
@@ -198,6 +232,8 @@ function cn_panel_append_filtered_marker(_map, _measure) {
 	cn_panel_append_note(_map, _measure, marker, "filtered_noise");
 }
 
+/// @function cn_panel_get_tokens(_map, _measure)
+/// @description Return the token array for a given measure from a note-map, or [].
 function cn_panel_get_tokens(_map, _measure) {
 	if (_measure < 1) return [];
 	var slot = _map[$ string(_measure)];
@@ -207,6 +243,8 @@ function cn_panel_get_tokens(_map, _measure) {
 	return tokens;
 }
 
+/// @function cn_panel_tokens_to_text(_tokens)
+/// @description Concatenate token text strings into a single display string.
 function cn_panel_tokens_to_text(_tokens) {
 	var out = "";
 	for (var i = 0; i < array_length(_tokens); i++) {
@@ -216,6 +254,9 @@ function cn_panel_tokens_to_text(_tokens) {
 	return out;
 }
 
+/// @function cn_panel_record_event(_source, _measure, _note_midi, _channel, _duration_ms, _note_class, _is_filtered, _time_ms)
+/// @description Append a classified event struct to the panel's classified_events log.
+/// @writes global.current_note_panel.classified_events
 function cn_panel_record_event(_source, _measure, _note_midi, _channel, _duration_ms, _note_class, _is_filtered, _time_ms) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	var note_text = midi_to_letter(_note_midi, _channel);
@@ -232,6 +273,8 @@ function cn_panel_record_event(_source, _measure, _note_midi, _channel, _duratio
 	});
 }
 
+/// @function cn_panel_get_text(_map, _measure)
+/// @description Return the concatenated text string for a measure from a note-map, or "".
 function cn_panel_get_text(_map, _measure) {
 	if (_measure < 1) return "";
 	var slot = _map[$ string(_measure)];
@@ -239,6 +282,11 @@ function cn_panel_get_text(_map, _measure) {
 	return string(slot.text ?? "");
 }
 
+/// @function cn_panel_try_bind_refs()
+/// @description Scan global.ui_assets and bind the 6 current-note label instances into global.current_note_panel.refs.
+/// @reads global.ui_assets, global.current_note_panel
+/// @writes global.current_note_panel.refs, global.current_note_panel.bound
+/// @callers cn_panel_render, cn_panel_prepare_tune_plan
 function cn_panel_try_bind_refs() {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) {
 		cn_panel_init_state();
@@ -280,6 +328,9 @@ function cn_panel_try_bind_refs() {
 	}
 }
 
+/// @function cn_panel_set_field(_field_id, _text)
+/// @description Set field_contents on a UI field instance.
+/// @objects _field_id instance (sets field_contents)
 function cn_panel_set_field(_field_id, _text) {
 	if (!instance_exists(_field_id)) return;
 	with (_field_id) {
@@ -287,6 +338,10 @@ function cn_panel_set_field(_field_id, _text) {
 	}
 }
 
+/// @function cn_panel_get_max_measure()
+/// @description Scan all note maps in the panel and return the highest measure number seen.
+/// @reads global.current_note_panel (tune_plan_by_measure, tune_played_by_measure, player_played_by_measure)
+/// @callers cn_panel_scroll_measure
 function cn_panel_get_max_measure() {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return 1;
 
@@ -313,6 +368,13 @@ function cn_panel_get_max_measure() {
 	return max_measure;
 }
 
+/// @function cn_panel_scroll_measure(_delta)
+/// @description Advance the displayed measure by delta steps, clamped to the tune's measure range.
+/// @param _delta Integer steps to scroll (+1 or -1 typically)
+/// @returns New current_measure value
+/// @reads global.current_note_panel
+/// @writes global.current_note_panel.current_measure
+/// @callers scr_current_note_measure_scroll
 function cn_panel_scroll_measure(_delta) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return 1;
 
@@ -329,6 +391,12 @@ function cn_panel_scroll_measure(_delta) {
 	return target_measure;
 }
 
+/// @function cn_panel_render()
+/// @description Read the current measure from global.current_note_panel and push note text to all 6 bound field instances.
+/// @reads global.current_note_panel (all note maps)
+/// @writes global.current_note_panel.render_tokens
+/// @objects label instances referenced via global.current_note_panel.refs (sets field_contents)
+/// @callers cn_panel_scroll_measure, cn_panel_on_tune_note_off, cn_panel_on_player_note_off, cn_panel_on_beat_marker, cn_panel_prepare_tune_plan
 function cn_panel_render() {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	cn_panel_try_bind_refs();
@@ -365,6 +433,12 @@ function cn_panel_render() {
 	cn_panel_set_field(panel.refs.next_player, next_player_text);
 }
 
+/// @function cn_panel_prepare_tune_plan(_events)
+/// @description Parse the tune's playable event array and pre-fill the tune_plan_by_measure map.
+/// @param _events Array of tune playable event structs (from global.playback_events)
+/// @reads global.METRONOME_CONFIG (channel filter)
+/// @writes global.current_note_panel (all sub-maps reset and rebuilt)
+/// @callers scr_tune_scripts (on tune load / tune start)
 function cn_panel_prepare_tune_plan(_events) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) {
 		cn_panel_init_state();
@@ -402,6 +476,11 @@ function cn_panel_prepare_tune_plan(_events) {
 	cn_panel_render();
 }
 
+/// @function cn_panel_on_tune_note_on(_measure, _note_midi, _channel, _time_ms)
+/// @description Record a tune note_on into pending_tune_notes for duration tracking.
+/// @reads global.current_note_panel, global.METRONOME_CONFIG
+/// @writes global.current_note_panel.current_measure, global.current_note_panel.pending_tune_notes
+/// @callers scr_tune_scripts (playback engine note callbacks)
 function cn_panel_on_tune_note_on(_measure, _note_midi, _channel, _time_ms) {
 	if (_measure < 1) return;
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
@@ -418,6 +497,11 @@ function cn_panel_on_tune_note_on(_measure, _note_midi, _channel, _time_ms) {
 	cn_panel_render();
 }
 
+/// @function cn_panel_on_tune_note_off(_measure, _note_midi, _channel, _time_ms)
+/// @description Resolve a pending tune note, classify as short/core/noise, and append to tune_played_by_measure.
+/// @reads global.current_note_panel, global.METRONOME_CONFIG
+/// @writes global.current_note_panel.pending_tune_notes, global.current_note_panel.tune_played_by_measure
+/// @callers scr_tune_scripts (playback engine note callbacks)
 function cn_panel_on_tune_note_off(_measure, _note_midi, _channel, _time_ms) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	if (_channel == global.METRONOME_CONFIG.channel) return;
@@ -447,6 +531,11 @@ function cn_panel_on_tune_note_off(_measure, _note_midi, _channel, _time_ms) {
 	cn_panel_render();
 }
 
+/// @function cn_panel_on_player_note_on(_note_midi, _channel, _time_ms)
+/// @description Record a player note_on (channel 0 only) into pending_player_notes.
+/// @reads global.current_note_panel
+/// @writes global.current_note_panel.pending_player_notes
+/// @callers MIDI_process_messages or scr_tune_scripts player note callbacks
 function cn_panel_on_player_note_on(_note_midi, _channel, _time_ms) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	if (_channel != 0) return;
@@ -463,6 +552,11 @@ function cn_panel_on_player_note_on(_note_midi, _channel, _time_ms) {
 	cn_panel_render();
 }
 
+/// @function cn_panel_on_player_note_off(_note_midi, _channel, _time_ms)
+/// @description Resolve a pending player note and append to player_played_by_measure.
+/// @reads global.current_note_panel
+/// @writes global.current_note_panel.pending_player_notes, global.current_note_panel.player_played_by_measure
+/// @callers MIDI_process_messages or scr_tune_scripts player note callbacks
 function cn_panel_on_player_note_off(_note_midi, _channel, _time_ms) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 	if (_channel != 0) return;
@@ -493,6 +587,11 @@ function cn_panel_on_player_note_off(_note_midi, _channel, _time_ms) {
 	cn_panel_render();
 }
 
+/// @function cn_panel_on_beat_marker(_measure, _beat, _is_countin)
+/// @description On each beat marker event, advance current_measure and append beat separators to both note maps.
+/// @reads global.current_note_panel
+/// @writes global.current_note_panel.current_measure, global.current_note_panel.tune_played_by_measure, global.current_note_panel.player_played_by_measure
+/// @callers scr_tune_scripts (playback engine beat marker callbacks)
 function cn_panel_on_beat_marker(_measure, _beat, _is_countin) {
 	if (!variable_global_exists("current_note_panel") || !is_struct(global.current_note_panel)) return;
 

@@ -7,6 +7,11 @@
 
 //Main menu buttons
 	//Button handler
+	/// @function scr_handle_button_click(button_ID, _ctx)
+	/// @description Central button dispatcher; routes button ID to its handler function.
+	/// @param button_ID Integer button code (see switch table in function body)
+	/// @param _ctx Optional caller object instance (button context), default noone
+	/// @callers obj_btn_base (Click event)
 	function scr_handle_button_click(button_ID, _ctx = noone){
 		if (is_real(button_ID) && button_ID < 0) return;
 
@@ -41,56 +46,80 @@
 			case 25: scr_judge_settings_OK(ctx); break;
 			case 27: scr_select_player(ctx); break;
 			case 28: scr_player_clear_guest_history(); break;
+			case 29: scr_toggle_loop_score_overview(ctx); break;
+			case 30: scr_settings_logs_toggle(ctx); break;
 			default: show_debug_message("Unknown button script index: " + string(button_ID)); scr_script_not_set(ctx); break;
 		}
 	}
 
+	/// @function scr_button_get_ctx(_ctx)
+	/// @description Validate and return the context instance, or noone if invalid.
 	function scr_button_get_ctx(_ctx = noone) {
 		if (_ctx != noone && instance_exists(_ctx)) return _ctx;
 		return noone;
 	}
 
+	/// @function scr_button_inst_get(_ctx, _name, _default)
+	/// @description Safe instance variable getter — returns default if instance or variable doesn't exist.
 	function scr_button_inst_get(_ctx, _name, _default = undefined) {
 		if (_ctx == noone || !instance_exists(_ctx)) return _default;
 		if (!variable_instance_exists(_ctx, _name)) return _default;
 		return variable_instance_get(_ctx, _name);
 	}
 
+	/// @function scr_button_inst_set(_ctx, _name, _value)
+	/// @description Safe instance variable setter — no-ops if instance doesn't exist.
 	function scr_button_inst_set(_ctx, _name, _value) {
 		if (_ctx == noone || !instance_exists(_ctx)) return;
 		variable_instance_set(_ctx, _name, _value);
 	}
 
+	/// @function scr_button_field_get(_field, _name, _default)
+	/// @description Safe field instance variable getter.
 	function scr_button_field_get(_field, _name, _default = undefined) {
 		if (_field == noone || !instance_exists(_field)) return _default;
 		if (!variable_instance_exists(_field, _name)) return _default;
 		return variable_instance_get(_field, _name);
 	}
 
+	/// @function scr_button_field_set(_field, _name, _value)
+	/// @description Safe field instance variable setter.
 	function scr_button_field_set(_field, _name, _value) {
 		if (_field == noone || !instance_exists(_field)) return;
 		variable_instance_set(_field, _name, _value);
 	}
 
+	/// @function scr_button_struct_get(_value, _name, _default)
+	/// @description Safe struct key getter with fallback default.
 	function scr_button_struct_get(_value, _name, _default = undefined) {
 		if (!is_struct(_value) || !variable_struct_exists(_value, _name)) return _default;
 		return variable_struct_get(_value, _name);
 	}
 
+	/// @function scr_button_struct_set(_value, _name, _new_value)
+	/// @description Safe struct key setter — no-op if not a struct.
 	function scr_button_struct_set(_value, _name, _new_value) {
 		if (!is_struct(_value)) return;
 		variable_struct_set(_value, _name, _new_value);
 	}
 
+	/// @function scr_button_tune_data_get(_tune)
+	/// @description Return the tune_data struct from an obj_tune instance, or undefined.
 	function scr_button_tune_data_get(_tune) {
 		return scr_button_inst_get(_tune, "tune_data", undefined);
 	}
 
+	/// @function scr_button_tune_is_loaded(_tune)
+	/// @description Return true if the obj_tune instance has tune_data.is_loaded set.
 	function scr_button_tune_is_loaded(_tune) {
 		var tune_data = scr_button_tune_data_get(_tune);
 		return scr_button_struct_get(tune_data, "is_loaded", false);
 	}
 
+	/// @function scr_button_find_field_by_ui_name(_field_ui_name)
+	/// @description Find the first obj_field_base instance whose ui_name matches, or noone.
+	/// @returns The matching instance ID or noone
+	/// @objects obj_field_base (iterated via instance_find)
 	function scr_button_find_field_by_ui_name(_field_ui_name) {
 		var field_count = instance_number(obj_field_base);
 		for (var i = 0; i < field_count; i++) {
@@ -102,6 +131,8 @@
 		return noone;
 	}
 
+	/// @function scr_button_clone_struct(_src)
+	/// @description Shallow-clone a struct into a new struct (one level deep).
 	function scr_button_clone_struct(_src) {
 		if (!is_struct(_src)) return _src;
 		var out = {};
@@ -113,6 +144,11 @@
 		return out;
 	}
 
+	/// @function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel)
+	/// @description Scan a MIDI event array for unmatched note_ons and return a note_off for each (loop boundary cleanup).
+	/// @param _selected_template Array of MIDI event structs for the loop segment
+	/// @param _metro_channel Channel to exclude (metronome)
+	/// @returns Array of note_off event structs to insert at loop boundary
 	function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel) {
 		var boundary_note_offs = [];
 		if (!is_array(_selected_template) || array_length(_selected_template) <= 0) return boundary_note_offs;
@@ -173,6 +209,11 @@
 		return boundary_note_offs;
 	}
 
+	/// @function scr_button_reset_loop_state()
+	/// @description Reset all loop runtime globals and clear loop-related timeline_state entries.
+	/// @writes global.loop_mode_enabled, global.loop_runtime_active, global.loop_runtime_current_iteration, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.playback_events_active
+	/// @writes global.timeline_state.measure_nav_entries, global.timeline_state.loop_selected_measures, global.timeline_state.loop_blank_measure
+	/// @callers scr_goto_playroom, scr_goto_mainmenu
 	function scr_button_reset_loop_state() {
 		global.loop_mode_enabled = false;
 		global.loop_runtime_active = false;
@@ -203,6 +244,107 @@
 		}
 	}
 
+	/// @function scr_button_reset_play_session_state()
+	/// @description Full gameplay/session reset used when leaving play and returning to menu.
+	/// @reads global.tune, global.timeline_state
+	/// @writes global.loop_mode_enabled, global.playback_events, global.playback_events_active, global.current_set, global.current_set_item_index, global.current_tune_filename, global.tune_selection, global.selected_tune_time_sig, global.pending_auto_start_play, global.scoring_last_run
+	/// @writes global.timeline_state (active/playback/score/loop fields), global.tune_event_groups, global.tune_group_index, global.tune_scheduler_active, global.tune_timer
+	/// @objects obj_tune, obj_tune_picker
+	/// @callers scr_goto_mainmenu
+	function scr_button_reset_play_session_state() {
+		// Stop any active scheduler/timer so no stale callbacks survive room switches.
+		if (variable_global_exists("tune_timer") && global.tune_timer != noone) {
+			time_source_stop(global.tune_timer);
+			global.tune_timer = noone;
+		}
+		global.tune_scheduler_active = false;
+		global.tune_scheduler_mode_step = false;
+		global.tune_event_groups = [];
+		global.tune_group_index = 0;
+		global.tune_start_real = 0;
+		global.tune_deferred_queue = [];
+		global.tune_deferred_head = 0;
+
+		global.playback_events = [];
+		global.playback_events_active = [];
+
+		// Reset single-tune + set state so a new play flow always starts clean.
+		if (script_exists(asset_get_index("scr_set_init_global"))) {
+			scr_set_init_global();
+		}
+		global.current_set = [];
+		global.current_set_item_index = -1;
+		global.current_tune_filename = "";
+		global.tune_selection = -1;
+		global.selected_tune_time_sig = "";
+
+		// Clear loaded tune payload to prevent stale tune reuse.
+		if (variable_global_exists("tune") && instance_exists(global.tune)
+			&& variable_instance_exists(global.tune, "tune_data")) {
+			var _tune_data_reset = variable_instance_get(global.tune, "tune_data");
+			if (is_struct(_tune_data_reset)) {
+				_tune_data_reset.tune_metadata = {};
+				_tune_data_reset.performance = {};
+				_tune_data_reset.metronome = {};
+				_tune_data_reset.events = [];
+				_tune_data_reset.event_count = 0;
+				_tune_data_reset.is_loaded = false;
+				_tune_data_reset.filename = "";
+				variable_instance_set(global.tune, "tune_data", _tune_data_reset);
+			}
+		}
+
+		// Reset picker selection visuals/state if picker exists.
+		var _picker = instance_find(obj_tune_picker, 0);
+		if (_picker != noone && is_undefined(scr_tune_picker_clear_selection) == false) {
+			scr_tune_picker_clear_selection();
+			if (is_undefined(scr_tune_picker_sync_selected_entry_ui) == false) {
+				scr_tune_picker_sync_selected_entry_ui();
+			}
+		}
+
+		// Reset scoring/timeline runtime overlays and loop-score data.
+		global.scoring_last_run = undefined;
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+			global.timeline_state.active = false;
+			global.timeline_state.playback_complete = false;
+			global.timeline_state.playhead_ms = 0;
+			global.timeline_state.start_clock_ms = current_time;
+			global.timeline_state.current_measure = 0;
+			global.timeline_state.last_dispatched_expected_ms = 0;
+			global.timeline_state.tune_played = [];
+			global.timeline_state.player_in = [];
+			global.timeline_state.review_full_trace = [];
+			global.timeline_state.score_by_segment = [];
+			global.timeline_state.score_measure_maps = {};
+			global.timeline_state.score_popup_measure = -1;
+			global.timeline_state.score_detail_popup = false;
+			global.timeline_state.loop_iteration_scores = [];
+		}
+
+		scr_button_reset_loop_state();
+
+		// Force close floating gameplay windows.
+		var _layers = ["judge_settings_layer", "player_window_layer", "loop_score_overview_layer"];
+		for (var _li = 0; _li < array_length(_layers); _li++) {
+			var _lid = layer_get_id(_layers[_li]);
+			if (_lid != -1) {
+				layer_set_visible(_lid, false);
+				instance_deactivate_layer(_lid);
+			}
+		}
+
+		global.gameinfo_title[0] = "No tune selected";
+		global.pending_auto_start_play = false;
+	}
+
+	/// @function scr_button_loop_build_playback_events(_base_events)
+	/// @description Expand the base playback event array into a looped sequence based on selected measures.
+	/// @param _base_events Base MIDI event array from scr_goto_playroom preprocessing
+	/// @returns Expanded event array, or _base_events unmodified if loop is off or no measures selected
+	/// @reads global.loop_mode_enabled, global.loop_repeat_total, global.METRONOME_CONFIG
+	/// @writes global.loop_runtime_active, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.loop_runtime_jump_to_selection
+	/// @callers start_play (when loop mode is enabled)
 	function scr_button_loop_build_playback_events(_base_events) {
 		if (!is_array(_base_events) || array_length(_base_events) <= 0) return _base_events;
 		if (!variable_global_exists("loop_mode_enabled") || !global.loop_mode_enabled) return _base_events;
@@ -442,6 +584,9 @@
 	
 	//CASE 0 
 	//No button action
+	/// @function scr_script_not_set(_ctx)
+	/// @description Debug fallback for unassigned buttons; prints ui_assets grid to debug console.
+	/// @reads global.ui_assets (debug print only)
 	function scr_script_not_set(_ctx = noone){
 		var ctx = scr_button_get_ctx(_ctx);
 		var ui_name = string(scr_button_inst_get(ctx, "ui_name", "button"));
@@ -464,6 +609,12 @@
 
 	//CASE 1 	
 	//Main Menu - Play button
+	/// @function scr_goto_playroom()
+	/// @description Preprocess tune/set, merge metronome events, build global.playback_events, then go to Room_play.
+	/// @reads global.tune, global.current_set, global.current_set_item_index, global.count_in_measures, global.pending_auto_start_play
+	/// @writes global.playback_events, global.enable_current_note_layer, global.pending_layer_mode, global.pending_layer_room, global.pending_auto_start_play
+	/// @objects obj_tune (loaded tune instance)
+	/// @callers scr_handle_button_click (button 1)
 	function scr_goto_playroom(){
 		scr_button_reset_loop_state();
 
@@ -478,6 +629,41 @@
 				global.playback_events = [];
 			} else {
 				scr_playback_context_build_for_set();
+				// Pre-load score sprites for ALL segments into global.score_segments_sprites.
+				// This lets future segments display in the score lane before the now line,
+				// and avoids disk re-reads on segment changes.
+				var _pc_segs_init = global.playback_context[$ "segments"];
+				var _pc_seg_n = is_array(_pc_segs_init) ? array_length(_pc_segs_init) : 0;
+				global.score_segments_sprites = array_create(_pc_seg_n, undefined);
+				for (var _si = 0; _si < _pc_seg_n; _si++) {
+					var _pc_seg_i = _pc_segs_init[_si];
+					var _pc_fn_i = is_struct(_pc_seg_i) ? string(_pc_seg_i[$ "filename"] ?? "") : "";
+					if (_pc_fn_i != "") {
+						// Clear without deleting sprites so each segment load is independent.
+						global.score_lane_sprites = [];
+						global.score_playback_map = [];
+						if (variable_global_exists("score_lane_meta")) global.score_lane_meta = [];
+						scr_score_sprites_load(_pc_fn_i, undefined);
+						global.score_segments_sprites[_si] = {
+							sprites: global.score_lane_sprites,
+							pbmap:   global.score_playback_map,
+							meta:    variable_global_exists("score_lane_meta") ? global.score_lane_meta : [],
+							durations: variable_global_exists("score_snippet_durations") ? global.score_snippet_durations : [],
+							units_per_measure: variable_global_exists("score_units_per_measure") ? real(global.score_units_per_measure) : 0
+						};
+					}
+				}
+				// Restore segment 0 as the active sprite set and reload its override groups.
+				if (_pc_seg_n > 0 && is_struct(global.score_segments_sprites[0])) {
+					var _s0 = global.score_segments_sprites[0];
+					global.score_lane_sprites = _s0.sprites;
+					global.score_playback_map = _s0.pbmap;
+					if (variable_global_exists("score_lane_meta")) global.score_lane_meta = _s0.meta;
+					if (variable_global_exists("score_snippet_durations")) global.score_snippet_durations = _s0.durations;
+					if (variable_global_exists("score_units_per_measure")) global.score_units_per_measure = real(_s0.units_per_measure ?? 0);
+					var _fn0 = string(_pc_segs_init[0][$ "filename"] ?? "");
+					if (_fn0 != "") scr_score_override_groups_load_for_current_segment(_fn0);
+				}
 			}
 		} else {
 		// ── SINGLE TUNE PATH ────────────────────────────────────────────────
@@ -492,16 +678,33 @@
 				set_item = global.current_set[global.current_set_item_index];
 			}
 			var bpm_override = is_struct(set_item) ? scr_button_struct_get(set_item, "bpm", undefined) : undefined;
+			if (is_undefined(bpm_override) && variable_global_exists("current_bpm")) {
+				bpm_override = real(global.current_bpm);
+			}
 			var overrides = undefined;
 			if (is_struct(set_item)) {
 				var swing_override = scr_button_struct_get(set_item, "swing_mult", undefined);
 				if (is_undefined(swing_override)) swing_override = scr_button_struct_get(set_item, "swing", undefined);
 				var grace_override = scr_button_struct_get(set_item, "gracenote_override_ms", undefined);
 				if (is_undefined(grace_override)) grace_override = scr_button_struct_get(set_item, "gracenote_ms", undefined);
+				if (is_undefined(swing_override) && variable_global_exists("swing_mult")) {
+					swing_override = global.swing_mult;
+				}
+				if (is_undefined(grace_override) && variable_global_exists("gracenote_override_ms")) {
+					grace_override = global.gracenote_override_ms;
+				}
 				overrides = {
 					bpm: bpm_override,
 					swing_mult: swing_override,
 					gracenote_override_ms: grace_override
+				};
+			} else if (!is_undefined(bpm_override)
+				|| variable_global_exists("swing_mult")
+				|| variable_global_exists("gracenote_override_ms")) {
+				overrides = {
+					bpm: bpm_override,
+					swing_mult: variable_global_exists("swing_mult") ? global.swing_mult : undefined,
+					gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? global.gracenote_override_ms : undefined
 				};
 			}
 			var tune_events = scr_preprocess_tune(tune, is_struct(overrides) ? overrides : bpm_override);
@@ -634,6 +837,12 @@
 
 	//CASE 2 Clicked Checkbox
 	//Used in tune window but could be made generic
+	/// @function scr_checkbox_click(_ctx)
+	/// @description Toggle the clicked checkbox and clear siblings in the same group; updates the global named by button_target.
+	/// @reads global.ui_assets (passed to scr_uncheck_all)
+	/// @writes global.[button_target] (dynamic target, set via variable_global_set)
+	/// @objects obj_tune_picker (calls scr_tune_picker_select_index / scr_tune_picker_clear_selection)
+	/// @callers scr_handle_button_click (button 2)
 	function scr_checkbox_click(_ctx = noone)	{
 	//Set the choices that were made in the settings window.
 	// Remove "global." from the string
@@ -648,30 +857,55 @@
 		var ui_num = real(scr_button_inst_get(ctx, "ui_num", -1));
 		var button_click_value = real(scr_button_inst_get(ctx, "button_click_value", -1));
 
+		var picker = instance_find(obj_tune_picker, 0);
+
 		if (button_checked == 0) {
+			// Unchecked → first click on this row: select tune at P1
 			scr_uncheck_all(global.ui_assets, ui_layer_num, ui_group, ui_num);
 			scr_button_inst_set(ctx, "button_checked", 1);
 			scr_button_inst_set(ctx, "image_index", 3);
 			variable_global_set(target_name, button_click_value);
-			var picker = instance_find(obj_tune_picker, 0);
 			if (picker != noone) {
-				scr_tune_picker_select_index(button_click_value);
+				var source_idx = scr_tune_picker_get_visible_source_index(button_click_value);
+				if (source_idx >= 0) {
+					scr_tune_picker_activate_index(source_idx);
+				} else {
+					scr_tune_picker_select_index(button_click_value);
+				}
 				scr_tune_picker_sync_selected_entry_ui();
 			}
 		}
 		else if (button_checked == 1) {
-			scr_uncheck_all(global.ui_assets, ui_layer_num, ui_group, ui_num);
-			scr_button_inst_set(ctx, "button_checked", 0);
-			variable_global_set(target_name, -1);
-			var picker2 = instance_find(obj_tune_picker, 0);
-			if (picker2 != noone) {
-				scr_tune_picker_clear_selection();
-				scr_tune_picker_refresh_visible_rows();
+			// Already checked → cycle to next part, or deselect if on last part
+			if (picker != noone) {
+				var source_idx = scr_tune_picker_get_visible_source_index(button_click_value);
+				if (source_idx >= 0) {
+					scr_tune_picker_activate_index(source_idx);
+				} else {
+					scr_tune_picker_clear_selection();
+				}
+				// If activate_index cleared the selection (was last part), uncheck button
+				if (!variable_global_exists("tune_selection") || global.tune_selection < 0) {
+					scr_uncheck_all(global.ui_assets, ui_layer_num, ui_group, -1);
+					scr_button_inst_set(ctx, "button_checked", 0);
+					scr_button_inst_set(ctx, "image_index", 0);
+					variable_global_set(target_name, -1);
+				}
+				scr_tune_picker_sync_selected_entry_ui();
+			} else {
+				scr_uncheck_all(global.ui_assets, ui_layer_num, ui_group, ui_num);
+				scr_button_inst_set(ctx, "button_checked", 0);
+				scr_button_inst_set(ctx, "image_index", 0);
+				variable_global_set(target_name, -1);
 			}
 		}
 	}	
 
 	//Script to uncheck checkboxes for use when checking a new checkbox
+	/// @function scr_uncheck_all(array_of_checkboxes, ui_layer, ui_group, this_num)
+	/// @description Uncheck all other checkboxes in the same group/layer, except the given ui_num.
+	/// @objects obj_UI_parent (re-links stale array entries)
+	/// @callers scr_checkbox_click
 	function scr_uncheck_all(array_of_checkboxes,ui_layer, ui_group, this_num) {
 		show_debug_message("Uncheck in layer " + string(ui_layer) +
                        " group " + string(ui_group) +
@@ -714,6 +948,14 @@
 
     //CASE 3 Open Window
 	//Open Settings and Tune window from main menu, close them from windows close button
+	/// @function scr_open_window(layer_num, vis)
+	/// @description Show or hide a UI layer; populates metadata fields (MIDI device names, metronome pattern) when opening.
+	/// @param layer_num Integer layer index to show/hide
+	/// @param vis true = make visible; false/undefined = toggle (hide all then show target)
+	/// @reads global.ui_assets, global.tune, global.metronome_pattern_options, global.metronome_pattern_selection, global.midi_input_device, global.midi_output_device, global.midi_input_device_name, global.midi_output_device_name
+	/// @writes global.midi_input_device, global.midi_output_device, global.midi_input_device_name, global.midi_output_device_name (resets stale refs)
+	/// @objects obj_tune (reads tune_data), obj_field_base (updates field contents)
+	/// @callers scr_handle_button_click (button 3), scr_select_player
 	function scr_open_window(layer_num, vis = undefined) {
 		var layer_name = GetLayerNameFromIndex(layer_num);
 		var layer_id = layer_get_id(layer_name);
@@ -825,6 +1067,25 @@
 					scr_button_field_set(field_inst, "field_value", out_value);
 					scr_button_field_set(field_inst, "field_contents", out_contents);
 				}
+
+				var is_logs_field = (field_ui_name == "setting_field_logs");
+				if (is_logs_field) {
+					if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) {
+						global.timeline_cfg = {};
+					}
+					if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_log")) {
+						global.timeline_cfg.score_lane_debug_log = false;
+					}
+					if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")) {
+						global.timeline_cfg.score_lane_debug_file_log = false;
+					}
+
+					var logs_enabled = bool(global.timeline_cfg.score_lane_debug_log);
+					scr_button_field_set(field_inst, "field_min_value", 0);
+					scr_button_field_set(field_inst, "field_max_value", 1);
+					scr_button_field_set(field_inst, "field_value", logs_enabled ? 1 : 0);
+					scr_button_field_set(field_inst, "field_contents", logs_enabled ? "ON" : "OFF");
+				}
 			}
 			global._midi_refresh_input_count = undefined;
 			global._midi_refresh_output_count = undefined;
@@ -857,16 +1118,22 @@
 	
 	//CASE 4 
 	//Main Menu - End Button
+	/// @function scr_exit_game()
+	/// @description Quit the game immediately.
 	function scr_exit_game(){
 		game_end();
 	}
 
 	//CASE 5 	
 	//Go to Main Menu button
+	/// @function scr_goto_mainmenu()
+	/// @description Stop MIDI, reset loop state, clear active flags, then go to Room_main_menu.
+	/// @writes global.timing_calibration.active/status, global.timeline_state.active, global.pending_auto_start_play, global.pending_layer_mode, global.pending_layer_room
+	/// @callers scr_handle_button_click (button 5)
 	function scr_goto_mainmenu(){
 		MIDI_send_off();
 		MIDI_stop_checking_messages_and_errors();
-		scr_button_reset_loop_state();
+		scr_button_reset_play_session_state();
 		if (variable_global_exists("timing_calibration") && is_struct(global.timing_calibration)) {
 			global.timing_calibration.active = false;
 			global.timing_calibration.status = "idle";
@@ -884,6 +1151,10 @@
 	
 	//CASE 6
 	//change settings field by button value ... for +/- buttons (generic array cycling)
+	/// @function scr_settings_change(_ctx)
+	/// @description Advance or cycle a field's value through its target global array (+/- buttons).
+	/// @writes global.[field_target] (dynamic — the array named by the field's field_target string)
+	/// @callers scr_handle_button_click (button 6)
 	function scr_settings_change(_ctx = noone)	{
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -909,6 +1180,10 @@
 	}
 	
 	//CASE 7 - change settings specific for MIDI in
+	/// @function scr_settings_MIDI_In_change(_ctx)
+	/// @description Cycle to the next/previous MIDI input device and update the UI field.
+	/// @writes global.midi_input_device, global.midi_input_device_name
+	/// @callers scr_handle_button_click (button 7)
 	function scr_settings_MIDI_In_change(_ctx = noone)	{
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -950,6 +1225,10 @@
 	}
 	
 	//CASE 8 - change settings specific for MIDI out
+	/// @function scr_settings_MIDI_Out_change(_ctx)
+	/// @description Cycle to the next/previous MIDI output device and update the UI field.
+	/// @writes global.midi_output_device, global.midi_output_device_name
+	/// @callers scr_handle_button_click (button 8)
 	function scr_settings_MIDI_Out_change(_ctx = noone)	{
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -989,8 +1268,54 @@
 		global.midi_output_device_name = field_contents;
 		show_debug_message(string(field_contents) + " " + string(field_value));
 	}
+
+	//CASE 30 - Logs toggle in settings (OFF/ON)
+	/// @function scr_settings_logs_toggle(_ctx)
+	/// @description Toggle settings Logs control and sync score-lane console/file debug logging flags.
+	/// @reads global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log
+	/// @writes global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log
+	/// @callers scr_handle_button_click (button 30)
+	function scr_settings_logs_toggle(_ctx = noone) {
+		var ctx = scr_button_get_ctx(_ctx);
+		if (ctx == noone) return;
+
+		var field = scr_button_inst_get(ctx, "field_ref", noone);
+		if (!instance_exists(field)) return;
+
+		if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) {
+			global.timeline_cfg = {};
+		}
+		if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_log")) {
+			global.timeline_cfg.score_lane_debug_log = false;
+		}
+		if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")) {
+			global.timeline_cfg.score_lane_debug_file_log = false;
+		}
+
+		var button_click_value = real(scr_button_inst_get(ctx, "button_click_value", 0));
+		var field_value = real(scr_button_field_get(field, "field_value", 0));
+		if (button_click_value == 0) button_click_value = 1;
+		field_value = (field_value + button_click_value + 2) mod 2;
+		var logs_enabled = (field_value == 1);
+
+		scr_button_field_set(field, "field_min_value", 0);
+		scr_button_field_set(field, "field_max_value", 1);
+		scr_button_field_set(field, "field_value", field_value);
+		scr_button_field_set(field, "field_contents", logs_enabled ? "ON" : "OFF");
+
+		global.timeline_cfg.score_lane_debug_log = logs_enabled;
+		global.timeline_cfg.score_lane_debug_file_log = logs_enabled;
+
+		show_debug_message("[SETTINGS] Logs " + (logs_enabled ? "ON" : "OFF"));
+	}
 	
 	//CASE 14 - Metronome Mode (None/Click/Drums)
+	/// @function scr_metronome_mode_change(_ctx)
+	/// @description Change the metronome mode (None/Click/Drums) and sync pattern field and METRONOME_CONFIG.
+	/// @reads global.metronome_mode_options, global.selected_tune_time_sig, global.METRONOME_CONFIG, global.metronome_pattern_options, global.current_set, global.current_set_item_index
+	/// @writes global.metronome_mode, global.METRONOME_CONFIG.enabled/mode, global.metronome_pattern_selection, global.current_set[idx]
+	/// @objects obj_field_base (updates pattern field via scr_button_find_field_by_ui_name)
+	/// @callers scr_handle_button_click (button 14)
 	function scr_metronome_mode_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1046,6 +1371,11 @@
 	}
 	
 	//CASE 15 - Metronome Pattern
+	/// @function scr_metronome_pattern_change(_ctx)
+	/// @description Cycle to the next/previous metronome pattern.
+	/// @reads global.metronome_pattern_options, global.current_set, global.current_set_item_index
+	/// @writes global.metronome_pattern_selection, global.current_set[idx]
+	/// @callers scr_handle_button_click (button 15)
 	function scr_metronome_pattern_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1082,6 +1412,11 @@
 	}
 	
 	//CASE 16 - Metronome Volume
+	/// @function scr_metronome_volume_change(_ctx)
+	/// @description Adjust metronome MIDI velocity by ±10 steps and sync METRONOME_CONFIG.
+	/// @reads global.metronome_volume, global.METRONOME_CONFIG, global.current_set, global.current_set_item_index
+	/// @writes global.metronome_volume, global.METRONOME_CONFIG.velocity_emphasis, global.METRONOME_CONFIG.velocity_normal, global.current_set[idx]
+	/// @callers scr_handle_button_click (button 16)
 	function scr_metronome_volume_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1117,6 +1452,11 @@
 	}
 
 	//CASE 17 - Tune BPM
+	/// @function scr_tune_bpm_change(_ctx)
+	/// @description Change the current BPM via +/- field button.
+	/// @reads global.current_set, global.current_set_item_index
+	/// @writes global.current_bpm, global.current_set[idx]
+	/// @callers scr_handle_button_click (button 17)
 	function scr_tune_bpm_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1154,6 +1494,11 @@
 	}
 
 	//CASE 18 - Tune Count-In
+	/// @function scr_tune_countin_change(_ctx)
+	/// @description Change the count-in measure count. In set mode updates active_set.set_count_in_measures.
+	/// @reads global.current_set, global.current_set_item_index, global.active_set
+	/// @writes global.count_in_measures, global.active_set.set_count_in_measures (set mode), global.current_set[idx]
+	/// @callers scr_handle_button_click (button 18)
 	function scr_tune_countin_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1187,6 +1532,11 @@
 	}
 
 	//CASE 19 - Gracenote Override (ms)
+	/// @function scr_gracenote_override_change(_ctx)
+	/// @description Change the gracenote timing override in ms via +/- field button.
+	/// @reads global.current_set, global.current_set_item_index
+	/// @writes global.gracenote_override_ms, global.current_set[idx]
+	/// @callers scr_handle_button_click (button 19)
 	function scr_gracenote_override_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1224,6 +1574,11 @@
 	}
 
 	//CASE 20 - Swing Multiplier
+	/// @function scr_swing_mult_change(_ctx)
+	/// @description Change the swing multiplier via +/- field button.
+	/// @reads global.current_set, global.current_set_item_index
+	/// @writes global.swing_mult, global.current_set[idx]
+	/// @callers scr_handle_button_click (button 20)
 	function scr_swing_mult_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1261,6 +1616,10 @@
 	}
 
 	//CASE 21 - Current-note measure scroll
+	/// @function scr_current_note_measure_scroll(_ctx)
+	/// @description Scroll the current-note measure panel forward or back.
+	/// @reads global.current_note_panel
+	/// @callers scr_handle_button_click (button 21)
 	function scr_current_note_measure_scroll(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1275,6 +1634,9 @@
 	}
 
 	//CASE 22 - Notebeam zoom controls (+/-)
+	/// @function scr_notebeam_zoom_change(_ctx)
+	/// @description Zoom the notebeam timeline in/out via gv_notebeam_zoom_by_steps.
+	/// @callers scr_handle_button_click (button 22)
 	function scr_notebeam_zoom_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1292,6 +1654,9 @@
 	}
 
 	//CASE 23 - Notebeam pan controls (left/right)
+	/// @function scr_notebeam_pan_scroll(_ctx)
+	/// @description Pan the notebeam timeline left/right via gv_notebeam_pan_by_steps.
+	/// @callers scr_handle_button_click (button 23)
 	function scr_notebeam_pan_scroll(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
@@ -1307,6 +1672,10 @@
 	}
 
 	//CASE 9
+	/// @function scr_settings_OK(_ctx)
+	/// @description Open the selected MIDI devices (from settings window) and save player settings.
+	/// @reads global.midi_input_device, global.midi_output_device
+	/// @callers scr_handle_button_click (button 9)
 	function scr_settings_OK(_ctx = noone)	{
 	//Set the choices that were made in the settings window.
 		var ctx = scr_button_get_ctx(_ctx);
@@ -1324,6 +1693,9 @@
 		}
 	}	
 
+	/// @function scr_judge_settings_OK(_ctx)
+	/// @description Save judge profile settings for the current player and close the judge settings layer.
+	/// @callers scr_handle_button_click (button 25)
 	function scr_judge_settings_OK(_ctx = noone) {
 		var _save_idx = asset_get_index("scoring_judge_settings_save_for_player");
 		if (script_exists(_save_idx)) {
@@ -1338,6 +1710,11 @@
 		}
 	}
 
+	/// @function scr_select_player(_ctx)
+	/// @description Switch the active player, save/load their judge and performance settings.
+	/// @reads global.player_names
+	/// @writes global.current_player_index, global.current_player_id
+	/// @callers scr_handle_button_click (button 27)
 	function scr_select_player(_ctx = noone) {
 		var idx = real(scr_button_inst_get(_ctx, "button_click_value", 0));
 
@@ -1371,6 +1748,10 @@
 		scr_player_button_label_refresh();
 	}
 
+	/// @function scr_player_button_label_refresh()
+	/// @description Update the player button label instance text to match the current player name.
+	/// @reads global.current_player_index, global.player_names, global.ui_text_refs
+	/// @callers scr_select_player
 	function scr_player_button_label_refresh() {
 		if (!variable_global_exists("current_player_index")) exit;
 		if (!variable_global_exists("ui_text_refs")) exit;
@@ -1387,6 +1768,7 @@
 	///   - CSV files are left intact (they are for external analysis only).
 	///   - To clear ALL players at once, manually delete datafiles/performances/ and
 	///     datafiles/config/players/.
+	/// @callers scr_player_clear_guest_history, scr_handle_button_click (button 28 → scr_player_clear_guest_history)
 	function scr_player_clear_history(_player_id) {
 		var target = string_lower(string_trim(string(_player_id ?? "")));
 		if (target == "") {
@@ -1465,10 +1847,16 @@
 
 	/// @function scr_player_clear_guest_history()
 	/// @description Convenience wrapper to clear history for the Guest player.
+	/// @callers scr_handle_button_click (button 28)
 	function scr_player_clear_guest_history() {
 		return scr_player_clear_history("guest");
 	}
 
+	/// @function scr_button_resolve_picker_selection()
+	/// @description Get the selected tune entry from the active obj_tune_picker instance.
+	/// @returns Struct { picker, library, selected_index, entry }
+	/// @objects obj_tune_picker (instance_find)
+	/// @callers scr_tune_OK
 	function scr_button_resolve_picker_selection() {
 		var result = {
 			picker: noone,
@@ -1495,6 +1883,10 @@
 		return result;
 	}
 
+	/// @function scr_button_build_tune_load_candidates(_library, _filename)
+	/// @description Build an ordered list of file paths to try when loading a tune by filename.
+	/// @returns Array of candidate path strings
+	/// @callers scr_tune_OK, scr_button_try_load_tune_candidate
 	function scr_button_build_tune_load_candidates(_library, _filename) {
 		var candidates = array_create(0);
 		var library_root = string(scr_button_struct_get(_library, "root", ""));
@@ -1506,6 +1898,12 @@
 		return candidates;
 	}
 
+	/// @function scr_button_apply_set_item_from_ui_fields(_item)
+	/// @description Write current UI field values into a set item struct. In set mode, count-in is written to active_set instead.
+	/// @reads global.active_set (set mode check)
+	/// @writes global.active_set.set_count_in_measures (set mode only)
+	/// @objects obj_field_base (iterated via instance_find)
+	/// @callers scr_tune_OK
 	function scr_button_apply_set_item_from_ui_fields(_item) {
 		var field_count = instance_number(obj_field_base);
 		for (var fi = 0; fi < field_count; fi++) {
@@ -1536,11 +1934,15 @@
 		}
 	}
 
+	/// @function scr_button_apply_globals_from_set_item(_item)
+	/// @description Copy playback settings from a set item struct into their respective globals.
+	/// @writes global.current_bpm, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.count_in_measures, global.loop_jump_to_selection, global.swing_mult, global.gracenote_override_ms
+	/// @callers scr_button_try_load_tune_candidate
 	function scr_button_apply_globals_from_set_item(_item) {
 		global.current_bpm = scr_button_struct_get(_item, "bpm", 120);
-		global.metronome_mode = scr_button_struct_get(_item, "metronome_mode", 0);
-		global.metronome_pattern_selection = scr_button_struct_get(_item, "metronome_pattern", 0);
-		global.metronome_volume = scr_button_struct_get(_item, "metronome_volume", 100);
+		global.metronome_mode = scr_button_struct_get(_item, "metronome_mode", global.metronome_mode);
+		global.metronome_pattern_selection = scr_button_struct_get(_item, "metronome_pattern", global.metronome_pattern_selection);
+		global.metronome_volume = scr_button_struct_get(_item, "metronome_volume", global.metronome_volume);
 		// In set mode count-in is set-level — don't overwrite global from the per-tune item
 		if (!scr_set_is_active()) {
 			global.count_in_measures = scr_button_struct_get(_item, "count_in_measures", 0);
@@ -1550,6 +1952,10 @@
 		global.gracenote_override_ms = scr_button_struct_get(_item, "gracenote_override_ms", 0);
 	}
 
+	/// @function scr_button_apply_post_tune_load_ui(_button_label, _entry)
+	/// @description Hide the tune window layer and update the gameinfo title field from the entry.
+	/// @writes global.gameinfo_title[0]
+	/// @callers scr_button_try_load_tune_candidate
 	function scr_button_apply_post_tune_load_ui(_button_label, _entry) {
 		if (is_string(_button_label) && layer_get_id(_button_label) != -1) {
 			layer_set_visible(_button_label, 0);
@@ -1562,6 +1968,13 @@
 		}
 	}
 
+	/// @function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label)
+	/// @description Try to load a tune from the given file path; if successful, apply set item globals and update UI.
+	/// @returns true if load succeeded, false otherwise
+	/// @reads global.tune (loaded tune instance)
+	/// @writes global.current_set, global.current_set_item_index, global.current_tune_filename, global.current_bpm, global.swing_mult, global.gracenote_override_ms
+	/// @objects obj_tune (reads tune_data after scr_tune_load_json)
+	/// @callers scr_tune_OK
 	function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label) {
 		if (!scr_tune_load_json(_tryfile)) return false;
 
@@ -1575,6 +1988,9 @@
 		}
 
 		scr_button_apply_set_item_from_ui_fields(item);
+
+		// Clear any previously-loaded set so play uses single-tune path
+		scr_set_init_global();
 
 		global.current_set = [item];
 		global.current_set_item_index = 0;
@@ -1596,6 +2012,12 @@
 	}
 	
 	//CASE 10  THis OK button in the tune window locks in the selected 
+	/// @function scr_tune_OK(_ctx)
+	/// @description Confirm tune selection from picker: load the tune, apply globals, and hide the tune window.
+	/// @reads global.tune (after load)
+	/// @writes global.current_tune_filename
+	/// @objects obj_tune_picker (reads selection), obj_tune (after load)
+	/// @callers scr_handle_button_click (button 10)
 	function scr_tune_OK(_ctx = noone)	{
 	//Set the choices that were made in the settings window.
 		var ctx = scr_button_get_ctx(_ctx);
@@ -1690,6 +2112,12 @@
 	}	
 	
 	//CASE 11
+	/// @function start_play()
+	/// @description Open MIDI devices, start MIDI polling, activate playback_events, bind timeline.
+	/// @reads global.midi_output_device, global.midi_input_device, global.tune, global.timeline_cfg, global.selected_player_tune_channel, global.playback_events, global.loop_mode_enabled, global.playback_context
+	/// @writes global.selected_player_tune_channel, global.timeline_cfg.tune_channel/player_channels, global.loop_runtime_active, global.loop_runtime_current_iteration, global.playback_events_active
+	/// @objects obj_tune (checks is_loaded)
+	/// @callers scr_handle_button_click (button 11)
 	function start_play() {
 		midi_output_device_open(global.midi_output_device);
 		midi_input_device_open(global.midi_input_device);
@@ -1795,8 +2223,14 @@
 
 	//CASE 12
 	//Regenerate Tune Library (manual trigger)
+	/// @function scr_regenerate_tune_library()
+	/// @description Rescan tunes folder, rebuild tune_library.json, reload into global, and refresh picker.
+	/// @writes global.tune_library
+	/// @objects obj_tune_picker (refreshes visible rows)
+	/// @callers scr_handle_button_click (button 12)
 	function scr_regenerate_tune_library(){
-		scr_build_tune_library("tunes/");
+		// Sandbox disabled — scan project datafiles directly
+		scr_build_tune_library("C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/");
 		var library = scr_load_tune_library();
 		global.tune_library = library;
 		var picker = instance_find(obj_tune_picker, 0);
@@ -1815,6 +2249,9 @@
 	//CASE 13
 	/// @function export_event_history()
 	/// @description Export the current event history to CSV
+	/// @reads global.EVENT_HISTORY_LIBRARY_UPDATED
+	/// @writes global.EVENT_HISTORY_LIBRARY_UPDATED
+	/// @callers scr_handle_button_click (button 13)
 	function export_event_history() {
 		var export_info = event_history_get_export_info();
 		if (!directory_exists(export_info.folder)) {
@@ -1832,6 +2269,11 @@
 	}
 
 	// CASE 24 - Loop mode toggle button in gameplay info window.
+	/// @function scr_loop_mode_toggle(_ctx)
+	/// @description Toggle loop mode on/off; when turning off, clears selected measures and blank-measure state.
+	/// @reads global.loop_mode_enabled, global.timeline_state
+	/// @writes global.loop_mode_enabled
+	/// @callers scr_handle_button_click (button 24)
 	function scr_loop_mode_toggle(_ctx = noone) {
 		if (!variable_global_exists("loop_mode_enabled")) {
 			global.loop_mode_enabled = false;
@@ -1856,5 +2298,26 @@
 					gv_loop_set_blank_measure_enabled(false);
 				}
 			}
+		}
+	}
+	/// @function scr_toggle_loop_score_overview(_ctx)
+	/// @description Toggle the visibility of the loop score overview panel (loop_score_overview_layer).
+	/// @param {Id.Instance} _ctx  Button context (unused)
+	/// @reads   none
+	/// @writes  none (controls layer visibility via layer_set_visible / instance_activate_layer)
+	/// @callers scr_handle_button_click (case 29)
+	function scr_toggle_loop_score_overview(_ctx = noone) {
+		var _layer_id = layer_get_id("loop_score_overview_layer");
+		if (_layer_id == -1) {
+			show_debug_message("[loop_score_overview] Layer not found: loop_score_overview_layer");
+			return;
+		}
+		var _cur_vis = layer_get_visible(_layer_id);
+		var _new_vis = !_cur_vis;
+		layer_set_visible(_layer_id, _new_vis);
+		if (_new_vis) {
+			instance_activate_layer(_layer_id);
+		} else {
+			instance_deactivate_layer(_layer_id);
 		}
 	}

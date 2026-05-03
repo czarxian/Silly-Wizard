@@ -1,7 +1,11 @@
 /// @function load_embellishment_library(filepath)
-/// @description Loads embellishment library from JSON file into array of structs
-/// @param {string} filepath - Path to embellishments.json
-/// @returns {array} Array of embellishment structs
+/// @description Loads embellishment library from JSON file into array of structs.
+/// @param {string} filepath  Path to embellishments.json (relative to working_directory)
+/// @returns {array}  Array of embellishment structs; empty array if file not found
+/// @reads   none (file system only)
+/// @writes  none (caller stores result into global.emb_library)
+/// @objects none
+/// @callers obj_game_controller Create_0
 
 function load_embellishment_library(filepath) {
     var json_string = "";
@@ -35,13 +39,17 @@ function load_embellishment_library(filepath) {
 }
 
 /// @function find_embellishment(library, pattern, target_note, alt_anchor, alt_timing)
-/// @description Finds embellishment in library by pattern and optional target note, with optional overrides
-/// @param {array} library - Array of embellishment structs
-/// @param {string} pattern - Pattern to match (e.g., "gBd")
-/// @param {string} target_note - Target note (e.g., "B"), can be ""
-/// @param {real} alt_anchor - Optional anchor override (0 = use library default)
-/// @param {string} alt_timing - Optional timing replacement string (e.g., "1,4,1", "" = use library default)
-/// @returns {struct} Embellishment struct or undefined if not found
+/// @description Finds embellishment in library by pattern and optional target note, with optional overrides.
+/// @param {array} library  Array of embellishment structs (typically global.emb_library)
+/// @param {string} pattern  Pattern to match (e.g., "gBd")
+/// @param {string} target_note  Target note (e.g., "B"); pass "" to match any
+/// @param {real} alt_anchor  Optional anchor override; 0 = use library default
+/// @param {string} alt_timing  Optional timing replacement string (e.g., "1,4,1"); "" = use library default
+/// @returns {struct}  Embellishment struct with overrides applied, or undefined if not found
+/// @reads   none
+/// @writes  none
+/// @objects none
+/// @callers scr_preprocess_tune
 
 function find_embellishment(library, pattern, target_note, alt_anchor = 0, alt_timing = "") {
     for (var i = 0; i < array_length(library); i++) {
@@ -66,11 +74,15 @@ function find_embellishment(library, pattern, target_note, alt_anchor = 0, alt_t
 }
 
 /// @function apply_embellishment_overrides(emb, alt_anchor, alt_timing)
-/// @description Applies per-instance overrides to an embellishment struct (creates a copy)
-/// @param {struct} emb - Base embellishment struct
-/// @param {real} alt_anchor - Anchor override (0 = no override)
-/// @param {string} alt_timing - Timing string override ("" = no override)
-/// @returns {struct} New embellishment struct with overrides applied
+/// @description Creates a copy of an embellishment struct with per-instance anchor/timing overrides applied.
+/// @param {struct} emb  Base embellishment struct from the library
+/// @param {real} alt_anchor  Anchor override; 0 = no override, use emb.anchor_index
+/// @param {string} alt_timing  Timing string override; "" = no override; element count must match library
+/// @returns {struct}  New embellishment struct (library original is not modified)
+/// @reads   none
+/// @writes  none
+/// @objects none
+/// @callers find_embellishment
 
 function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
     // Create a copy so we don't modify the library
@@ -106,12 +118,17 @@ function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
 }
 
 /// @function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm, grace_override_ms)
-/// @description Expands embellishment definition into individual note timings with BPM scaling & constraints
-/// @param {struct} emb_def - Embellishment struct from library
-/// @param {real} target_duration_ms - Duration of target note in milliseconds
-/// @param {real} preceding_duration_ms - Duration of preceding note in milliseconds
-/// @param {real} bpm - Tempo in beats per minute (for gracenote unit scaling)
-/// @returns {array} Array of note structs with {note, duration_ms}
+/// @description Expands an embellishment definition into per-note timings with BPM scaling and duration constraints.
+/// @param {struct} emb_def  Embellishment struct (from find_embellishment)
+/// @param {real} target_duration_ms  Duration of the target note in milliseconds
+/// @param {real} preceding_duration_ms  Duration of the preceding note in milliseconds
+/// @param {real} bpm  Tempo in beats per minute (used for gracenote unit scaling)
+/// @param {real} grace_override_ms  Override for gracenote unit duration; 0/undefined = compute from BPM
+/// @returns {array}  Array of note structs: [{note: string, duration_ms: real}, ...]
+/// @reads   global.EMBELLISHMENT_CONFIG
+/// @writes  none
+/// @objects none
+/// @callers scr_preprocess_tune
 
 function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm, grace_override_ms) {
     

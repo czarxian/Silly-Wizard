@@ -419,6 +419,22 @@ Active-playback envelope (control-run summary):
 - `midi_process_ms`: low medians with intermittent isolated spikes.
 - `anchor_draw_ms` (notebeam/gameviz/tunestructure/timeline): stayed in expected live-play ranges for this tune size.
 
+### Planning Update (2026-04-12, transition authoring standard)
+- Status: complete (template added for repeatable transition creation)
+
+Change summary:
+- Added `TRANSITION_TUNE_TEMPLATE.md` to standardize transition-tune authoring.
+- Document covers:
+  - behavior model (`tail_cut_beats` trims previous tune, `head_cut_beats` trims next tune),
+  - required metadata fields,
+  - set ordering rule (`Tune A -> Transition -> Tune B`),
+  - ABC writing patterns (`e2e2`, `e4`, `e2-e2`) and common pitfalls,
+  - quick verification and troubleshooting checklist.
+
+Expected impact:
+- Faster creation of new transition tunes.
+- Lower risk of repeating earlier cut/stitching authoring mistakes.
+
 Post-play/cleanup notes:
 - Cleanup window still shows heavier spikes (for example timeline p95 around ~9-11 ms and elevated step-interval p95 into low teens).
 - Pattern remains phase-scoped to post-play/tail windows, not sustained across active playback.
@@ -923,6 +939,99 @@ The project is “complete” when a player can:
 This roadmap is divided into Backlog, In Progress, and Done.
 Move items between sections as development progresses.
 
+Near-Term Priority Queue (2026-04-23)
+Ordered to reduce integration risk and unblock downstream features.
+
+1) Tune data + score image pipeline + synced score scrolling
+- Scope: tighten ABC -> Excel -> JSON export for score-image references and re-enable beat-synced score-image scrolling in timeline canvas.
+- Why first: this is a foundational visual truth source for later text lanes and timing validation.
+- Done when:
+  - score image assets resolve deterministically from exported tune metadata,
+  - timeline score image scrolls in sync with playback beat/time source,
+  - no active-playback regression against the refactor baseline envelope.
+
+2) Tune customization workflow verification (including custom timing from Excel)
+- Scope: validate and harden per-tune/per-set overrides (tempo, meter, swing, grace timing, custom timing columns).
+- Why second: playback/metronome/calibration work depends on reliable tune-level timing inputs.
+- Done when:
+  - custom timing authored in Excel survives JSON export/load/preprocess,
+  - runtime overrides apply in the intended precedence order,
+  - at least one verification tune demonstrates end-to-end expected timing behavior.
+
+3) Playback timing calibration expansion + usable calibration UI
+- Scope: extend timing calibration beyond current baseline and expose it in a user-facing UI flow.
+- Why third: needs stable tune timing inputs and synchronized visual anchors from items 1-2.
+- Done when:
+  - calibration can be started, adjusted, saved, canceled, and applied from UI,
+  - calibration offsets affect both playback and comparison views consistently,
+  - calibration state is persisted and restored safely.
+
+4) Time signature coverage expansion
+- Scope: expand/verify time-signature handling for likely tune meters and ensure quarter-BPM normalization behaves correctly.
+- Why fourth: this formalizes assumptions needed for metronome pattern expansion.
+- Done when:
+  - preprocess, metronome, beat guides, and scroll math agree for supported signatures,
+  - unsupported signatures fail safely with clear diagnostics.
+
+5) Metronome rebuild: sound sets, pattern expansion, and cycle crash fix
+- Scope: add differentiated click sounds, broaden drum/click pattern options, and fix the known crash when cycling patterns/options.
+- Why fifth: depends on validated timing, meter normalization, and calibration paths.
+- Done when:
+  - users can select distinct click/accent/optional subdivision sounds,
+  - pattern set includes practical defaults per common meter/tune type,
+  - cycle interaction no longer crashes in stress testing.
+
+6) Embellishment system scale-up (bulk, data-driven)
+- Scope: move from one-by-one additions to grouped/data-driven embellishment definitions and expansion behavior.
+- Why sixth: best done after timing and metronome baselines are stabilized to avoid confounded debugging.
+- Done when:
+  - embellishment families can be added/adjusted through shared rules,
+  - preprocess expansion remains deterministic across supported tune types,
+  - notebeam/analysis views stay aligned with expanded events.
+
+7) Timeline text lanes: canntaireachd, lyrics, advice
+- Scope: add/restore synchronized text lanes in timeline canvas sourced from tune metadata/content.
+- Why seventh: depends on stable scroll/sync mechanics from item 1 and validated timing from items 2-4.
+- Done when:
+  - each lane can be toggled and rendered without harming frame stability,
+  - lane content tracks current playback position and measure context,
+  - missing content fails gracefully (blank lane, no crashes/noise logs).
+
+Coverage map for requested features
+- Covered by queue item 1: ABC->score image refinement + beat-synced timeline score scrolling.
+- Covered by queue item 6: embellishment build-out at scale.
+- Covered by queue item 2: tune customization workflow vetting (including custom timing in Excel).
+- Covered by queue item 3: playback timing refinement via expanded calibration + UI.
+- Covered by queue item 4: time signature support expansion.
+- Covered by queue item 5: metronome sound/pattern work + cycle crash fix.
+- Covered by queue item 7: canntaireachd/lyrics/advice timeline lanes.
+
+### Implementation Update (2026-05-03, score beat-anchor runtime wiring)
+- Added `scr_score_manifest_normalize_image_meta(_image_meta, _beats_per_measure)` in `scr_tune_load.gml` and applied it in both base manifest load and transition override bundle load so `image_meta.beat_anchors` arrays are normalized to fixed beat-length per measure.
+- Extended score-lane draw in `scr_game_viz.gml` to optionally render beat-anchor guide lines from `image_meta.beat_anchors` (scaled to current score-sprite draw transform).
+- Added `global.timeline_cfg` defaults in `gv_ensure_timeline_cfg_defaults()` for anchor guides:
+  - `score_lane_anchor_guides_enabled` (bool)
+  - `score_lane_anchor_guide_color` (color)
+  - `score_lane_anchor_guide_alpha` (real 0..1)
+  - `score_lane_anchor_guide_width` (real)
+- Data/export validation completed:
+  - Re-exported representative tune score manifests with the abcjs pipeline and verified `score_images.json` includes populated `image_meta[*].beat_anchors` arrays.
+- Runtime gate status:
+  - In-engine single-vs-set parity validation for internal pickups and highlight/measure-label continuity is still pending manual playthrough in Room_play.
+
+### Implementation Update (set-mode pickup measure detection fix)
+- Root cause: `gv_build_measure_nav_map` had a `!_set_mode` guard that prevented it from using `global.score_snippet_durations` in set mode, causing the event-scan fallback path to run which cannot detect opening pickup measures.
+- Fixes applied in `scr_game_viz.gml`:
+  1. Removed `!_set_mode` guard from `_durations` assignment in `gv_build_measure_nav_map` so set mode also uses snippet durations for authoritative measure/pickup detection.
+  2. Added per-segment snippet-duration restore to `gv_rebuild_measure_nav_for_segment`: before calling `gv_build_measure_nav_map`, it now restores `global.score_snippet_durations` and `global.score_units_per_measure` from `global.score_segments_sprites[_seg_idx]`. This fixes all three segment-transition call sites (playhead advance, manual seg_prev/seg_next, and playhead jump) in one place.
+  3. Kept the score-canvas structural-duration path in set mode on marker-timing (the attempted set-mode structural override was reverted after it regressed pre-roll visibility and stretched image spans).
+- Note: `score_segments_sprites[i].durations` is already populated during set preload in `scr_button_scripts` (was present before this fix). User smoke test on Simon Fraser -> Jig of Slurs indicates the reverted canvas path plus retained nav fixes restored expected behavior.
+
+### Implementation Update (set segment cache restore hardening)
+- Refactored duplicated segment-switch cache restore code in `scr_game_viz.gml` into a single helper: `gv_restore_score_segment_cache(_seg_idx, _restore_media)`.
+- The helper restores structural metadata (`score_snippet_durations`, `score_units_per_measure`) and optionally draw-time arrays (`score_lane_sprites`, `score_playback_map`, `score_lane_meta`).
+- Updated all set segment-switch paths to call the helper (auto-advance, now-line sync jump, and manual seg_prev/seg_next navigation), reducing drift risk between call sites without changing intended behavior.
+
 Backlog (Planned but Not Started)
 Tune & Data Pipeline
 • 	Full metadata support in JSON
@@ -1123,16 +1232,18 @@ When BPM and meter are identical across a `direct` transition, the metronome bea
 - Segment-aware judge panel / popup (`scoring_get_panel_focus`, `scoring_find_measure_result`, `scoring_get_detail_popup_rows`)
 - Measure gap fix: `seg_bar_events` now includes all events with `measure >= 1`, not just bar/beat markers
 
+### Done (updated 2026-05-03)
+- `gv_get_current_planned_measure` — Priority 1 path uses `measure_nav_entries` (set-aware); fallback full-scan only triggers when nav entries are absent. Acceptable.
+- `gv_review_jump_to_measure` — uses `measure_nav_entries` for target lookup (set-aware); `measure_ms` only used for scroll-offset math, acceptable for single-tempo sets.
+- **Set picker UI** — `view_mode = "sets"` toggle live in `scr_tune_library`; left pane = filtered tune list, right pane = set builder slots; "Sets →" button switches modes. Set builder in `scr_set_scripts` handles add/remove/reorder.
+- **Set name / current tune name in gameinfo window** — `scr_gameinfo_update_title(_seg_index)` in `scr_set_scripts` formats "Set Title — Tune Title" in set mode and pushes to `global.gameinfo_title[0]`. Called on segment auto-advance and now-line sync.
+
 ### In Progress / Deferred
-- `gv_get_current_planned_measure` — still scans all set events; could briefly highlight wrong tile at tune boundary
-- `gv_review_jump_to_measure` — uses tune-1 `measure_ms` for scrub buttons; slightly off for mixed-tempo sets
+- **Score canvas set-mode measure-count reconciliation** — The "too many / too few starts" adjustment pass runs only in `!_set_mode`. Per-segment snippet-duration primary path produces exact count when cache is populated; fallback (event-marker scan, no reconciliation) still possible for segments missing duration data — pickup miscount on canvas possible in that case.
+- **Beat-anchor guide line validation** — `score_lane_anchor_guides_enabled` draw path implemented in `scr_game_viz` and normalized in `scr_tune_load`; not yet validated in-engine (runtime rendering not smoke-tested).
+- **`gv_review_jump_to_measure` offset for mixed-tempo sets** — scroll-offset calc uses single-tune `measure_ms`; view may land slightly off-center for wide tempo-spread sets. Low priority.
 
 ### Not Yet Started
-
-**Set picker UI**
-- The tune picker currently shows only single tunes. Need a mode toggle (Tunes / Sets) in the picker window.
-- In Sets mode: list sets from `datafiles/sets/`, show title + tune count + duration estimate.
-- Selecting a set opens a **Set Detail panel** showing: set title, list of tunes in order (tune name, BPM, swing, transition summary), and per-tune override controls (BPM slider, swing, gracenote). Play button launches the set.
 
 **Per-tune runtime overrides UI**
 - When a set is selected, player can adjust BPM %, swing, gracenote per tune before pressing Play.
@@ -1142,10 +1253,6 @@ When BPM and meter are identical across a `direct` transition, the metronome bea
 - `mini_tune`: load a small event JSON, preprocess it, offset-and-stitch between tunes.
 - `alt_ending`: strip trailing blank measures from main tune events, splice in alt-ending events.
 - Both require external authoring of the event fragments (ABC/Excel export pipeline) for now; in-game authoring is future scope.
-
-**Set name / current tune name in gameinfo window**
-- `fp_gameinfo_window` should show the set title and the current tune name during play.
-- Currently only the title strip in the tune structure panel shows this.
 
 **Judge scope toggle (set overall vs per-tune)**
 - The judge panel shows per-segment scores when switching segments.
@@ -1160,3 +1267,18 @@ When BPM and meter are identical across a `direct` transition, the metronome bea
 - Analogous to `tune_library.json` — a `set_library.json` index scanned at startup from `datafiles/sets/`.
 - Enables filtering, sorting, and display in the picker without re-reading every set JSON at runtime.
 
+
+
+## Cleanup Backlog
+
+Observations collected during full-codebase annotation (annotation pass, 2025).
+
+1. **Duplicate thin wrappers � metronome:** metronome_normalize_time_sig and metronome_get_effective_quarter_bpm in scr_metronome.gml are direct passthroughs to identically-named functions in scr_timing_utils.gml. Consolidation candidate � consider inlining or removing the wrapper layer.
+
+2. **Another wrapper chain:** 	une_get_effective_quarter_bpm in scr_preprocess_tune.gml delegates directly to 	iming_get_effective_quarter_bpm. Same consolidation candidate.
+
+3. **Empty stub file:** ~~scr_tune_preprocess.gml contains no functions.~~ **RESOLVED:** `scripts/scr_tune_preprocess/` deleted (April 2026).
+
+4. **Dead code block in scr_tune_scripts.gml:** ~~tune_metronome_build_pattern, tune_get_total_ms, and tune_build_events inside a /* */ block comment.~~ **RESOLVED:** Entire unclosed block comment (lines 1615–1743) removed (April 2026). All three were dead — inside an unclosed `/*` with no callers outside the comment.
+
+5. **old_scr_tune_library:** ~~The file holds hardcoded tune data predating the JSON library.~~ **RESOLVED:** `scripts/old_scr_tune_library/` deleted; removed from .yyp and resource_order (April 2026).

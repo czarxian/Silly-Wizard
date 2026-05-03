@@ -99,7 +99,7 @@ global.timeline_cfg = {
     notebeam_player_emb_match_color: make_color_rgb(60, 155, 70),
     notebeam_player_segment_match_color: make_color_rgb(60, 155, 70),
     notebeam_player_emb_overlay_alpha: 0.55,
-    notebeam_player_miss_color: make_color_rgb(112, 46, 46),
+    notebeam_player_miss_color: make_color_rgb(195, 65, 65),
     notebeam_player_timing_slack_ms: 50,
     notebeam_player_bleed_alpha: 0.38,
     notebeam_player_alpha: 0.88,
@@ -177,7 +177,7 @@ if (!variable_global_exists("DIAG_DISABLE_TIMELINE_ANCHOR")) {
 if (!variable_global_exists("TIMELINE_HIDE_DURING_PLAY")) {
     // Production mode: hide timeline placeholder while live playback is running,
     // and restore it automatically in review mode.
-    global.TIMELINE_HIDE_DURING_PLAY = true;
+    global.TIMELINE_HIDE_DURING_PLAY = false;
 }
 if (!variable_global_exists("GV_VISUAL_CACHE_ENABLED")) {
     global.GV_VISUAL_CACHE_ENABLED = true;
@@ -200,7 +200,9 @@ if (!variable_global_exists("DIAG_SCHEDULER_FOCUS_MODE")) {
     global.DIAG_SCHEDULER_FOCUS_MODE = true;
 }
 if (global.DIAG_SCHEDULER_FOCUS_MODE) {
-    global.timeline_cfg.notebeam_diag_enabled = false;
+    // Keep notebeam diagnostics on so nowpulse continues to log while the
+    // rest of the scheduler-focused filter remains active.
+    global.timeline_cfg.notebeam_diag_enabled = true;
     global.MIDI_TIMING_DIAG_ENABLED = false;
     global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
     global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;

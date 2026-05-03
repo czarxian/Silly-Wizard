@@ -1,0 +1,117 @@
+{
+  "tune": "Jig of Slurs to Dreams of Ole Pa",
+  "score_manifest_version": 3,
+  "is_transition": true,
+  "transition_refs": {
+    "prior_tune": "T_JoS",
+    "following_tune": "T_DoOPF",
+    "tail_cut_measures": "1",
+    "head_cut_measures": "0"
+  },
+  "transition_images": {
+    "prior_replace": {
+      "tune": "Jig of Slurs",
+      "beats_per_measure": 6,
+      "units_per_measure": 6,
+      "images": [
+        "pr_m000.png"
+      ],
+      "image_meta": [
+        {
+          "file": "pr_m000.png",
+          "width_px": 800,
+          "height_px": 80,
+          "staff_top_px": 24,
+          "staff_bottom_px": 55.7,
+          "content_left_px": 0,
+          "content_right_px": 207.34,
+          "duration_units": 6,
+          "is_pickup": false,
+          "beat_anchors": [
+            59.66,
+            89.66,
+            119.66,
+            160.47,
+            null,
+            null
+          ]
+        }
+      ],
+      "pickup_image_index": -1,
+      "group": "prior_replace",
+      "playback_to_image": [
+        0
+      ],
+      "snippet_durations": [
+        6
+      ]
+    },
+    "bridge": {
+      "tune": "Jig of Slurs to Dreams of Ole Pa",
+      "beats_per_measure": 6,
+      "units_per_measure": 6,
+      "images": [
+        "br_m000.png"
+      ],
+      "image_meta": [
+        {
+          "file": "br_m000.png",
+          "width_px": 800,
+          "height_px": 80,
+          "staff_top_px": 24,
+          "staff_bottom_px": 55.7,
+          "content_left_px": 0,
+          "content_right_px": 96.53,
+          "duration_units": 3,
+          "is_pickup": false,
+          "beat_anchors": [
+            49.66,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "pickup_image_index": -1,
+      "group": "bridge",
+      "playback_to_image": [
+        0
+      ],
+      "snippet_durations": [
+        3
+      ]
+    }
+  },
+  "images": [
+    "br_m000.png"
+  ],
+  "image_meta": [
+    {
+      "file": "br_m000.png",
+      "width_px": 800,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 96.53,
+      "duration_units": 3,
+      "is_pickup": false,
+      "beat_anchors": [
+        49.66,
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    }
+  ],
+  "pickup_image_index": -1,
+  "playback_to_image": [
+    0
+  ],
+  "beats_per_measure": 6,
+  "units_per_measure": 6
+}

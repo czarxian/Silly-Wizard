@@ -17,6 +17,7 @@ if (!variable_global_exists("ui_layer_names")) {
 	global.ui_layer_names[4] = "current_note_layer";
 	global.ui_layer_names[5] = "judge_settings_layer";
 	global.ui_layer_names[6] = "player_window_layer";
+	global.ui_layer_names[7] = "loop_score_overview_layer";
 
 	// Player selection
 	global.player_names[0] = "Player 1";

@@ -14,7 +14,8 @@ if (variable_instance_exists(id, "ui_name")) {
 		|| anchor_name == "notebeam_canvas_anchor"
 		|| anchor_name == "tunestructure_canvas_anchor"
 		|| anchor_name == "gameviz_canvas_anchor"
-		|| anchor_name == "gameviz_structure_anchor") {
+		|| anchor_name == "gameviz_structure_anchor"
+		|| anchor_name == "loop_score_matrix_canvas") {
 		if (sprite_index == noone) {
 			sprite_index = spr_field_item;
 			mask_index = spr_field_item;
