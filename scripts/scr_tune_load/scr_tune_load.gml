@@ -247,7 +247,41 @@ function scr_score_manifest_read(_filename) {
     file_text_close(f);
 
     var manifest = json_parse(raw);
-    return is_struct(manifest) ? manifest : undefined;
+    if (!is_struct(manifest)) return undefined;
+
+    // Merge pickup/snippet fields from the sibling .score_snippets.json if present.
+    // score_images.json has no pickup awareness; the snippets bundle does.
+    var base_name = "";
+    var last_slash2 = 0;
+    for (var _c2 = 1; _c2 <= string_length(_filename); _c2++) {
+        if (string_copy(_filename, _c2, 1) == "/") last_slash2 = _c2;
+    }
+    if (last_slash2 > 0) {
+        var _tune_base = string_copy(_filename, last_slash2 + 1, string_length(_filename) - last_slash2);
+        _tune_base = string_replace(_tune_base, ".json", "");
+        var _snippets_path = tune_dir + _tune_base + ".score_snippets.json";
+        var _sf = file_text_open_read(_snippets_path);
+        if (_sf >= 0) {
+            var _sraw = "";
+            while (!file_text_eof(_sf)) {
+                _sraw += file_text_read_string(_sf);
+                file_text_readln(_sf);
+            }
+            file_text_close(_sf);
+            var _snippets_manifest = json_parse(_sraw);
+            if (is_struct(_snippets_manifest)) {
+                if (variable_struct_exists(_snippets_manifest, "has_pickup"))
+                    manifest.has_pickup = _snippets_manifest.has_pickup;
+                if (variable_struct_exists(_snippets_manifest, "snippets"))
+                    manifest.snippets = _snippets_manifest.snippets;
+                if (variable_struct_exists(_snippets_manifest, "units_per_measure")
+                    && !variable_struct_exists(manifest, "units_per_measure"))
+                    manifest.units_per_measure = _snippets_manifest.units_per_measure;
+            }
+        }
+    }
+
+    return manifest;
 }
 
 /// @function scr_score_manifest_normalize_image_meta(_image_meta, _beats_per_measure)
@@ -368,6 +402,16 @@ function scr_score_sprites_load(_filename, _manifest) {
     }
     if (variable_struct_exists(manifest, "snippet_durations")) {
         global.score_snippet_durations = manifest.snippet_durations;
+    } else if (variable_struct_exists(manifest, "snippets") && is_array(manifest.snippets)) {
+        // Manifest stores durations per-snippet; extract into the flat array GML expects.
+        var _snip_arr = manifest.snippets;
+        var _snip_n = array_length(_snip_arr);
+        var _flat_dur = array_create(_snip_n, 0);
+        for (var _si = 0; _si < _snip_n; _si++) {
+            var _snip = _snip_arr[_si];
+            _flat_dur[_si] = is_struct(_snip) ? real(_snip[$ "duration_units"] ?? 0) : 0;
+        }
+        global.score_snippet_durations = _flat_dur;
     }
 
     // Load image_meta if present (geometry sidecar: staff positions, content bounds, beat anchors)
@@ -399,6 +443,9 @@ function scr_score_sprites_load(_filename, _manifest) {
         ? real(manifest.beats_per_measure) : 0;
     global.score_units_per_measure = variable_struct_exists(manifest, "units_per_measure")
         ? real(manifest.units_per_measure) : 0;
+    if (!variable_global_exists("score_has_pickup")) global.score_has_pickup = false;
+    global.score_has_pickup = variable_struct_exists(manifest, "has_pickup")
+        ? bool(manifest.has_pickup) : false;
 
     var _sprite_count = array_length(global.score_lane_sprites);
     var _map_count    = array_length(global.score_measure_map);

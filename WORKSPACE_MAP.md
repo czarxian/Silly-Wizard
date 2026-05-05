@@ -244,7 +244,10 @@ This section documents the concrete runtime UI architecture and how UI instances
 - Measure-nav state wiring is centralized via `gv_measure_nav_apply_to_timeline_state()` and `gv_measure_nav_ensure_state_defaults()` so bind-time and lazy panel bootstrap use the same state shape.
 - Measure-nav source event selection/flattening is centralized via `gv_measure_nav_resolve_source_events()` to keep bootstrap behavior consistent when falling back from planned arrays to scheduler group events.
 - Measure-nav fallback end-time selection is centralized via `gv_measure_nav_resolve_end_ms_from_events()` and `gv_measure_nav_resolve_end_ms_from_state()` to keep synthetic-map sizing consistent across paths.
-- Set segment score-cache restoration is centralized via `gv_restore_score_segment_cache()` so all segment-switch paths reuse the same restore logic for structural metadata (`score_snippet_durations`, `score_units_per_measure`) and score-lane draw arrays.
+- Set segment score-cache restoration is centralized via `gv_restore_score_segment_cache()` so all segment-switch paths reuse the same restore logic for structural metadata (`score_snippet_durations`, `score_units_per_measure`, `score_has_pickup`) and score-lane draw arrays.
+- Set-mode measure tracking uses a prebuilt flat table (`global.playback_set_measure_nav_all`) rather than per-segment rebuild so `gv_get_current_planned_measure()` is never stale at segment boundaries. Built once by `gv_build_set_measure_nav_all()` after sprite cache population; per-segment `measure_nav_entries` continues to serve the structure-panel UI display only.
+- **Pickup data flow (authoritative source):** `has_pickup` is computed by the VBA ABC parser (`PickupDetected`) and written into `<TuneName>.score_snippets.json` at export time. At runtime, `scr_score_manifest_read()` reads `score/score_images.json` then merges `has_pickup` and `snippets[]` from the sibling `.score_snippets.json` onto the manifest struct. `scr_score_sprites_load()` extracts `snippets[].duration_units` into the flat `global.score_snippet_durations` array and sets `global.score_has_pickup`. All measure-numbering paths consume these globals — no runtime heuristics from duration arithmetic.
+- **score_images.json vs score_snippets.json:** `score/score_images.json` holds sprite filenames, `image_meta`, `beats_per_measure`, `units_per_measure`. `<TuneName>.score_snippets.json` (sibling to the tune JSON, not in score/) holds `has_pickup`, per-snippet `duration_units`, `is_pickup`, and `playback_to_image`. Always check both files when debugging pickup or measure-numbering issues.
 - Tune-structure panel rendering is anchor-driven (`tunestructure_canvas_anchor` in `obj_field_base` Draw_0); the legacy Draw_0 fallback panel path in `obj_game_viz` is retired.
 - Cached anchor rendering (`obj_field_base` Draw_0) sets `global.GV_ANCHOR_RECT_X_OFFSET/Y_OFFSET` to `-bbox_left/-bbox_top` while drawing notebeam and tune-structure into local surfaces.
 - `scr_game_viz` hitbox writes use those offsets (via hitbox bias) so stored hitboxes remain in global screen space and align with click tests.
@@ -332,6 +335,9 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.tune_selection` | real | Index of selected tune in picker; -1 = none | `obj_ui_controller` Create | `scr_button_scripts`, checkboxes |
 | `global.selected_tune_time_sig` | string | Time-sig string of tune highlighted in picker (before OK) | `obj_ui_controller` Create | `scr_button_scripts` |
 | `global.score_transition_images` | struct | Current tune transition score groups from `score_images.json`: `{prior_replace?, bridge?, follow_replace?}` | `scr_tune_load` `scr_score_sprites_load()` | future score override planning / score-lane runtime |
+| `global.score_has_pickup` | bool | True when the current tune's first snippet is an opening pickup bar | `scr_tune_load` `scr_score_sprites_load()` | `gv_build_measure_nav_map`, score-lane structural path, `gv_restore_score_segment_cache` |
+| `global.score_segments_sprites` | array | Per-segment sprite cache: `[{sprites, pbmap, meta, durations, units_per_measure, has_pickup}]`, one entry per set segment | `scr_set_scripts` `scr_set_init_global()` | `scr_button_scripts` (populate), `gv_restore_score_segment_cache`, `gv_build_set_measure_nav_all` |
+| `global.playback_set_measure_nav_all` | array | Flat sorted measure-nav table across all set segments: `[{measure, part, start_ms, end_ms, status, segment_idx}]`; built once at load time | `scr_set_scripts` `scr_set_init_global()` | `gv_get_current_planned_measure` (Priority 0 in set mode), `gv_build_set_measure_nav_all` |
 | `global.EVENT_HISTORY` | array | Append-only event log during playback — see struct schema below | `scr_event_log` (lazy init) | `scr_event_log`, export functions |
 | `global.EVENT_HISTORY_ENABLED` | bool | Master on/off for event logging | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.EVENT_HISTORY_AUTO_EXPORT` | bool | Auto-export CSV after playback ends | `scr_event_log` (lazy init) | `scr_event_log` |
@@ -461,8 +467,9 @@ Initialized by `scr_set_init_global()`, populated by `scr_set_load_json()`.
     id:              string,
     description:     string,
     tunes:           array,   // raw tune entries from JSON
-    segments:        array,   // preprocessed segment structs
+    segments:        array,   // preprocessed segment structs (end_ms includes boundary lead-in)
   score_override_plan: array, // per-segment tail/bridge/head score override metadata
+  boundary_plan:       array, // transition-authoritative boundary plan (scr_set_build_boundary_plan)
     active_segment_index: real,
     first_bpm:       real,
     first_meter:     string,
@@ -471,6 +478,7 @@ Initialized by `scr_set_init_global()`, populated by `scr_set_load_json()`.
     set_count_in_measures:     real
 }
 ```
+**Boundary lead-in note:** `segments[i].end_ms` now includes any fallback lead-in duration appended to tune i's content (Option 2 model). The next segment's `start_ms` equals the previous `end_ms`, so the hold window is attributed to the tune whose note is held.
 
 ### `playback_context` — thin navigation wrapper for viz/scoring/export
 ```

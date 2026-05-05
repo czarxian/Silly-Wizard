@@ -1032,6 +1032,82 @@ Coverage map for requested features
 - The helper restores structural metadata (`score_snippet_durations`, `score_units_per_measure`) and optionally draw-time arrays (`score_lane_sprites`, `score_playback_map`, `score_lane_meta`).
 - Updated all set segment-switch paths to call the helper (auto-advance, now-line sync jump, and manual seg_prev/seg_next navigation), reducing drift risk between call sites without changing intended behavior.
 
+### Implementation Update (pickup flag architecture — single-tune and set-mode fix)
+**Context:** Tunes with an opening pickup bar (e.g. Wings, Rowan Tree) were displaying the pickup as M1 in single-tune mode and throughout sets.
+
+**Root cause chain (in order discovered):**
+1. `_measure_starts` builder in `gv_build_measure_nav_map` single-tune path used `_em < 0` to exclude pickup markers — but pickup markers have `measure = 0`, not `< 0`, so they were admitted. This caused `_marker_measure_ms` to be calculated from the tiny pickup duration (~250 ms) instead of a full bar (~2000 ms), producing a wildly wrong `_ms_per_unit` and corrupting the entire structural-duration path.
+2. `gv_build_measure_nav_map` snippet path anchored `_t` to the M1 event time without stepping back for the pickup duration — so the pickup snippet was assigned M1's timestamp.
+3. `global.score_snippet_durations` was always empty because `scr_score_sprites_load` checked `manifest.snippet_durations` (a flat field that never existed in the JSON) instead of `manifest.snippets[]`.
+4. **Root cause:** `scr_score_manifest_read` read only `score/score_images.json`, which has no `has_pickup` or `snippets` fields. The sibling `<TuneName>.score_snippets.json` (which contains both) was never loaded anywhere in GML.
+
+**Fixes applied:**
+- **VBA (`Excel - Parse_ABC.txt`):** Both export paths (`ExportEventsToJSON`, `ExportEventsToJSON_ToFile`) now write `has_pickup`, `pickup_offset_units`, `units_per_measure`, `beats_per_measure` into the tune JSON `"tune"` block. `BuildSnippetBundleJSON` writes `has_pickup` at the bundle level.
+- **`scr_tune_load.gml` — `scr_score_manifest_read`:** After reading `score/score_images.json`, now opens the sibling `<TuneName>.score_snippets.json`, parses it, and merges `has_pickup`, `snippets[]`, and `units_per_measure` onto the manifest struct. This is the definitive fix.
+- **`scr_tune_load.gml` — `scr_score_sprites_load`:** Now reads `manifest.snippets[]` (not `manifest.snippet_durations`) to populate `global.score_snippet_durations` from `snippets[i].duration_units`. Also sets `global.score_has_pickup = bool(manifest.has_pickup) ?? false`.
+- **`scr_game_viz.gml` — `gv_build_measure_nav_map` (single-tune path):** Changed `_em < 0` to `_em <= 0` in the `_measure_starts` builder so pickup bar markers (`measure=0`) are excluded.
+- **`scr_game_viz.gml` — `gv_build_measure_nav_map` (snippet path):** Pickup detection now reads `global.score_has_pickup` (was a duration heuristic). Time offset applied: when `score_has_pickup` and `_observed_first_measure >= 1`, steps `_t` back by the pickup snippet duration before the loop.
+- **`scr_game_viz.gml` — `gv_restore_score_segment_cache`:** Now restores `global.score_has_pickup` from the segment cache struct.
+- **`scr_game_viz.gml` — `gv_build_set_measure_nav_all`:** Snapshots and per-segment restores `global.score_has_pickup` from `cache[$ "has_pickup"]`.
+- **`scr_game_viz.gml` — score-lane single-tune path:** `_first_is_pickup` reads `global.score_has_pickup`.
+- **`scr_game_viz.gml` — score-lane set-mode path:** `_first_is_pickup` reads `_seg_cache_for_dur[$ "has_pickup"]` directly from segment cache struct.
+- **`scr_button_scripts.gml`:** Segment cache struct now includes `has_pickup: global.score_has_pickup`. Segment 0 restore also restores `global.score_has_pickup`.
+
+**New global added:** `global.score_has_pickup` (bool) — owner: `scr_tune_load / scr_score_sprites_load`. Documented in WORKSPACE_MAP.md Global State Inventory.
+
+**Confirmed working (smoke tested):**
+- Scotland the Brave / Wings / Rowan Tree set of 3 — correct measure numbering throughout.
+- Wings single-tune — correct pickup and full-bar numbering.
+- Rowan Tree single-tune — correct pickup and full-bar numbering.
+
+**Still pending:**
+- Transition tunes (`Dalnahasaig to Strathan Reel` etc.) — `has_pickup` interaction with prior_replace/bridge/follow_replace snippet groups not yet validated.
+- Pickup tunes that are not the first tune in a set — `score_segments_sprites[si].has_pickup` must be confirmed correct for each segment; mid-set restore path (`gv_restore_score_segment_cache`) must be exercised.
+
+### Implementation Update (2026-05-04, Option 2 fallback boundary lead-in) — COMPLETE
+
+**Phase 1 & 2 (Cases 1 & 3) DONE:**
+- Case 1: T2 no pickup → direct handoff (BPM/meter change on beat 1, no lead-in)
+- Case 3: T2 has pickup, T1 ends at measure boundary → hold 1 full T2 measure (T2 tempo/meter)
+- Authored transition tune always overrides fallback
+- Explicit `gap` transition in set JSON overrides fallback
+
+**Phase 3 (Cases 2 & 4) DONE:**
+- Case 2: T2 no pickup, T1 ends mid-measure → direct handoff (T1 may already have been deferred; no case currently in tunes)
+- Case 4: T2 has pickup, T1 ends mid-measure → hold T1's note to complete T1's measure (at T1's tempo), then T2's pickup aligns to next measure boundary
+
+**Implementation details:**
+- `scr_set_compute_boundary_lead_in()` — detects if T1 ends mid-measure; computes hold duration for Cases 2 & 4; generates appropriate countin (or none for Case 4).
+- Metronome: Case 3 generates 1-measure count-in at T2's tempo; Case 4 generates no count-in (partial hold in T1 tempo).
+- Score image capping: uses `content_end_ms` (tune end before hold) so images don't stretch into the hold window.
+
+**VBA change (`scripts/Excel - Parse_ABC.txt`):**
+- Added `measure_count` (= `DownbeatBarCount`) to `tune{}` in both export paths (not actively used yet in GML, but data is present).
+
+**GML changes (`scripts/scr_set_scripts/scr_set_scripts.gml`):**
+- `scr_set_compute_boundary_lead_in(_t1_struct, _t1_events, _t2_struct, _t1_bpm, _t2_entry)` — cases 1–4 implemented: detects mid-measure boundaries, returns case-specific hold durations and metronome settings.
+- `scr_set_extend_last_note_off(_events, _ms)` — extends last note_off event by _ms.
+- `scr_set_preprocess_and_build_playback()` — computes boundary lead-in for all non-transition tune boundaries; extends notes; generates metronome; updates segments with `content_end_ms`.
+- `scr_playback_context_build_for_set()` — forwards `content_end_ms` through segment struct copying.
+
+**GML changes (`scripts/scr_game_viz/scr_game_viz.gml`):**
+- Duration-based score image layout: uses `content_end_ms` instead of `end_ms` so images cap at tune content boundary, not hold boundary.
+- Marker-derived path: adds `seg_content_end_ms` to measure_starts entries.
+- Draw loop: caps last image's `_t_end` to `seg_content_end_ms` instead of `seg_end_ms`.
+
+**Bug fixes applied after initial implementation:**
+- Case 3 was a separate early-return that inserted a full T2 measure without subtracting the pickup. Removed; Cases 3 & 4 now share the unified formula `hold = remaining - pickup`.
+- Pickup phase correction: Scotland the Brave ends at unit 128 (= 16 × 8), which naively modded to 0 (boundary). Added `t1_pickup_ms` subtraction before modulo so the phase is relative to the first downbeat. Result: Scotland→Wings correctly computes hold = 0 (direct handoff).
+- Guard added: `max(0, t1_tune_end_ms - t1_pickup_ms)` prevents negative modulo on malformed data.
+
+**Validation scenarios confirmed:**
+- Set of 3: tune 1 (no pickup) → tune 2 (no pickup) — Case 1, no lead-in ✓
+- Set of 3: tune 1 (no pickup) → tune 2 (has pickup) — Case 3, 1-measure hold ✓
+- Scotland → Wings: pickup phase correction → Case 3, hold = 0, direct handoff ✓
+- Set with authored gap — fallback should NOT fire ✓
+- Set with transition tune — fallback should NOT fire ✓
+- 4/4 March set: metronome/score/music aligned across all tunes ✓
+
 Backlog (Planned but Not Started)
 Tune & Data Pipeline
 • 	Full metadata support in JSON

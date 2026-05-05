@@ -649,7 +649,8 @@
 							pbmap:   global.score_playback_map,
 							meta:    variable_global_exists("score_lane_meta") ? global.score_lane_meta : [],
 							durations: variable_global_exists("score_snippet_durations") ? global.score_snippet_durations : [],
-							units_per_measure: variable_global_exists("score_units_per_measure") ? real(global.score_units_per_measure) : 0
+							units_per_measure: variable_global_exists("score_units_per_measure") ? real(global.score_units_per_measure) : 0,
+							has_pickup: variable_global_exists("score_has_pickup") ? global.score_has_pickup : false
 						};
 					}
 				}
@@ -661,9 +662,14 @@
 					if (variable_global_exists("score_lane_meta")) global.score_lane_meta = _s0.meta;
 					if (variable_global_exists("score_snippet_durations")) global.score_snippet_durations = _s0.durations;
 					if (variable_global_exists("score_units_per_measure")) global.score_units_per_measure = real(_s0.units_per_measure ?? 0);
+					if (variable_global_exists("score_has_pickup")) global.score_has_pickup = bool(_s0[$ "has_pickup"] ?? false);
 					var _fn0 = string(_pc_segs_init[0][$ "filename"] ?? "");
 					if (_fn0 != "") scr_score_override_groups_load_for_current_segment(_fn0);
 				}
+				// Build the flat prebuilt measure-nav table now that all segment caches are populated.
+				// gv_get_current_planned_measure() will use this in set mode, avoiding stale measure
+				// numbers during segment transitions.
+				gv_build_set_measure_nav_all();
 			}
 		} else {
 		// ── SINGLE TUNE PATH ────────────────────────────────────────────────

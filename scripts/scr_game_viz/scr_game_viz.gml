@@ -203,6 +203,9 @@ function gv_restore_score_segment_cache(_seg_idx, _restore_media) {
     if (variable_global_exists("score_units_per_measure")) {
         global.score_units_per_measure = real(_cache_entry[$ "units_per_measure"] ?? 0);
     }
+    if (variable_global_exists("score_has_pickup")) {
+        global.score_has_pickup = bool(_cache_entry[$ "has_pickup"] ?? false);
+    }
 
     if (_restore_media) {
         global.score_lane_sprites = _cache_entry[$ "sprites"] ?? [];
@@ -266,6 +269,115 @@ function gv_rebuild_measure_nav_for_segment(_seg_idx) {
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.measure_nav_scroll_row = 0;
     }
+}
+
+/// @function gv_build_set_measure_nav_all()
+/// @description Build a flat, sorted array of measure-nav entries covering ALL segments of the
+///              active set, each tagged with segment_idx.  Called once at load time (after the
+///              sprite cache is populated) so that gv_get_current_planned_measure() can resolve
+///              the correct measure at any playhead position without re-building state on segment
+///              transitions.  Entries use absolute timestamps (bar_events in playback_context are
+///              already shifted to wall-clock time by scr_playback_context_build_for_set).
+/// @returns {array}  Flat array of nav-entry structs; each entry has the standard fields plus
+///                   segment_idx.  Empty array on error or non-set mode.
+/// @reads  global.playback_context, global.score_segments_sprites, global.timeline_state
+/// @writes global.playback_set_measure_nav_all
+function gv_build_set_measure_nav_all() {
+    global.playback_set_measure_nav_all = [];
+
+    if (!variable_global_exists("playback_context") || !is_struct(global.playback_context)) return [];
+    if (string(global.playback_context[$ "mode"] ?? "") != "set") return [];
+
+    var _segs = global.playback_context[$ "segments"];
+    if (!is_array(_segs)) return [];
+    var _seg_n = array_length(_segs);
+    if (_seg_n == 0) return [];
+
+    var _flat = [];
+
+    // Snapshot the globals that gv_build_measure_nav_map() reads so we can restore them.
+    var _saved_durations    = variable_global_exists("score_snippet_durations")  ? global.score_snippet_durations  : [];
+    var _saved_upm          = variable_global_exists("score_units_per_measure")  ? real(global.score_units_per_measure) : 0;
+    var _saved_has_pickup   = variable_global_exists("score_has_pickup") ? global.score_has_pickup : false;
+    var _saved_measure_ms   = (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+                                && variable_struct_exists(global.timeline_state, "measure_ms"))
+                             ? real(global.timeline_state.measure_ms) : 1000;
+
+    for (var _si = 0; _si < _seg_n; _si++) {
+        var _seg = _segs[_si];
+        if (!is_struct(_seg)) continue;
+
+        // Load per-segment snippet data so gv_build_measure_nav_map uses the right durations/upm.
+        if (variable_global_exists("score_segments_sprites")
+            && is_array(global.score_segments_sprites)
+            && _si < array_length(global.score_segments_sprites)
+            && is_struct(global.score_segments_sprites[_si])) {
+            var _cache = global.score_segments_sprites[_si];
+            global.score_snippet_durations  = _cache.durations ?? [];
+            global.score_units_per_measure  = real(_cache.units_per_measure ?? 0);
+            if (variable_global_exists("score_has_pickup")) global.score_has_pickup = bool(_cache[$ "has_pickup"] ?? false);
+        } else {
+            global.score_snippet_durations  = [];
+            global.score_units_per_measure  = 0;
+            if (variable_global_exists("score_has_pickup")) global.score_has_pickup = false;
+        }
+
+        // Derive measure_ms for this segment from its BPM/meter.
+        var _seg_bpm    = real(_seg[$ "bpm"]   ?? 120);
+        var _seg_meter  = string(_seg[$ "meter"] ?? "4/4");
+        var _mp         = string_split(_seg_meter, "/");
+        var _mn         = real(_mp[0] ?? 4);
+        var _md         = real(_mp[1] ?? 4);
+        var _seg_mms    = gv_measure_ms(_seg_bpm, _mn, _md);
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+            global.timeline_state.measure_ms = _seg_mms;
+        }
+
+        var _bar_evts = _seg[$ "bar_events"];
+        if (!is_array(_bar_evts)) _bar_evts = [];
+
+        var _nav = gv_build_measure_nav_map(_bar_evts);
+        if (!is_struct(_nav) || !is_array(_nav.entries)) continue;
+
+        var _en = array_length(_nav.entries);
+        for (var _ei = 0; _ei < _en; _ei++) {
+            var _entry = _nav.entries[_ei];
+            if (!is_struct(_entry)) continue;
+            // Deep-copy the struct so segment-transition trimming of timeline_state doesn't corrupt this table.
+            array_push(_flat, {
+                measure:      real(_entry.measure ?? 0),
+                part:         real(_entry.part ?? 1),
+                start_ms:     real(_entry.start_ms ?? 0),
+                end_ms:       real(_entry.end_ms ?? 0),
+                status:       real(_entry.status ?? 0),
+                segment_idx:  _si
+            });
+        }
+    }
+
+    // Restore globals to their pre-call state.
+    global.score_snippet_durations  = _saved_durations;
+    global.score_units_per_measure  = _saved_upm;
+    if (variable_global_exists("score_has_pickup")) global.score_has_pickup = _saved_has_pickup;
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.measure_ms = _saved_measure_ms;
+    }
+
+    // Sort by start_ms so the binary-style scan in gv_get_current_planned_measure works.
+    var _flat_n = array_length(_flat);
+    for (var _i = 1; _i < _flat_n; _i++) {
+        var _tmp = _flat[_i];
+        var _j = _i - 1;
+        while (_j >= 0 && real(_flat[_j].start_ms) > real(_tmp.start_ms)) {
+            _flat[_j + 1] = _flat[_j];
+            _j--;
+        }
+        _flat[_j + 1] = _tmp;
+    }
+
+    global.playback_set_measure_nav_all = _flat;
+    show_debug_message("[gv_build_set_measure_nav_all] Built " + string(_flat_n) + " entries across " + string(_seg_n) + " segments.");
+    return _flat;
 }
 
 /// @function gv_measure_nav_resolve_source_events()
@@ -2943,15 +3055,20 @@ function gv_build_measure_nav_map(_planned_events) {
                 }
                 _t -= _lead_back_ms;
             }
+            // If snippet 0 is a pickup, the anchor is M1's time but the timeline
+            // must start before it by exactly the pickup's duration.
+            var _has_pickup_flag = variable_global_exists("score_has_pickup") ? global.score_has_pickup : false;
+            if (_has_pickup_flag && _duration_count > 0) {
+                _t -= max(1, real(_durations[0]) * _ms_per_unit);
+            }
         }
         var _display_measure = 0;
         for (var _si = 0; _si < _duration_count; _si++) {
             var _dur_units = max(0.0001, real(_durations[_si]));
             var _dur_ms = max(1, _dur_units * _ms_per_unit);
-            // Only snippet 0 can represent an opening pickup; later short snippets are real measures.
+            // Only snippet 0 can represent an opening pickup; flag comes from the exported JSON.
             var _is_pickup_snippet = (_si == 0)
-                && (_units_per_measure > 0)
-                && (_dur_units < (_units_per_measure - 0.02));
+                && (variable_global_exists("score_has_pickup") ? global.score_has_pickup : false);
             var _display_m = 0;
             if (_is_pickup_snippet) {
                 _display_m = (_si <= 0) ? 0 : max(1, _display_measure);
@@ -2970,8 +3087,7 @@ function gv_build_measure_nav_map(_planned_events) {
         }
 
         var _pickup = {};
-        var _has_pickup = (_duration_count > 1 && _units_per_measure > 0
-            && real(_durations[0]) < (_units_per_measure - 0.02));
+        var _has_pickup = (variable_global_exists("score_has_pickup") ? global.score_has_pickup : false);
         _pickup[$ "1"] = _has_pickup;
 
         result.entries = _entries;
@@ -3934,6 +4050,9 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     for (var pe = 0; pe < array_length(entries); pe++) {
         var e = entries[pe];
         if (!is_struct(e)) continue;
+        // Pickup entries (measure < 1) are excluded from the structure panel.
+        // They are intentionally not counted, not displayed, and not clickable.
+        if (floor(real(e.measure ?? -1)) < 1) continue;
         var p = floor(real(e.part ?? 1));
         if (p < 1) p = 1;
         var pkey = string(p);
@@ -5476,11 +5595,14 @@ function gv_compact_note_label(_label) {
 }
 
 /// @function gv_get_current_planned_measure(_playhead_ms)
-/// @description Find the measure number currently active at the given playhead time by scanning planned events, or by structural measure starts if available.
+/// @description Find the measure number currently active at the given playhead time.
+///              In set mode uses global.playback_set_measure_nav_all (flat prebuilt table) so
+///              segment transitions cannot cause stale measure values.  Falls back to per-segment
+///              measure_nav_entries and then structural_measure_starts for single-tune mode.
 /// @param {real} _playhead_ms  Current playhead time in ms.
-/// @returns {int}  Measure number (>=1), or -1 if none active.
-/// @reads  global.timeline_state, global.timeline_cfg, global.METRONOME_CONFIG
-/// @writes global.timeline_state.measure_highlight_last_measure, global.timeline_state.measure_highlight_last_nav_idx, global.timeline_state.measure_highlight_last_struct_idx
+/// @returns {int}  Measure number (>=1), or -1 if none active (e.g. pickup phase).
+/// @reads  global.timeline_state, global.timeline_cfg, global.METRONOME_CONFIG, global.playback_set_measure_nav_all
+/// @writes global.timeline_state.measure_highlight_last_measure, global.timeline_state.measure_highlight_last_nav_idx, global.timeline_state.measure_highlight_last_struct_idx, global.timeline_state.current_measure
 function gv_get_current_planned_measure(_playhead_ms) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return -1;
 
@@ -5490,7 +5612,60 @@ function gv_get_current_planned_measure(_playhead_ms) {
         ? global.timeline_state.measure_nav_pickup_by_part
         : {};
 
-    // Priority 1: measure-nav entries (authoritative tile/model source).
+    // Priority 0 (set mode only): prebuilt flat table covering all segments.
+    // Using this avoids stale measure numbers during segment transitions because
+    // the table never changes at runtime — it was built once at load time with
+    // absolute timestamps for every measure across every segment.
+    var _is_set_mode = variable_global_exists("playback_context")
+        && is_struct(global.playback_context)
+        && string(global.playback_context[$ "mode"] ?? "") == "set";
+    if (_is_set_mode
+        && variable_global_exists("playback_set_measure_nav_all")
+        && is_array(global.playback_set_measure_nav_all)
+        && array_length(global.playback_set_measure_nav_all) > 0) {
+        var _fall = global.playback_set_measure_nav_all;
+        var _fall_n = array_length(_fall);
+        var _fall_best_m = -1;
+        var _fall_resolved_m = -1;
+        var _fall_resolved_idx = -1;
+        for (var _fi = 0; _fi < _fall_n; _fi++) {
+            var _fe = _fall[_fi];
+            if (!is_struct(_fe)) continue;
+            var _fs = real(_fe.start_ms ?? 0);
+            var _fe_end = real(_fe.end_ms ?? _fs);
+            var _fm = floor(real(_fe.measure ?? -1));
+            if (_fm < 1) continue;
+            if (_query_ms < _fs) break;
+            if (_query_ms >= _fs && _query_ms < _fe_end) {
+                _fall_resolved_m = _fm;
+                _fall_resolved_idx = _fi;
+                break;
+            }
+            _fall_best_m = _fm;
+        }
+        // Check if we are in a pickup window (before the first non-pickup entry).
+        if (_fall_resolved_m < 1 && _fall_n > 0 && _query_ms < real(_fall[0].start_ms ?? 0)) {
+            // Before the first entry of the whole set — treat as pickup (no highlight).
+            global.timeline_state.measure_highlight_last_measure = -1;
+            global.timeline_state.measure_highlight_last_nav_idx = -1;
+            global.timeline_state.measure_highlight_last_struct_idx = -1;
+            global.timeline_state.current_measure = -1;
+            return -1;
+        }
+        if (_fall_resolved_m < 1 && _fall_best_m >= 1) {
+            _fall_resolved_m = _fall_best_m;
+        }
+        if (_fall_resolved_m >= 1) {
+            global.timeline_state.measure_highlight_last_measure = _fall_resolved_m;
+            global.timeline_state.measure_highlight_last_nav_idx = _fall_resolved_idx;
+            global.timeline_state.measure_highlight_last_struct_idx = -1;
+            global.timeline_state.current_measure = _fall_resolved_m;
+            return _fall_resolved_m;
+        }
+        // Fall through to per-segment path if flat table returned nothing useful.
+    }
+
+    // Priority 1: measure-nav entries (authoritative tile/model source for single-tune and set UI panel).
     if (variable_struct_exists(global.timeline_state, "measure_nav_entries")
         && is_array(global.timeline_state.measure_nav_entries)
         && array_length(global.timeline_state.measure_nav_entries) > 0) {
@@ -7455,11 +7630,13 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     // build starts from those durations first, then fall back to
                     // marker-derived starts only when duration metadata is missing.
                     var _seg_durations = [];
+                    var _seg_units_per_measure = 0;
                     if (variable_global_exists("score_segments_sprites") && is_array(global.score_segments_sprites)
                         && _sidx >= 0 && _sidx < array_length(global.score_segments_sprites)) {
                         var _seg_cache_for_dur = global.score_segments_sprites[_sidx];
                         if (is_struct(_seg_cache_for_dur)) {
                             _seg_durations = _seg_cache_for_dur[$ "durations"] ?? [];
+                            _seg_units_per_measure = real(_seg_cache_for_dur[$ "units_per_measure"] ?? 0);
                         }
                     }
 
@@ -7471,15 +7648,18 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                             _dur_total_units += max(0.0001, real(_seg_durations[_dui]));
                         }
 
-                        var _seg_len_ms = max(1, _seg_e - _seg_s);
+                        // Use content_end_ms (excludes boundary lead-in hold window) so
+                        // score images are not stretched across the hold time.
+                        var _seg_content_e = real(_seg[$ "content_end_ms"] ?? _seg_e);
+                        var _seg_len_ms = max(1, _seg_content_e - _seg_s);
                         var _dur_ms_per_unit = (_dur_total_units > 0)
                             ? (_seg_len_ms / _dur_total_units)
                             : (_seg_len_ms / max(1, _dur_n));
 
                         var _dur_t = _seg_s;
                         var _display_measure = 0;
-                        var _first_is_pickup = (_dur_n > 1)
-                            && (real(_seg_durations[0]) < (real(_seg_durations[1]) - 0.5));
+                        var _first_is_pickup = is_struct(_seg_cache_for_dur)
+                            && bool(_seg_cache_for_dur[$ "has_pickup"] ?? false);
 
                         for (var _dsi = 0; _dsi < _dur_n; _dsi++) {
                             var _dur_units = max(0.0001, real(_seg_durations[_dsi]));
@@ -7501,6 +7681,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                                 seg_idx: _sidx,
                                 seg_title: _seg_t,
                                 seg_start_ms: _seg_s,
+                                seg_content_end_ms: real(_seg[$ "content_end_ms"] ?? _seg_e),
                                 seg_end_ms: _seg_e
                             });
                             _seg_seq++;
@@ -7615,6 +7796,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                             seg_idx: _sidx,
                             seg_title: _seg_t,
                             seg_start_ms: _seg_s,
+                            seg_content_end_ms: real(_seg[$ "content_end_ms"] ?? _seg_e),
                             seg_end_ms: _seg_e
                         });
                         _seg_seq++;
@@ -7657,7 +7839,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
                     var _et = gv_evt_time_ms(_ev);
                     var _em = variable_struct_exists(_ev, "measure") ? floor(real(_ev.measure)) : -999;
-                    if (_em < 0) continue;
+                    if (_em <= 0) continue;
                     if (_skip_met && _etype == "note_on") {
                         var _ch = variable_struct_exists(_ev, "channel") ? real(_ev.channel) : 0;
                         if (_ch == _met_ch) continue;
@@ -7717,12 +7899,12 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 }
                 var _ms_per_unit = _units_per_measure > 0 ? (_marker_measure_ms / _units_per_measure) : 1;
                 
-                // Check if first snippet is a pickup (first has fewer units than a full measure)
-                var _first_is_pickup = (_structural_duration_count > 1)
-                    && (real(_structural_durations[0]) < (real(_structural_durations[1]) - 0.5));
+                // Check if first snippet is a pickup: flag comes from the exported JSON.
+                var _first_is_pickup = (variable_global_exists("score_has_pickup") ? global.score_has_pickup : false);
                 
                 var _structural_measure_starts = [];
-                var _observed_first_measure = floor(real(variable_struct_get(_measure_starts[0], "m")));
+                var _observed_first_measure_raw = floor(real(variable_struct_get(_measure_starts[0], "m")));
+                var _observed_first_measure = _observed_first_measure_raw;
                 if (_observed_first_measure < 1) _observed_first_measure = 1;
                 var _structural_t = real(variable_struct_get(_measure_starts[0], "t"));
                 var _missing_lead_count = _observed_first_measure - 1;
@@ -7734,7 +7916,16 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     }
                     _structural_t -= _lead_back_ms;
                 }
-                var _next_measure_num = _first_is_pickup ? 0 : 1;
+                // If marker-derived starts begin at measure 1, but snippet 0 is an opening
+                // pickup, shift the structural timeline back by exactly the pickup duration.
+                // This keeps score images and beat markers phase-aligned in single-tune mode.
+                if (_first_is_pickup && _observed_first_measure_raw >= 1) {
+                    _structural_t -= max(1, real(_structural_durations[0]) * _ms_per_unit);
+                }
+                // Measure numbering should start at 1 for the first full bar.
+                // If snippet 0 is a pickup, it is explicitly assigned measure 0
+                // and does not consume a measure number.
+                var _next_measure_num = 1;
                 
                 for (var _sd_i = 0; _sd_i < _structural_duration_count; _sd_i++) {
                     var _duration_units = real(_structural_durations[_sd_i]);
@@ -7903,8 +8094,10 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 var _t_end   = (_mi + 1 < _nm) ? _measure_starts[_mi + 1].t : (_t_start + _fallback_measure_ms);
                 var _ms_seg_end = real(_ms[$ "seg_end_ms"] ?? -1);
                 var _ms_seg_start = real(_ms[$ "seg_start_ms"] ?? -1);
+                var _ms_seg_content_end = real(_ms[$ "seg_content_end_ms"] ?? _ms_seg_end);
                 if (_set_mode && _ms_seg_end > _ms_seg_start) {
-                    _t_end = min(_t_end, _ms_seg_end);
+                    // Cap to content_end_ms (not end_ms) so images don't stretch into the hold window
+                    _t_end = min(_t_end, _ms_seg_content_end);
                 }
                 var _spr_idx = _ms.seq;
                 var _spr = undefined;

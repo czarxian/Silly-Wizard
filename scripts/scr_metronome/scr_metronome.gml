@@ -825,7 +825,7 @@ function metronome_update_pattern_list(_time_sig) {
 }
 
 /// @function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
-/// @description Generate metronome MIDI events for a count-in period before the tune starts. Events have negative time_ms values so they precede time 0.
+/// @description Generate metronome MIDI events for a count-in period. Events have positive time values starting from 0; the caller is responsible for offsetting them to the desired window start.
 /// @param {struct} _tune  Tune struct with .tune_data.tune_metadata (used for BPM and time sig)
 /// @param {struct} _settings  Optional per-call overrides: {bpm, metronome_mode, metronome_pattern, metronome_volume}
 /// @param {real} _count_in_measures  Number of measures to count in; returns [] if <= 0

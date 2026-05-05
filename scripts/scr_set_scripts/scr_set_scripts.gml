@@ -48,6 +48,7 @@ function scr_set_init_global() {
     };
     scr_playback_context_init();
     global.score_segments_sprites = []; // per-segment sprite cache for multi-segment score display
+    global.playback_set_measure_nav_all = []; // flat prebuilt measure-nav table across all set segments
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +387,45 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
         // tune duration = last event time (add a small tail so next tune doesn't overlap)
         var tune_end_ms = scr_set_max_event_time(tune_events);
 
+        // Resolve segment BPM early (also needed for boundary lead-in computation below).
+        var seg_bpm         = scr_set_entry_bpm(entry, tune_struct);
+        var seg_bpm_percent = real(global.active_set.set_bpm_percent ?? 1.0);
+
+        // ── fallback boundary lead-in (Option 2 model) ────────────────────────────────
+        // When the next tune has a pickup and no authored gap/transition tune is present,
+        // apply the appropriate fallback based on T1's measure boundary and T2's pickup status.
+        var boundary_lead_in_ms   = 0;
+        var boundary_metro_events = [];
+        if (ti < tune_count - 1 && !scr_set_is_transition_tune(entry, tune_struct)) {
+            var _bli_transition = entry[$ "transition"] ?? { type: "direct" };
+            var _bli_trans_type = string(_bli_transition[$ "type"] ?? "direct");
+            if (_bli_trans_type != "gap") {
+                var _bli_next_entry  = global.active_set.tunes[ti + 1];
+                var _bli_next_path   = scr_set_resolve_tune_path(string(_bli_next_entry[$ "filename"] ?? ""));
+                var _bli_next_struct = scr_tune_load_to_struct(_bli_next_path);
+                if (!is_undefined(_bli_next_struct) && !scr_set_is_transition_tune(_bli_next_entry, _bli_next_struct)) {
+                    var _bli = scr_set_compute_boundary_lead_in(
+                        tune_struct, tune_events, _bli_next_struct,
+                        seg_bpm * seg_bpm_percent, _bli_next_entry);
+                    boundary_lead_in_ms = real(_bli[$ "duration_ms"] ?? 0);
+                    if (boundary_lead_in_ms > 0) {
+                        scr_set_extend_last_note_off(tune_events, boundary_lead_in_ms);
+                        var _bli_settings = {
+                            bpm:               real(_bli[$ "leadin_bpm"] ?? 120),
+                            metronome_mode:    global.metronome_mode,
+                            metronome_pattern: global.metronome_pattern_selection,
+                            metronome_volume:  global.metronome_volume
+                        };
+                        boundary_metro_events = metronome_generate_countin_events(
+                            _bli_next_struct, _bli_settings, real(_bli[$ "leadin_measures"] ?? 0));
+                        show_debug_message("  [Boundary] Case " + string(_bli[$ "boundary_case"]) + " lead-in: "
+                            + string(floor(boundary_lead_in_ms)) + "ms (seg "
+                            + string(ti) + "→" + string(ti + 1) + ")");
+                    }
+                }
+            }
+        }
+
         // Collect all events with a measure number for this tune (0-based time, pre-offset).
         // Including note events alongside bar/beat markers ensures gv_build_measure_nav_map
         // can fill in any measure that has no explicit marker, preventing gap skips
@@ -422,8 +462,7 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
         var _td4 = tune_struct[$ "tune_data"] ?? {};
         var _tm4 = _td4[$ "tune_metadata"] ?? {};
         var seg_title = string(_tm4[$ "title"] ?? filename);
-        var seg_bpm   = scr_set_entry_bpm(entry, tune_struct);
-        var seg_bpm_percent = real(global.active_set.set_bpm_percent ?? 1.0);
+        // seg_bpm and seg_bpm_percent are declared above for boundary lead-in computation
         array_push(segments, {
             tune_index:  ti,
             filename:    filename,
@@ -431,8 +470,9 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
             bpm:         seg_bpm * seg_bpm_percent,
             meter:       metronome_normalize_time_sig(string(_tm4[$ "meter"] ?? "4/4")),
             score_manifest: _td4[$ "score_manifest"] ?? {},
-            start_ms:    offset_ms,
-            end_ms:      offset_ms + tune_end_ms,
+            start_ms:       offset_ms,
+            content_end_ms: offset_ms + tune_end_ms,
+            end_ms:         offset_ms + tune_end_ms + boundary_lead_in_ms,
             bar_events:  seg_bar_events  // 0-based times — add start_ms to get absolute
         });
 
@@ -470,8 +510,17 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
                     scr_set_offset_and_append(all_events, gap_events, offset_ms);
                     offset_ms += gap_ms;
                 }
+            } else if (boundary_lead_in_ms > 0) {
+                // Fallback lead-in (Option 2): the last note of tune 1 has already been
+                // extended in tune_events above.  Now insert metronome clicks for the
+                // hold window and advance offset_ms so tune 2 starts at the right time.
+                // metronome_generate_countin_events returns events with positive times
+                // starting from 0; offset by offset_ms (= start of the hold window) so
+                // they land in [offset_ms, offset_ms + boundary_lead_in_ms).
+                scr_set_offset_and_append(all_events, boundary_metro_events, offset_ms);
+                offset_ms += boundary_lead_in_ms;
             }
-            // "direct" — no gap, offset_ms stays at tune_end boundary
+            // "direct" with no pickup in next tune — no action; tune 2 starts immediately
         }
     }
 
@@ -637,14 +686,15 @@ function scr_playback_context_build_for_set() {
             array_push(abs_bars, copy);
         }
         segs_out[i] = {
-            tune_index:  s.tune_index,
-            filename:    s.filename,
-            title:       s.title,
-            bpm:         s.bpm,
-            meter:       s.meter,
-            start_ms:    s.start_ms,
-            end_ms:      s.end_ms,
-            bar_events:  abs_bars
+            tune_index:     s.tune_index,
+            filename:       s.filename,
+            title:          s.title,
+            bpm:            s.bpm,
+            meter:          s.meter,
+            start_ms:       s.start_ms,
+            content_end_ms: s.content_end_ms,
+            end_ms:         s.end_ms,
+            bar_events:     abs_bars
         };
     }
 
@@ -907,6 +957,157 @@ function scr_set_is_transition_tune(_entry, _tune_struct) {
     if (string_pos("transition", fn) > 0) return true;
 
     return false;
+}
+
+/// @function scr_set_extend_last_note_off(_events, _extend_ms)
+/// @description Extend the latest note_off event in an array by _extend_ms.
+///              Implements "hold last note" for Option 2 fallback boundary lead-in:
+///              bagpipes can't stop, so the last note continues into the lead-in window.
+/// @param _events     Playable event array (0-based ms times from scr_preprocess_tune)
+/// @param _extend_ms  Milliseconds to add to the last note_off's time
+/// @reads   none
+/// @writes  _events (mutates last note_off event in-place)
+/// @callers scr_set_preprocess_and_build_playback
+function scr_set_extend_last_note_off(_events, _extend_ms) {
+    if (_extend_ms <= 0) return;
+    var n         = array_length(_events);
+    var last_idx  = -1;
+    var last_time = -1;
+    for (var i = 0; i < n; i++) {
+        var ev = _events[i];
+        if (!is_struct(ev)) continue;
+        if (string(ev[$ "type"] ?? "") != "note_off") continue;
+        var t = real(ev[$ "time"] ?? 0);
+        if (t > last_time) {
+            last_time = t;
+            last_idx  = i;
+        }
+    }
+    if (last_idx >= 0) {
+        _events[last_idx][$ "time"] += _extend_ms;
+    }
+}
+
+/// @function scr_set_compute_boundary_lead_in(_t1_struct, _t1_events, _t2_struct, _t1_effective_bpm, _t2_entry)
+/// @description Compute Option 2 fallback boundary lead-in when no transition tune is present.
+///   Case 1: T2 has no pickup → duration_ms = 0 (direct handoff; BPM/meter change on beat 1).
+///   Case 2: T1 ends mid-measure, T2 has no pickup → hold to complete T1's measure.
+///   Cases 3 & 4 (unified): T2 has pickup. hold = remaining_in_T1_measure - T2_pickup_ms.
+///     T1 at boundary (Case 3): remaining = t1_measure_ms, giving hold = measure - pickup.
+///     T1 mid-measure (Case 4): remaining = t1_measure_ms - t1_measure_offset.
+///     If hold < 0, roll by one T2 measure. If hold ≈ 0, direct handoff.
+///   T1 pickup phase correction: the modulo uses (t1_tune_end_ms - t1_pickup_ms) so the
+///   measure boundary is relative to the first downbeat, not the absolute timeline start.
+/// @param _t1_struct         Loaded tune struct for tune 1
+/// @param _t1_events         Preprocessed events array for tune 1 (0-based ms times)
+/// @param _t2_struct         Loaded tune struct for tune 2
+/// @param _t1_effective_bpm  Resolved BPM for tune 1 (including set bpm_percent)
+/// @param _t2_entry          Set entry struct for tune 2 (for bpm override)
+/// @returns struct {case, duration_ms, hold_note_extension_ms, leadin_measures, leadin_bpm}
+/// @reads   global.active_set.set_bpm_percent
+/// @writes  none
+/// @callers scr_set_preprocess_and_build_playback
+function scr_set_compute_boundary_lead_in(_t1_struct, _t1_events, _t2_struct, _t1_effective_bpm, _t2_entry) {
+    var result = {
+        boundary_case:          1,
+        duration_ms:            0,
+        hold_note_extension_ms: 0,
+        leadin_measures:        0,
+        leadin_bpm:             120
+    };
+
+    // Read T1 metadata
+    var t1_meta         = _t1_struct.tune_data.tune_metadata;
+    var t1_meter        = metronome_normalize_time_sig(string(t1_meta[$ "meter"] ?? "4/4"));
+    var t1_parts        = string_split(t1_meter, "/");
+    var t1_beats_per_meas = (array_length(t1_parts) >= 1) ? real(t1_parts[0]) : 4;
+    var t1_measure_ms   = scr_set_beats_duration_ms(_t1_effective_bpm, t1_meter, t1_beats_per_meas);
+
+    // Compute T1's tune duration (last event time)
+    var t1_tune_end_ms  = scr_set_max_event_time(_t1_events);
+
+    // Measure-phase offset: subtract T1's pickup so the modulo is relative to
+    // the first downbeat, not the absolute start. Without this, a tune whose
+    // total length happens to be a multiple of measure_ms (e.g. 1 pickup unit +
+    // 16 full measures = 129 units → 128 units when bars land at 128 because
+    // the bar is placed one unit before the mathematical boundary) would
+    // incorrectly appear to end on a measure boundary.
+    var t1_pickup_units   = real(t1_meta[$ "pickup_offset_units"] ?? 0);
+    var t1_units_per_meas = real(t1_meta[$ "units_per_measure"] ?? 0);
+    var t1_pickup_ms      = (t1_units_per_meas > 0)
+        ? (t1_pickup_units * (t1_measure_ms / t1_units_per_meas))
+        : 0;
+
+    // Check if T1 ends mid-measure (phase-corrected).
+    var t1_phase_ms = t1_tune_end_ms - t1_pickup_ms;
+    if (t1_phase_ms < 0) {
+        show_error("scr_set_compute_boundary_lead_in: T1 pickup_ms (" + string(t1_pickup_ms)
+            + ") exceeds tune duration (" + string(t1_tune_end_ms) + "). Check pickup_offset_units metadata.", true);
+    }
+    var t1_measure_offset = t1_phase_ms mod t1_measure_ms;
+    var t1_ends_mid_measure = (t1_measure_offset > 1.0); // allow 1ms tolerance for rounding
+
+    // Read T2 pickup metadata
+    var t2_meta         = _t2_struct.tune_data.tune_metadata;
+    var t2_has_pickup   = bool(t2_meta[$ "has_pickup"] ?? false);
+    var t2_pickup_units = real(t2_meta[$ "pickup_offset_units"] ?? 0);
+
+    // ── Case 1 / 2: T2 has no pickup ──
+    if (!t2_has_pickup || t2_pickup_units <= 0) {
+        if (t1_ends_mid_measure) {
+            // Case 2: complete the remaining space in T1's current measure.
+            var c2_remaining_in_t1_measure = t1_measure_ms - t1_measure_offset;
+            result.boundary_case          = 2;
+            result.duration_ms            = c2_remaining_in_t1_measure;
+            result.hold_note_extension_ms = c2_remaining_in_t1_measure;
+            result.leadin_measures        = 0;
+            result.leadin_bpm             = _t1_effective_bpm;
+        }
+        return result;
+    }
+
+    // ── T2 has a pickup ──
+    var t2_meter          = metronome_normalize_time_sig(string(t2_meta[$ "meter"] ?? "4/4"));
+    var t2_bpm            = scr_set_entry_bpm(_t2_entry, _t2_struct) * real(global.active_set.set_bpm_percent ?? 1.0);
+    var t2_parts          = string_split(t2_meter, "/");
+    var t2_beats_per_meas = (array_length(t2_parts) >= 1) ? real(t2_parts[0]) : 4;
+    var t2_measure_ms     = scr_set_beats_duration_ms(t2_bpm, t2_meter, t2_beats_per_meas);
+
+    // ── Cases 3 & 4: T2 has pickup ──
+    // Unified formula: hold = (remaining space in T1's last measure) - T2 pickup.
+    // When T1 ends exactly on a measure boundary (t1_measure_offset = 0, old Case 3),
+    // remaining = t1_measure_ms and hold = t1_measure_ms - t2_pickup_ms.
+    // When T1 ends mid-measure (old Case 4), remaining = t1_measure_ms - t1_measure_offset.
+    // Roll by one T2 measure if hold < 0; clamp to 0 if ≈ 0.
+    // This ensures T2's pickup fills the gap up to the next downbeat.
+    var c4_remaining_in_t1_measure = t1_measure_ms - t1_measure_offset;
+    var t2_units_per_measure = real(t2_meta[$ "units_per_measure"] ?? 0);
+    if (t2_units_per_measure <= 0) {
+        // Fallback for legacy/partial metadata: derive from denominator and beats-per-measure.
+        // units_per_measure = beats_per_measure * (8 / denom) for unit-note default 1/8 pipeline.
+        var t2_denom = (array_length(t2_parts) >= 2) ? real(t2_parts[1]) : 4;
+        t2_units_per_measure = t2_beats_per_meas * (8 / max(1, t2_denom));
+    }
+
+    var t2_pickup_beats = (t2_units_per_measure > 0)
+        ? (t2_pickup_units * (t2_beats_per_meas / t2_units_per_measure))
+        : 0;
+    var t2_pickup_ms = scr_set_beats_duration_ms(t2_bpm, t2_meter, t2_pickup_beats);
+
+    // D = R + k*M - P, choose smallest k >= 0 such that D >= 0.
+    var c4_hold_ms = c4_remaining_in_t1_measure - t2_pickup_ms;
+    if (c4_hold_ms < 0) {
+        c4_hold_ms += t2_measure_ms; // roll to next boundary if pickup is longer than remaining space
+    }
+    if (c4_hold_ms < 1.0) c4_hold_ms = 0; // tolerance for near-exact arithmetic
+
+    // Preserve original case numbering for diagnostics (3 = T1 at boundary, 4 = mid-measure).
+    result.boundary_case          = t1_ends_mid_measure ? 4 : 3;
+    result.duration_ms            = c4_hold_ms;
+    result.hold_note_extension_ms = c4_hold_ms;
+    result.leadin_measures        = 0;
+    result.leadin_bpm             = _t1_effective_bpm;
+    return result;
 }
 
 /// @function scr_set_max_event_time(_events)

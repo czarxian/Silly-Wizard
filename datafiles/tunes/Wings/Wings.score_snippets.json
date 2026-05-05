@@ -3,6 +3,7 @@
       "header": "X:1\nT:Wings\nM:4/4\nL:1/8\nR:March\nC:Trad.\nQ:90\nK:HP",
       "beats_per_measure": 4,
       "units_per_measure": 8,
+      "has_pickup": true,
       "unit_note_fraction": 0.125,
       "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
       "snippets": [

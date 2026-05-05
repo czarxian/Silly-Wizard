@@ -2123,8 +2123,15 @@ Public Sub ExportEventsToJSON()
     ' START JSON OUTPUT
     json = "{"
 
-    ' Place tune metadata at root level
-    json = json & """tune"":{" & metaTune & "},"
+    ' Place tune metadata at root level — append computed rhythmic/pickup fields
+    Dim tuneComma As String
+    tuneComma = IIf(metaTune <> "", ",", "")
+    json = json & """tune"":{" & metaTune & tuneComma & _
+           """has_pickup"":" & IIf(PickupDetected, "true", "false") & _
+           ",""pickup_offset_units"":" & FormatJSONNumber(PickupOffsetUnits) & _
+           ",""units_per_measure"":" & FormatJSONNumber(UnitsPerMeasure) & _
+           ",""beats_per_measure"":" & CStr(BeatsPerMeasure) & _
+           ",""measure_count"":" & CStr(DownbeatBarCount) & "},"
 
     ' Include other metadata categories as nested objects under their keys
     json = json & """metronome"":{" & metaMet & "},"
@@ -2873,6 +2880,7 @@ Private Function BuildSnippetBundleJSON(ByVal header As String, ByVal bodyABC As
     json = json & "      ""header"": """ & headerEsc & """," & vbCrLf
     json = json & "      ""beats_per_measure"": " & CStr(BeatsPerMeasure) & "," & vbCrLf
     json = json & "      ""units_per_measure"": " & FormatJSONNumber(UnitsPerMeasure) & "," & vbCrLf
+    json = json & "      ""has_pickup"": " & IIf(isFirstPickup, "true", "false") & "," & vbCrLf
     json = json & "      ""unit_note_fraction"": " & FormatJSONNumber(UnitNoteFraction) & "," & vbCrLf
 
     ' playback_to_image: maps each playback-order measure (0-based, repeat-expanded) to its
@@ -3329,7 +3337,15 @@ Private Sub ExportEventsToJSON_ToFile(ws As Worksheet, jsonFile As String)
     metaPerf = TrimComma(metaPerf)
     metaInfo = TrimComma(metaInfo)
 
-    json = "{""tune"":{" & metaTune & "},""metronome"":{" & metaMet & "}," & _
+    Dim tuneCommaF As String
+    tuneCommaF = IIf(metaTune <> "", ",", "")
+    json = "{""tune"":{" & metaTune & tuneCommaF & _
+           """has_pickup"":" & IIf(PickupDetected, "true", "false") & _
+           ",""pickup_offset_units"":" & FormatJSONNumber(PickupOffsetUnits) & _
+           ",""units_per_measure"":" & FormatJSONNumber(UnitsPerMeasure) & _
+           ",""beats_per_measure"":" & CStr(BeatsPerMeasure) & _
+           ",""measure_count"":" & CStr(DownbeatBarCount) & _
+           "},""metronome"":{" & metaMet & "}," & _
            """performance"":{" & metaPerf & "},""info"":{" & metaInfo & "},""events"":["
 
     rowIndex = 51
