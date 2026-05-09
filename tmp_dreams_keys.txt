@@ -1,0 +1,5 @@
+tune
+metronome
+performance
+info
+events

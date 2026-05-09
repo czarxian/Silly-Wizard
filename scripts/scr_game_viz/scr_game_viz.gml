@@ -2949,10 +2949,13 @@ function gv_build_measure_nav_map(_planned_events) {
     var _set_mode = variable_global_exists("playback_context")
         && is_struct(global.playback_context)
         && string(global.playback_context[$ "mode"] ?? "") == "set";
+    var _single_tune_loop_runtime = !_set_mode
+        && variable_global_exists("loop_runtime_active")
+        && bool(global.loop_runtime_active);
     var _durations = (variable_global_exists("score_snippet_durations")
         && is_array(global.score_snippet_durations)) ? global.score_snippet_durations : [];
     var _duration_count = array_length(_durations);
-    if (_duration_count > 0) {
+    if (_duration_count > 0 && !_single_tune_loop_runtime) {
         var _units_per_measure = variable_global_exists("score_units_per_measure")
             ? real(global.score_units_per_measure)
             : 0;
@@ -2979,6 +2982,11 @@ function gv_build_measure_nav_map(_planned_events) {
                 _is_boundary = (_bmt == "bar") || (_bmt == "beat" && _bb == 1 && abs(_bf) <= 0.001);
             }
             if (!_is_boundary) continue;
+            // Exclude pickup bar (measure 0) from calibration — its shortened
+            // duration would make _marker_measure_ms equal to one beat instead
+            // of one full measure (e.g. Old Pa 3/4 pickup = 2/6 of a measure).
+            var _bcal_m = floor(real(_bev.measure ?? -1));
+            if (_bcal_m <= 0) continue;
 
             var _bt = gv_evt_time_ms(_bev);
             if (array_length(_boundary_times) <= 0 || _bt > _boundary_times[array_length(_boundary_times) - 1] + 0.1) {
@@ -5601,12 +5609,55 @@ function gv_compact_note_label(_label) {
 ///              measure_nav_entries and then structural_measure_starts for single-tune mode.
 /// @param {real} _playhead_ms  Current playhead time in ms.
 /// @returns {int}  Measure number (>=1), or -1 if none active (e.g. pickup phase).
-/// @reads  global.timeline_state, global.timeline_cfg, global.METRONOME_CONFIG, global.playback_set_measure_nav_all
+/// @reads  global.timeline_state, global.timeline_cfg, global.METRONOME_CONFIG, global.playback_set_measure_nav_all, global.playback_context, global.loop_runtime_active, global.playback_events_active
 /// @writes global.timeline_state.measure_highlight_last_measure, global.timeline_state.measure_highlight_last_nav_idx, global.timeline_state.measure_highlight_last_struct_idx, global.timeline_state.current_measure
 function gv_get_current_planned_measure(_playhead_ms) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return -1;
 
     var _query_ms = _playhead_ms;
+    // In single-tune loop runtime, tune-structure entries typically represent one loop window.
+    // Normalize query time into that loop-cycle so current-measure highlight wraps each iteration.
+    var _is_set_mode = variable_global_exists("playback_context")
+        && is_struct(global.playback_context)
+        && string(global.playback_context[$ "mode"] ?? "") == "set";
+    var _single_tune_loop_runtime = !_is_set_mode
+                && variable_global_exists("loop_runtime_active")
+                && bool(global.loop_runtime_active);
+    if (_single_tune_loop_runtime
+        && variable_global_exists("playback_events_active")
+        && is_array(global.playback_events_active)
+        && array_length(global.playback_events_active) > 0) {
+        var _evs = global.playback_events_active;
+        var _ev_count = array_length(_evs);
+        var _iter1_start = -1;
+        var _iter2_start = -1;
+        for (var _wi = 0; _wi < _ev_count; _wi++) {
+            var _ev = _evs[_wi];
+            if (!is_struct(_ev)) continue;
+            if (string(_ev.type ?? "") != "marker") continue;
+            if (string(_ev.marker_type ?? "") != "bar") continue;
+
+            var _iter = floor(real(_ev.loop_iteration ?? 0));
+            var _et = real(_ev.time ?? 0);
+            if (_iter == 1) {
+                if (_iter1_start < 0 || _et < _iter1_start) _iter1_start = _et;
+            } else if (_iter == 2) {
+                if (_iter2_start < 0 || _et < _iter2_start) _iter2_start = _et;
+            }
+            if (_iter1_start >= 0 && _iter2_start >= 0) break;
+        }
+
+        var _loop_cycle_ms = (_iter1_start >= 0 && _iter2_start > _iter1_start)
+            ? (_iter2_start - _iter1_start)
+            : 0;
+        if (_loop_cycle_ms > 1 && _query_ms >= _iter1_start) {
+            var _dt = _query_ms - _iter1_start;
+            var _mod = _dt mod _loop_cycle_ms;
+            if (_mod < 0) _mod += _loop_cycle_ms;
+            _query_ms = _iter1_start + _mod;
+        }
+    }
+
     var _pickup_by_part = (variable_struct_exists(global.timeline_state, "measure_nav_pickup_by_part")
         && is_struct(global.timeline_state.measure_nav_pickup_by_part))
         ? global.timeline_state.measure_nav_pickup_by_part
@@ -5616,9 +5667,6 @@ function gv_get_current_planned_measure(_playhead_ms) {
     // Using this avoids stale measure numbers during segment transitions because
     // the table never changes at runtime — it was built once at load time with
     // absolute timestamps for every measure across every segment.
-    var _is_set_mode = variable_global_exists("playback_context")
-        && is_struct(global.playback_context)
-        && string(global.playback_context[$ "mode"] ?? "") == "set";
     if (_is_set_mode
         && variable_global_exists("playback_set_measure_nav_all")
         && is_array(global.playback_set_measure_nav_all)
@@ -5634,13 +5682,20 @@ function gv_get_current_planned_measure(_playhead_ms) {
             var _fs = real(_fe.start_ms ?? 0);
             var _fe_end = real(_fe.end_ms ?? _fs);
             var _fm = floor(real(_fe.measure ?? -1));
-            if (_fm < 1) continue;
             if (_query_ms < _fs) break;
             if (_query_ms >= _fs && _query_ms < _fe_end) {
+                if (_fm < 1) {
+                    global.timeline_state.measure_highlight_last_measure = -1;
+                    global.timeline_state.measure_highlight_last_nav_idx = -1;
+                    global.timeline_state.measure_highlight_last_struct_idx = -1;
+                    global.timeline_state.current_measure = -1;
+                    return -1;
+                }
                 _fall_resolved_m = _fm;
                 _fall_resolved_idx = _fi;
                 break;
             }
+            if (_fm < 1) continue;
             _fall_best_m = _fm;
         }
         // Check if we are in a pickup window (before the first non-pickup entry).
@@ -7299,7 +7354,7 @@ function gv_draw_notebeam_emb_group_boxes(_x1, _y1, _x2, _y2, _playhead_ms, _ms_
 }
 
 /// @function gv_draw_structure_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms)
-/// @description Draw scrolling beat/measure tick marks and measure labels (M1, M2, â€¦) in a structure overview row.
+/// @description Draw scrolling structure tick marks and measure labels (M1, M2, ...) in a structure overview row.
 /// @param {real} _rx1/_ry1/_rx2/_ry2  Row bounds.
 /// @param {real} _playhead_ms          Current playhead ms.
 /// @reads  global.timeline_state.planned_events/ms_behind/ms_ahead, global.timeline_cfg
@@ -7349,13 +7404,24 @@ function gv_draw_structure_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
     draw_set_valign(fa_top);
 
     var n = array_length(events);
+    var has_bar_markers = false;
+    for (var _bi = 0; _bi < n; _bi++) {
+        var _bev = events[_bi];
+        if (!is_struct(_bev)) continue;
+        if (string(_bev.type ?? "") != "marker") continue;
+        if (string(_bev.marker_type ?? "") != "bar") continue;
+        if (floor(real(_bev.measure ?? 0)) < 1) continue;
+        has_bar_markers = true;
+        break;
+    }
+
     for (var i = 0; i < n; i++) {
         var ev = events[i];
         if (!is_struct(ev)) continue;
         if (!variable_struct_exists(ev, "type") || string(ev.type) != "marker") continue;
 
         var marker_type = string(ev.marker_type ?? "");
-        if (marker_type != "beat" && marker_type != "countin_beat") continue;
+        if (marker_type != "bar" && marker_type != "beat" && marker_type != "countin_beat") continue;
         if (!show_countin && marker_type == "countin_beat") continue;
 
         var marker_time = gv_evt_time_ms(ev);
@@ -7364,8 +7430,8 @@ function gv_draw_structure_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
         var x_tick = gv_time_to_x(marker_time, _playhead_ms, _rx1, _rx2, now_ratio, ms_behind, ms_ahead);
         if (x_tick < _rx1 || x_tick > _rx2) continue;
 
-        var beat_fraction = real(ev.beat_fraction ?? 0);
-        var is_major = abs(beat_fraction) <= 0.001;
+        var beat_fraction = (marker_type == "bar") ? 0 : real(ev.beat_fraction ?? 0);
+        var is_major = (marker_type == "bar") || abs(beat_fraction) <= 0.001;
         var is_past = (x_tick < now_x);
         var tick_alpha = is_past ? past_alpha : future_alpha;
 
@@ -7376,12 +7442,15 @@ function gv_draw_structure_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
 
         if (!is_major) continue;
 
-        var beat_num = floor(real(ev.beat ?? 0));
+        var beat_num = (marker_type == "bar") ? 1 : floor(real(ev.beat ?? 0));
         if (beat_num < 1) continue;
 
         var measure_num = floor(real(ev.measure ?? 0));
         var label = "";
-        if (beat_num == 1) {
+        if (marker_type == "bar") {
+            label = "M" + string(measure_num);
+        } else if (!has_bar_markers && beat_num == 1) {
+            // Fallback for legacy/diagnostic streams that do not include bar markers.
             label = "M" + string(measure_num);
         } else if (label_every_beat) {
             label = "B" + string(beat_num);
@@ -7542,7 +7611,7 @@ function gv_draw_timeline_canvas(_x1, _y1, _x2, _y2) {
 /// @function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2)
 /// @description Draw the per-frame overlay for the timeline canvas: scrolling beat lane and now-line. Only draws when timeline is active.
 /// @param {real} _x1/_y1/_x2/_y2  Canvas bounds.
-/// @reads  global.timeline_cfg, global.timeline_state.active/playhead_ms
+/// @reads  global.timeline_cfg, global.timeline_state.active/playhead_ms/ms_behind/ms_ahead, global.playback_context, global.loop_runtime_active
 function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
     // Contains all scrolling/time-sensitive content.
     var cfg = gv_ensure_timeline_cfg_defaults();
@@ -7583,15 +7652,56 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             var _playhead = global.timeline_state.playhead_ms;
             var _ms_behind = variable_struct_exists(global.timeline_state, "ms_behind") ? real(global.timeline_state.ms_behind) : 2000;
             var _ms_ahead  = variable_struct_exists(global.timeline_state, "ms_ahead")  ? real(global.timeline_state.ms_ahead)  : 4000;
+            var _set_mode = variable_global_exists("playback_context")
+                && is_struct(global.playback_context)
+                && string(global.playback_context[$ "mode"] ?? "") == "set";
+            var _single_tune_loop_runtime = !_set_mode
+                && variable_global_exists("loop_runtime_active")
+                && bool(global.loop_runtime_active);
 
             // Build per-measure start times from planned events.
             // In set mode, include all segments so future tunes can scroll into view.
             var _events = gv_get_planned_events_for_viz();
+            if (_single_tune_loop_runtime && is_array(_events) && array_length(_events) > 0) {
+                var _iter1_start = -1;
+                var _iter2_start = -1;
+                var _ne_wrap = array_length(_events);
+                for (var _w = 0; _w < _ne_wrap; _w++) {
+                    var _wev = _events[_w];
+                    if (!is_struct(_wev)) continue;
+                    if (string(_wev[$ "type"] ?? "") != "marker") continue;
+
+                    var _w_mt = string(_wev[$ "marker_type"] ?? "");
+                    var _w_beat = floor(real(_wev[$ "beat"] ?? 0));
+                    var _w_frac = real(_wev[$ "beat_fraction"] ?? 0);
+                    var _is_boundary = (_w_mt == "bar")
+                        || (_w_mt == "beat" && _w_beat == 1 && abs(_w_frac) <= 0.001);
+                    if (!_is_boundary) continue;
+
+                    var _w_iter = floor(real(_wev[$ "loop_iteration"] ?? 0));
+                    var _w_t = gv_evt_time_ms(_wev);
+                    if (_w_iter == 1) {
+                        if (_iter1_start < 0 || _w_t < _iter1_start) _iter1_start = _w_t;
+                    } else if (_w_iter == 2) {
+                        if (_iter2_start < 0 || _w_t < _iter2_start) _iter2_start = _w_t;
+                    }
+
+                    if (_iter1_start >= 0 && _iter2_start >= 0) break;
+                }
+
+                var _loop_cycle_ms = (_iter1_start >= 0 && _iter2_start > _iter1_start)
+                    ? (_iter2_start - _iter1_start)
+                    : 0;
+                if (_loop_cycle_ms > 1 && _playhead >= _iter1_start) {
+                    var _loop_dt = _playhead - _iter1_start;
+                    var _loop_mod = _loop_dt mod _loop_cycle_ms;
+                    if (_loop_mod < 0) _loop_mod += _loop_cycle_ms;
+                    _playhead = _iter1_start + _loop_mod;
+                }
+            }
             var _measure_starts = array_create(0); // [{m,p,b,t,seq,seg_idx,seg_title,seg_start_ms,seg_end_ms}]
             var _seg_measure_counts = [];
-            var _set_mode = variable_global_exists("playback_context")
-                && is_struct(global.playback_context)
-                && string(global.playback_context[$ "mode"] ?? "") == "set";
+            var _seg_raw_measure_counts = []; // original (uncut) count per segment, for tail override anchor
             var _set_segments = _set_mode ? global.playback_context[$ "segments"] : [];
             var _set_seg_count = is_array(_set_segments) ? array_length(_set_segments) : 0;
             var _seg_start_ms = -1;
@@ -7631,9 +7741,10 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     // marker-derived starts only when duration metadata is missing.
                     var _seg_durations = [];
                     var _seg_units_per_measure = 0;
+                    var _seg_cache_for_dur = undefined;
                     if (variable_global_exists("score_segments_sprites") && is_array(global.score_segments_sprites)
                         && _sidx >= 0 && _sidx < array_length(global.score_segments_sprites)) {
-                        var _seg_cache_for_dur = global.score_segments_sprites[_sidx];
+                        _seg_cache_for_dur = global.score_segments_sprites[_sidx];
                         if (is_struct(_seg_cache_for_dur)) {
                             _seg_durations = _seg_cache_for_dur[$ "durations"] ?? [];
                             _seg_units_per_measure = real(_seg_cache_for_dur[$ "units_per_measure"] ?? 0);
@@ -7642,10 +7753,50 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
                     if (is_array(_seg_durations) && array_length(_seg_durations) > 0
                         && _seg_s >= 0 && _seg_e > _seg_s) {
-                        var _dur_n = array_length(_seg_durations);
+                        // In set mode, segment content_end_ms reflects musical cuts. When
+                        // active-segment head/tail overrides are present, trim the structural
+                        // duration list used for timing so early measures are not globally
+                        // compressed to fit a shortened segment.
+                        var _timing_durations = _seg_durations;
+                        var _trim_head = 0;
+                        var _trim_tail = 0;
+                        if (_sidx == _seg_idx
+                            && variable_global_exists("score_override_groups")
+                            && is_struct(global.score_override_groups)) {
+                            var _head_bundle_timing = variable_struct_exists(global.score_override_groups, "head")
+                                ? global.score_override_groups[$ "head"] : undefined;
+                            var _tail_bundle_timing = variable_struct_exists(global.score_override_groups, "tail")
+                                ? global.score_override_groups[$ "tail"] : undefined;
+                            _trim_head = is_struct(_head_bundle_timing)
+                                ? max(0, floor(real(_head_bundle_timing[$ "count_measures"] ?? 0))) : 0;
+                            _trim_tail = is_struct(_tail_bundle_timing)
+                                ? max(0, floor(real(_tail_bundle_timing[$ "count_measures"] ?? 0))) : 0;
+
+                            var _raw_n = array_length(_seg_durations);
+                            _trim_head = min(_trim_head, _raw_n);
+                            _trim_tail = min(_trim_tail, max(0, _raw_n - _trim_head));
+
+                            if (_trim_head > 0 || _trim_tail > 0) {
+                                var _trim_start = _trim_head;
+                                var _trim_end_excl = _raw_n - _trim_tail;
+                                if (_trim_end_excl <= _trim_start) {
+                                    _trim_start = 0;
+                                    _trim_end_excl = _raw_n;
+                                }
+                                var _trimmed = [];
+                                for (var _ti = _trim_start; _ti < _trim_end_excl; _ti++) {
+                                    array_push(_trimmed, _seg_durations[_ti]);
+                                }
+                                if (array_length(_trimmed) > 0) {
+                                    _timing_durations = _trimmed;
+                                }
+                            }
+                        }
+
+                        var _dur_n = array_length(_timing_durations);
                         var _dur_total_units = 0;
                         for (var _dui = 0; _dui < _dur_n; _dui++) {
-                            _dur_total_units += max(0.0001, real(_seg_durations[_dui]));
+                            _dur_total_units += max(0.0001, real(_timing_durations[_dui]));
                         }
 
                         // Use content_end_ms (excludes boundary lead-in hold window) so
@@ -7659,10 +7810,11 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                         var _dur_t = _seg_s;
                         var _display_measure = 0;
                         var _first_is_pickup = is_struct(_seg_cache_for_dur)
-                            && bool(_seg_cache_for_dur[$ "has_pickup"] ?? false);
+                            && bool(_seg_cache_for_dur[$ "has_pickup"] ?? false)
+                            && (_trim_head <= 0);
 
                         for (var _dsi = 0; _dsi < _dur_n; _dsi++) {
-                            var _dur_units = max(0.0001, real(_seg_durations[_dsi]));
+                            var _dur_units = max(0.0001, real(_timing_durations[_dsi]));
                             var _is_pickup = (_dsi == 0) && _first_is_pickup;
                             var _display_m = 0;
                             if (_is_pickup) {
@@ -7689,6 +7841,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                         }
 
                         _seg_measure_counts[_sidx] = _seg_seq;
+                        _seg_raw_measure_counts[_sidx] = array_length(_seg_durations);
                         continue;
                     }
 
@@ -7886,7 +8039,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             // Single-tune authoritative path: when exported image durations exist and line up with
             // playback_to_image, build measure starts directly from score structure rather than
             // event-marker timing. This removes split-bar ambiguity entirely.
-            if (!_set_mode && _structural_duration_count > 0 && _nm > 0) {
+            if (!_set_mode && !_single_tune_loop_runtime && _structural_duration_count > 0 && _nm > 0) {
                 var _units_per_measure = variable_global_exists("score_units_per_measure")
                     ? real(global.score_units_per_measure)
                     : 0;
@@ -7977,7 +8130,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             // Single-tune alignment: score snippets define authoritative playback measure count.
             // Reconcile marker-derived starts to that count deterministically so image indexing
             // cannot drift at split-bar seams.
-            if (_structural_duration_count <= 0 && _target_map_count > 0 && _nm > 0) {
+            if (!_single_tune_loop_runtime && _structural_duration_count <= 0 && _target_map_count > 0 && _nm > 0) {
                 // Too many starts: prefer collapsing split-bar seams (consecutive starts with the
                 // same musical measure number m), falling back to shortest-gap if none found.
                 while (_nm > _target_map_count) {
@@ -8129,10 +8282,13 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     && is_struct(global.score_override_groups)) {
                     var _seg_count_for_override = _nm;
                     var _seg_idx_for_override = floor(real(_ms[$ "seg_idx"] ?? -1));
-                    if (is_array(_seg_measure_counts)
+                    // Use the raw (pre-trim) count so the tail override anchor targets the
+                    // original last measure slot (e.g. slot 32 of a 32-measure tune), not
+                    // the trimmed last slot (slot 31 after a 1-measure tail cut).
+                    if (is_array(_seg_raw_measure_counts)
                         && _seg_idx_for_override >= 0
-                        && _seg_idx_for_override < array_length(_seg_measure_counts)) {
-                        _seg_count_for_override = max(0, floor(real(_seg_measure_counts[_seg_idx_for_override] ?? _nm)));
+                        && _seg_idx_for_override < array_length(_seg_raw_measure_counts)) {
+                        _seg_count_for_override = max(0, floor(real(_seg_raw_measure_counts[_seg_idx_for_override] ?? _nm)));
                     }
 
                     var _head_bundle = variable_struct_exists(global.score_override_groups, "head") ? global.score_override_groups[$ "head"] : undefined;
@@ -8169,9 +8325,18 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 } else {
                     // Priority 1: explicit playback_to_image mapping (new pipeline).
                     // Index directly by seq (0-based, per-segment, repeat-expanded).
+                    // In single-tune loop runtime, prefer measure-index lookup so
+                    // looped subsets (e.g. 9-12) repeat the same image sequence each pass.
                     var _pbmap_len = is_array(_base_pbmap) ? array_length(_base_pbmap) : 0;
+                    var _pb_lookup_seq = _ms.seq;
+                    if (_single_tune_loop_runtime) {
+                        var _loop_measure = floor(real(_ms.m ?? 0));
+                        if (_loop_measure > 0) {
+                            _pb_lookup_seq = _loop_measure - 1;
+                        }
+                    }
                     if (_pbmap_len > 0) {
-                        _spr_idx = (_ms.seq >= 0 && _ms.seq < _pbmap_len) ? _base_pbmap[_ms.seq] : _ms.seq;
+                        _spr_idx = (_pb_lookup_seq >= 0 && _pb_lookup_seq < _pbmap_len) ? _base_pbmap[_pb_lookup_seq] : _pb_lookup_seq;
                     } else {
                         // Priority 2: legacy measure_map (maps expanded full-measure seq to physical image index).
                         var _map_len = (variable_global_exists("score_measure_map")) ? array_length(global.score_measure_map) : 0;
@@ -8187,6 +8352,12 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                                 }
                             } else {
                                 var _map_key = _ms.seq - (_has_pickup_start ? 1 : 0);
+                                if (_single_tune_loop_runtime) {
+                                    var _loop_measure_key = floor(real(_ms.m ?? 0));
+                                    if (_loop_measure_key > 0) {
+                                        _map_key = _loop_measure_key - 1;
+                                    }
+                                }
                                 if (!(_map_key >= 0 && _map_key < _map_len)) {
                                     // Fallback for manifests keyed by measure number.
                                     _map_key = _ms.m - 1;

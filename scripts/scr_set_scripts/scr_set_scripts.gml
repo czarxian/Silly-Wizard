@@ -342,6 +342,22 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
             var prev_file = scr_set_resolve_tune_path(string(prev_entry[$ "filename"] ?? ""));
             var prev_struct = scr_tune_load_to_struct(prev_file);
             if (!is_undefined(prev_struct) && scr_set_is_transition_tune(prev_entry, prev_struct)) {
+                // Validate: if transition uses measure-based head cuts, its meter must match
+                // this tune's meter (the measure→beat conversion uses transition's meter).
+                var _prev_head_measures = scr_set_parse_cut_beats(prev_struct.tune_data.tune_metadata[$ "head_cut_measures"] ?? "");
+                if (_prev_head_measures > 0) {
+                    var _trans_bpm_val = scr_set_transition_beats_per_measure(prev_struct);
+                    var _cur_bpm_val   = scr_set_transition_beats_per_measure(tune_struct);
+                    if (_trans_bpm_val != _cur_bpm_val) {
+                        show_error(
+                            "Transition head_cut_measures METER MISMATCH:\n" +
+                            "Transition '" + string(prev_struct.tune_data.tune_metadata[$ "title"] ?? "?") +
+                            "' has beats_per_measure=" + string(_trans_bpm_val) +
+                            " but tune '" + string(tune_struct.tune_data.tune_metadata[$ "title"] ?? "?") +
+                            "' has " + string(_cur_bpm_val) + ".\n" +
+                            "Use head_cut_beats instead to specify beats directly.", true);
+                    }
+                }
                 var prev_cuts = scr_set_get_transition_cuts(prev_struct);
                 if (is_struct(prev_cuts) && real(prev_cuts[$ "head_cut_beats"] ?? 0) > 0) {
                     overrides[$ "head_cut_beats"] = prev_cuts[$ "head_cut_beats"];
@@ -354,6 +370,22 @@ function scr_set_preprocess_and_build_playback(_count_in_measures = 0) {
             var next_file = scr_set_resolve_tune_path(string(next_entry[$ "filename"] ?? ""));
             var next_struct = scr_tune_load_to_struct(next_file);
             if (!is_undefined(next_struct) && scr_set_is_transition_tune(next_entry, next_struct)) {
+                // Validate: if transition uses measure-based tail cuts, its meter must match
+                // this tune's meter (the measure→beat conversion uses transition's meter).
+                var _next_tail_measures = scr_set_parse_cut_beats(next_struct.tune_data.tune_metadata[$ "tail_cut_measures"] ?? "");
+                if (_next_tail_measures > 0) {
+                    var _trans_bpm_val = scr_set_transition_beats_per_measure(next_struct);
+                    var _cur_bpm_val   = scr_set_transition_beats_per_measure(tune_struct);
+                    if (_trans_bpm_val != _cur_bpm_val) {
+                        show_error(
+                            "Transition tail_cut_measures METER MISMATCH:\n" +
+                            "Transition '" + string(next_struct.tune_data.tune_metadata[$ "title"] ?? "?") +
+                            "' has beats_per_measure=" + string(_trans_bpm_val) +
+                            " but tune '" + string(tune_struct.tune_data.tune_metadata[$ "title"] ?? "?") +
+                            "' has " + string(_cur_bpm_val) + ".\n" +
+                            "Use tail_cut_beats instead to specify beats directly.", true);
+                    }
+                }
                 var next_cuts = scr_set_get_transition_cuts(next_struct);
                 if (is_struct(next_cuts) && real(next_cuts[$ "tail_cut_beats"] ?? 0) > 0) {
                     overrides[$ "tail_cut_beats"] = next_cuts[$ "tail_cut_beats"];
@@ -746,6 +778,57 @@ function scr_set_build_score_override_plan(_segments) {
         var priorGroup = scr_set_transition_group(manifest, "prior_replace");
         var bridgeGroup = scr_set_transition_group(manifest, "bridge");
         var followGroup = scr_set_transition_group(manifest, "follow_replace");
+
+        // ── Meter-match validation ──────────────────────────────────────────────
+        // Each image group's beats_per_measure must match the segment it will be
+        // drawn over. Fail loudly at load time rather than silently misalign.
+        var _seg_bpm_from_meter = function(_seg) {
+            var _parts = string_split(_seg.meter, "/");
+            return (array_length(_parts) >= 1) ? real(_parts[0]) : 4;
+        };
+        var _trans_title = string(_segments[ti][$ "title"] ?? "?");
+
+        if (ti > 0 && is_struct(priorGroup)) {
+            var _group_bpm = real(priorGroup[$ "beats_per_measure"] ?? 0);
+            var _seg_bpm   = _seg_bpm_from_meter(_segments[ti - 1]);
+            var _img_count = array_length(priorGroup[$ "images"] ?? []);
+            if (_img_count > 0 && _group_bpm != _seg_bpm) {
+                show_error(
+                    "Transition score METER MISMATCH (prior_replace):\n" +
+                    "Group beats_per_measure=" + string(_group_bpm) +
+                    " but prior segment '" + string(_segments[ti - 1][$ "title"] ?? "?") +
+                    "' has " + string(_seg_bpm) + ".\n" +
+                    "Transition: " + _trans_title, true);
+            }
+        }
+
+        if (is_struct(bridgeGroup)) {
+            var _group_bpm = real(bridgeGroup[$ "beats_per_measure"] ?? 0);
+            var _seg_bpm   = _seg_bpm_from_meter(_segments[ti]);
+            var _img_count = array_length(bridgeGroup[$ "images"] ?? []);
+            if (_img_count > 0 && _group_bpm != _seg_bpm) {
+                show_error(
+                    "Transition score METER MISMATCH (bridge):\n" +
+                    "Group beats_per_measure=" + string(_group_bpm) +
+                    " but transition segment '" + _trans_title +
+                    "' has " + string(_seg_bpm) + ".", true);
+            }
+        }
+
+        if (ti < n - 1 && is_struct(followGroup)) {
+            var _group_bpm = real(followGroup[$ "beats_per_measure"] ?? 0);
+            var _seg_bpm   = _seg_bpm_from_meter(_segments[ti + 1]);
+            var _img_count = array_length(followGroup[$ "images"] ?? []);
+            if (_img_count > 0 && _group_bpm != _seg_bpm) {
+                show_error(
+                    "Transition score METER MISMATCH (follow_replace):\n" +
+                    "Group beats_per_measure=" + string(_group_bpm) +
+                    " but follow segment '" + string(_segments[ti + 1][$ "title"] ?? "?") +
+                    "' has " + string(_seg_bpm) + ".\n" +
+                    "Transition: " + _trans_title, true);
+            }
+        }
+        // ───────────────────────────────────────────────────────────────────────
 
         if (ti > 0 && is_struct(priorGroup)) {
             plan[ti - 1][$ "tail_override"] = {

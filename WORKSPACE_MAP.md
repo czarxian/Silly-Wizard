@@ -176,6 +176,35 @@ This describes how a tune is triggered and how events flow through the system:
 
 ---
 
+## BPM Authority & Propagation Path
+
+`global.current_bpm` is the authoritative runtime BPM. It is written by UI controls and must flow through every downstream consumer consistently.
+
+### BPM sources (precedence order at play time)
+1. **Live BPM field value** — resolved from the BPM +/- bound field in `scr_button_get_bpm_from_bound_field()` (highest priority)
+2. **Active settings segment bpm** — `set_item.bpm` in set mode, or the single-tune virtual set item (`global.current_set[0].bpm`) in single-tune mode
+3. **`global.current_bpm`** — runtime mirror/fallback when field and segment value are unavailable
+4. **`tune_metadata.tempo_default`** — value from `tune.json`; used as fallback only (lowest priority)
+
+### VBA / Excel pipeline
+`RecalculatePositions` bakes `start_time_ms`, `end_time_ms`, and `tempo_bpm` into the event grid using the ABC `Q:` header BPM. These values are exported to `tune.json` and stored as `tune_metadata.tempo_default`. At runtime, **`scr_preprocess_tune` recalculates all timing from scratch** and ignores the stored ms values — so the VBA pipeline is BPM-neutral at runtime.
+
+### Single-tune mode BPM lifecycle
+| Step | Location | Notes |
+|------|----------|-------|
+| Tune selected | `scr_goto_playroom()` | Reads `global.current_bpm`; calls `scr_preprocess_tune` with that override |
+| Virtual 1-tune set initialized | `scr_button_try_load_tune_candidate()` | Single-tune load creates/updates `global.current_set[0]` (virtual set item), then mirrors it into `playback_context.segments[0]` |
+| User changes settings (BPM/swing/grace/metro) | `scr_tune_bpm_change()` and related handlers in `scr_button_scripts` | Writes globals + active virtual set item, then rebuilds single-tune playback events immediately |
+| Effective settings resolved | `scr_button_resolve_effective_settings()` | Central authority resolver used by single-tune preprocess/play; overlays live field values and syncs mirrors |
+| User presses Play | `start_play()` | Reads effective settings through resolver, rebuilds `global.playback_events`, then binds timeline timing |
+
+> **Critical:** `playback_context` can be rebuilt from tune metadata and become stale; single-tune runtime settings remain authoritative in the virtual set item (`global.current_set[0]`) and are mirrored back into `playback_context.segments[0]` before play.
+
+### Set mode BPM lifecycle
+In set mode, `scr_set_preprocess_and_build_playback()` reads BPM from each `active_set.segments[].bpm` which is populated fresh from the current override state at room entry. `scr_playback_context_build_for_set()` then copies those segment BPMs into `playback_context`, so the context is always current — no separate override needed.
+
+---
+
 ## Core controller objects (current state)
 
 - **`obj_game_controller`**
@@ -245,7 +274,9 @@ This section documents the concrete runtime UI architecture and how UI instances
 - Measure-nav source event selection/flattening is centralized via `gv_measure_nav_resolve_source_events()` to keep bootstrap behavior consistent when falling back from planned arrays to scheduler group events.
 - Measure-nav fallback end-time selection is centralized via `gv_measure_nav_resolve_end_ms_from_events()` and `gv_measure_nav_resolve_end_ms_from_state()` to keep synthetic-map sizing consistent across paths.
 - Set segment score-cache restoration is centralized via `gv_restore_score_segment_cache()` so all segment-switch paths reuse the same restore logic for structural metadata (`score_snippet_durations`, `score_units_per_measure`, `score_has_pickup`) and score-lane draw arrays.
-- Set-mode measure tracking uses a prebuilt flat table (`global.playback_set_measure_nav_all`) rather than per-segment rebuild so `gv_get_current_planned_measure()` is never stale at segment boundaries. Built once by `gv_build_set_measure_nav_all()` after sprite cache population; per-segment `measure_nav_entries` continues to serve the structure-panel UI display only.
+- Per-segment measure-nav rebuild (`gv_rebuild_measure_nav_for_segment`) is set-mode only; single-tune playback keeps bind-time nav built from active playback events so loop-runtime structure tiles stay aligned with looped audio/notebeam timing.
+- Set-mode measure tracking uses a prebuilt flat table (`global.playback_set_measure_nav_all`) rather than per-segment rebuild so `gv_get_current_planned_measure()` is never stale at segment boundaries. Built once by `gv_build_set_measure_nav_all()` after sprite cache population; per-segment `measure_nav_entries` continues to serve the structure-panel UI display only. Pickup entries (`measure=0`) remain authoritative no-highlight windows, so later pickup segments do not inherit the previous segment's measure number.
+- Single-tune loop score-lane rendering normalizes playhead time to the loop-cycle window (derived from loop iteration marker boundaries) before score image range tests, so measure-window clipping and `playback_to_image` lookup stay stable across loop restarts.
 - **Pickup data flow (authoritative source):** `has_pickup` is computed by the VBA ABC parser (`PickupDetected`) and written into `<TuneName>.score_snippets.json` at export time. At runtime, `scr_score_manifest_read()` reads `score/score_images.json` then merges `has_pickup` and `snippets[]` from the sibling `.score_snippets.json` onto the manifest struct. `scr_score_sprites_load()` extracts `snippets[].duration_units` into the flat `global.score_snippet_durations` array and sets `global.score_has_pickup`. All measure-numbering paths consume these globals — no runtime heuristics from duration arithmetic.
 - **score_images.json vs score_snippets.json:** `score/score_images.json` holds sprite filenames, `image_meta`, `beats_per_measure`, `units_per_measure`. `<TuneName>.score_snippets.json` (sibling to the tune JSON, not in score/) holds `has_pickup`, per-snippet `duration_units`, `is_pickup`, and `playback_to_image`. Always check both files when debugging pickup or measure-numbering issues.
 - Tune-structure panel rendering is anchor-driven (`tunestructure_canvas_anchor` in `obj_field_base` Draw_0); the legacy Draw_0 fallback panel path in `obj_game_viz` is retired.
@@ -346,6 +377,7 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.metronome_mode` | real | 0=None 1=Click 2=Drums | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts`, `scr_scoring` |
 | `global.metronome_pattern_selection` | real | Index into `global.metronome_pattern_options` | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
 | `global.metronome_volume` | real | MIDI velocity 0–127 | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
+| `global.single_tune_runtime_bpm` | real | Single-tune authoritative BPM mirror used when UI field binding is unavailable at play time | `scr_button_scripts` (lazy set in tune load/BPM changes) | `scr_button_scripts` |
 | `global.swing_mult` | real | Swing multiplier; 0 = use default | `obj_game_controller` Create | `scr_preprocess_tune`, `scr_button_scripts` |
 | `global.gracenote_override_ms` | real | Gracenote duration override; 0 = BPM-derived | `obj_game_controller` Create | `scr_preprocess_tune`, `scr_embellishments` |
 | `global.MIDI_chanter` | string | Chanter mapping preset (`"default"` or `"blair"`) | `obj_game_controller` Create | `scr_MIDI`, `scr_scoring` |
@@ -591,6 +623,24 @@ The nested `"metadata"` wrapper structure is **not supported** and will cause th
   ```
   This helps isolate timing and scope of the build process without restarting the game.
 
+### Log locations (runtime)
+- **General debug stream (`show_debug_message`)**:
+  - Goes to the GameMaker/IDE Output stream.
+  - Includes BPM diagnostics such as `[BPM-CHANGE]`, `[BPM-REBUILD]`, `[START-PLAY]`, and `[START-PLAY-BPM]`.
+  - When Logs is ON, these BPM lines are mirrored to the score-lane debug file by `scr_button_bpm_debug_log`.
+- **Settings > Logs toggle (`setting_field_logs`)**:
+  - Enables `global.timeline_cfg.score_lane_debug_log` and `global.timeline_cfg.score_lane_debug_file_log`.
+  - This is specifically for score-lane diagnostics in `scr_game_viz`, not a global redirect of all `show_debug_message` output.
+- **Score-lane debug file path**:
+  - Config key: `global.timeline_cfg.score_lane_debug_file_path`.
+  - Default fallback in code: `score_lane_debug.log` (relative to GameMaker `working_directory`).
+  - Current workspace example file: `datafiles/debug/score_lane_debug.latest.log`.
+- **Event history and performance exports**:
+  - Event CSV export writes under `datafiles/` via `event_history_export_csv`.
+  - Session/performance artifacts write under `datafiles/performances/`.
+
+Troubleshooting tip: for BPM issues you can use either Output or the score-lane log file (Logs ON). For score/image mapping issues, use the score-lane file log.
+
 ---
 
 ## Playback preprocessing (note)
@@ -725,6 +775,7 @@ The pipeline has four stages. Touch all four.
 **Stage 4 � Visualization (optional, `scr_game_viz.gml`)**
 - If the event needs a visual representation in the notebeam or timeline canvas, add it to `gv_get_planned_events_for_viz()` (filter) and/or `gv_build_planned_spans()` (span conversion).
 - For a new overlay element, follow the pattern of `gv_draw_notebeam_emb_group_boxes()` � build a data array at bind time, draw from it each frame.
+- Structure-row measure labels in `gv_draw_structure_row()` use `marker_type="bar"` as the authoritative source; `marker_type="beat"` labels are fallback-only when bar markers are unavailable.
 
 ---
 

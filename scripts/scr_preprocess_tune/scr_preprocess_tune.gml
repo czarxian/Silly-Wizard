@@ -868,7 +868,7 @@ function tune_apply_swing_to_events(_events, _tempo_bpm, _unit_ms, _swing_mult, 
 				if (pair_units > 0) {
 					var default_cut_units = (broken_dir == "dotcut") ? (w2 * 0.5) : (w1 * 0.5);
 					var cut_units = _swing_mult * grace_units;
-					if (cut_units < default_cut_units) cut_units = default_cut_units;
+					if (cut_units < 0) cut_units = 0;
 					if (cut_units > pair_units - 0.0001) cut_units = pair_units - 0.0001;
 					var dot_units = pair_units - cut_units;
 					if (broken_dir == "dotcut") {

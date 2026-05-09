@@ -308,8 +308,8 @@ function scoring_apply_run_to_runtime(_run_summary) {
 /// @description Run full ms_overlap scoring across all measures (tune or set mode), accumulate per-segment and overall scores, call scoring_apply_run_to_runtime, and return the summary struct.
 /// @param {struct|undefined} [_export_info]  Optional {tune_id, bpm, swing} for context key generation
 /// @returns {struct}  Full scoring summary: {schema_version, judge_id, overall_score, measure_scores, raw, ...}
-/// @reads   global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries, score_by_segment), global.playback_context, global.current_bpm, global.swing_mult
-/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state (via scoring_apply_run_to_runtime + score_by_segment)
+/// @reads   global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries, score_by_segment), global.playback_context, global.current_bpm, global.swing_mult, global.score_segments_sprites, global.score_snippet_durations, global.score_units_per_measure, global.score_has_pickup
+/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state (via scoring_apply_run_to_runtime + score_by_segment), global.score_snippet_durations, global.score_units_per_measure, global.score_has_pickup
 /// @objects none
 /// @callers scr_button_scripts (end-of-tune path), obj_game_controller
 function scoring_build_ms_overlap_summary(_export_info = undefined) {
@@ -360,10 +360,45 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
         if (!is_array(_segs)) _segs = [];
         var _seg_count = array_length(_segs);
         var _score_by_seg = array_create(_seg_count, undefined);
+        var _seg_score_cache = variable_global_exists("score_segments_sprites")
+            ? global.score_segments_sprites
+            : [];
+
+        // Preserve active segment score metadata so this scoring pass does not
+        // leave global score state pointing at an arbitrary segment.
+        var _saved_durations = variable_global_exists("score_snippet_durations")
+            ? global.score_snippet_durations
+            : [];
+        var _saved_units_per_measure = variable_global_exists("score_units_per_measure")
+            ? real(global.score_units_per_measure)
+            : 0;
+        var _saved_has_pickup = variable_global_exists("score_has_pickup")
+            ? bool(global.score_has_pickup)
+            : false;
 
         for (var _si = 0; _si < _seg_count; _si++) {
             var _seg = _segs[_si];
             if (!is_struct(_seg)) { _score_by_seg[_si] = undefined; continue; }
+
+            // Ensure nav-building uses this segment's exported snippet metadata.
+            // Without this, all segments inherit whichever tune bundle is
+            // currently loaded globally (often the final segment in the set).
+            var _seg_cache_ok = is_array(_seg_score_cache)
+                && _si >= 0
+                && _si < array_length(_seg_score_cache)
+                && is_struct(_seg_score_cache[_si]);
+            if (_seg_cache_ok) {
+                var _seg_cache = _seg_score_cache[_si];
+                if (variable_global_exists("score_snippet_durations")) {
+                    global.score_snippet_durations = _seg_cache[$ "durations"] ?? [];
+                }
+                if (variable_global_exists("score_units_per_measure")) {
+                    global.score_units_per_measure = real(_seg_cache[$ "units_per_measure"] ?? 0);
+                }
+                if (variable_global_exists("score_has_pickup")) {
+                    global.score_has_pickup = bool(_seg_cache[$ "has_pickup"] ?? false);
+                }
+            }
 
             // Build nav from bar_events.
             // bar_events in playback_context have absolute times (scr_playback_context_build_for_set
@@ -426,6 +461,16 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
                 overall_score:        _seg_overall,
                 raw:                  _seg_raw
             };
+        }
+
+        if (variable_global_exists("score_snippet_durations")) {
+            global.score_snippet_durations = _saved_durations;
+        }
+        if (variable_global_exists("score_units_per_measure")) {
+            global.score_units_per_measure = _saved_units_per_measure;
+        }
+        if (variable_global_exists("score_has_pickup")) {
+            global.score_has_pickup = _saved_has_pickup;
         }
 
         if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
@@ -1227,6 +1272,7 @@ function scoring_player_settings_build_payload(_player_id = undefined) {
         metronome_mode:          variable_global_exists("metronome_mode") ? real(global.metronome_mode) : 2,
         metronome_pattern:       variable_global_exists("metronome_pattern_selection") ? real(global.metronome_pattern_selection) : 0,
         metronome_volume:        variable_global_exists("metronome_volume") ? real(global.metronome_volume) : 100,
+        set_bpm_percent:         variable_global_exists("player_set_bpm_percent") ? real(global.player_set_bpm_percent) : 1.0,
         notebeam_measures_ahead:  (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_ahead")) ? real(global.timeline_cfg.measures_ahead) : 2.0,
         notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0
     };
@@ -1327,6 +1373,7 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
     global.metronome_mode = floor(real(variable_struct_exists(s, "metronome_mode") ? s[$ "metronome_mode"] : (variable_global_exists("metronome_mode") ? global.metronome_mode : 2)));
     global.metronome_pattern_selection = floor(real(variable_struct_exists(s, "metronome_pattern") ? s[$ "metronome_pattern"] : (variable_global_exists("metronome_pattern_selection") ? global.metronome_pattern_selection : 0)));
     global.metronome_volume = floor(real(variable_struct_exists(s, "metronome_volume") ? s[$ "metronome_volume"] : (variable_global_exists("metronome_volume") ? global.metronome_volume : 100)));
+    global.player_set_bpm_percent = clamp(real(variable_struct_exists(s, "set_bpm_percent") ? s[$ "set_bpm_percent"] : (variable_global_exists("player_set_bpm_percent") ? global.player_set_bpm_percent : 1.0)), 0.5, 2.0);
 
     if (variable_struct_exists(s, "MIDI_chanter")) {
         global.MIDI_chanter = string(s[$ "MIDI_chanter"]);
@@ -1336,6 +1383,11 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
         var _cfg = gv_ensure_timeline_cfg_defaults();
         if (variable_struct_exists(s, "notebeam_measures_ahead"))  variable_struct_set(_cfg, "measures_ahead",  max(0.25, real(s[$ "notebeam_measures_ahead"])));
         if (variable_struct_exists(s, "notebeam_measures_behind")) variable_struct_set(_cfg, "measures_behind", max(0.25, real(s[$ "notebeam_measures_behind"])));
+    }
+
+    var picker = instance_find(obj_tune_picker, 0);
+    if (picker != noone) {
+        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", global.player_set_bpm_percent);
     }
 
     return true;

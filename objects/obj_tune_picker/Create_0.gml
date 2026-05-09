@@ -35,3 +35,6 @@ set_builder_scroll_offset = 0;  // top visible slot in right pane
 set_name_text = "New Set";
 set_name_editing = false;
 set_confirm_overwrite = false;
+_sb_set_bpm_percent = variable_global_exists("player_set_bpm_percent")
+	? clamp(real(global.player_set_bpm_percent), 0.5, 2.0)
+	: 1.0;

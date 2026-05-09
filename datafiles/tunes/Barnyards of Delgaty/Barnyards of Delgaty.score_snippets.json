@@ -1,0 +1,203 @@
+{
+      "tune": "Barnyards of Delgaty",
+      "header": "X:1\nT:Barnyards of Delgaty\nM:2/4\nL:1/8\nR:March\nC:Trad\nQ:74\nK:HP",
+      "beats_per_measure": 2,
+      "units_per_measure": 4,
+      "has_pickup": false,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 1,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 2,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 3,
+          "body": "{g}Bd{gef}e2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 4,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 5,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 6,
+          "body": "{g}d3/2f/2a{f}g",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 7,
+          "body": "{a}fe{Gdc}d2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 8,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 9,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 11,
+          "body": "{g}Bd{gef}e2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 12,
+          "body": "{g}f3/2e/2{Gdc}d{e}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 13,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 14,
+          "body": "{g}d3/2f/2a{f}g",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 15,
+          "body": "{a}fe{Gdc}d2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 16,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 17,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 18,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 19,
+          "body": "{g}Bd{gef}e2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 20,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 21,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 22,
+          "body": "{g}d3/2f/2a{f}g",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 23,
+          "body": "{a}fe{Gdc}d2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 24,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 25,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 26,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 27,
+          "body": "{g}Bd{gef}e2",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 28,
+          "body": "{g}f3/2g/2{ag}aA",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 29,
+          "body": "{g}Bd{g}B{G}A",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 30,
+          "body": "{g}d3/2f/2a{f}g",
+          "duration_units": 4,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 31,
+          "body": "{a}fe{Gdc}d2",
+          "duration_units": 4,
+          "is_pickup": false
+        }
+      ]
+    }

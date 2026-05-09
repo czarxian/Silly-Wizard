@@ -195,6 +195,7 @@ NextPartRow:
     PopulateEmbellishmentTargets ws
     InferStructuralMetadata ws
     RenumberEventIds ws
+    Call InferBrokenRhythms()
 
     MsgBox "Parse complete — " & totalAdded & " total rows." & vbCrLf & vbCrLf & _
            partSummary & vbCrLf & _

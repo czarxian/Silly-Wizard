@@ -1209,6 +1209,9 @@ function scr_tune_picker_sync_selected_entry_ui()
 {
     var entry = scr_tune_picker_get_selected_entry();
     if (!is_struct(entry)) return false;
+    var picker = scr_set_builder_get_picker();
+    var is_sets_view = picker != noone
+        && string(scr_tune_picker_get_instance_var(picker, "view_mode", "tunes")) == "sets";
 
 	var selected_part_channel = scr_tune_picker_get_selected_part_channel();
 	if (scr_tune_picker_find_part_index(entry, selected_part_channel) < 0) {
@@ -1219,10 +1222,41 @@ function scr_tune_picker_sync_selected_entry_ui()
     scr_update_fields(3);
 
     var tempo_str = string(scr_tune_struct_get(entry, "tempo_default", "120"));
+    var swing_val = real(scr_tune_struct_get(entry, "swing_mult", scr_tune_struct_get(entry, "swing", 0)));
+    var grace_val = real(scr_tune_struct_get(entry, "gracenote_override_ms", 0));
+    var override_key_script = asset_get_index("scoring_tune_override_key");
+    var override_store_script = asset_get_index("scoring_tune_overrides_get_store");
+    if (!is_sets_view
+        && script_exists(override_key_script)
+        && script_exists(override_store_script)) {
+        var tune_key = script_execute(override_key_script, string(scr_tune_struct_get(entry, "filename", "")));
+        var store = script_execute(override_store_script);
+        if (tune_key != "" && variable_struct_exists(store, tune_key)) {
+            var ov = store[$ tune_key];
+            if (is_struct(ov)) {
+                if (variable_struct_exists(ov, "bpm")) tempo_str = string(real(ov[$ "bpm"]));
+                if (variable_struct_exists(ov, "swing_mult")) swing_val = real(ov[$ "swing_mult"]);
+                if (variable_struct_exists(ov, "gracenote_override_ms")) grace_val = real(ov[$ "gracenote_override_ms"]);
+            }
+        }
+    }
+
     var metro_field_3_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_3");
     if (string_length(tempo_str) > 0 && instance_exists(metro_field_3_inst)) {
         scr_tune_instance_set(metro_field_3_inst, "field_value", real(tempo_str));
         scr_tune_instance_set(metro_field_3_inst, "field_contents", tempo_str);
+    }
+
+    var metro_field_6_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_6");
+    if (instance_exists(metro_field_6_inst)) {
+        scr_tune_instance_set(metro_field_6_inst, "field_value", swing_val);
+        scr_tune_instance_set(metro_field_6_inst, "field_contents", string(swing_val));
+    }
+
+    var metro_field_7_inst = scr_tune_picker_find_instance_by_ui_name(obj_field_base, "metro_field_7");
+    if (instance_exists(metro_field_7_inst)) {
+        scr_tune_instance_set(metro_field_7_inst, "field_value", grace_val);
+        scr_tune_instance_set(metro_field_7_inst, "field_contents", string(grace_val));
     }
 
     var time_sig = string(scr_tune_struct_get(entry, "meter", "4/4"));
@@ -1987,6 +2021,8 @@ function scr_tune_picker_handle_click(_gui_x, _gui_y)
         // sort_rect in tunes mode = "Sets →" button
         if (scr_tune_picker_rect_contains(sort_rect, _gui_x, _gui_y)) {
             scr_tune_picker_set_instance_var(picker, "view_mode", "sets");
+            var player_set_speed = variable_global_exists("player_set_bpm_percent") ? real(global.player_set_bpm_percent) : 1.0;
+            scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", clamp(player_set_speed, 0.5, 2.0));
             scr_tune_picker_set_instance_var(picker, "set_builder_scroll_offset", 0);
             scr_tune_picker_set_instance_var(picker, "view_layout", undefined); // force layout rebuild
             scr_tune_picker_refresh_visible_rows();
@@ -3443,12 +3479,24 @@ function scr_set_builder_handle_click_right(_gui_x, _gui_y)
     var speed_plus_r  = scr_tune_picker_get_instance_var(picker, "_sb_speed_plus_rect",  undefined);
     if (scr_tune_picker_rect_contains(speed_minus_r, _gui_x, _gui_y)) {
         var cur_sp = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
-        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", clamp(round((cur_sp - 0.05) * 100) / 100, 0.5, 2.0));
+        var new_sp = clamp(round((cur_sp - 0.05) * 100) / 100, 0.5, 2.0);
+        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", new_sp);
+        global.player_set_bpm_percent = new_sp;
+        var save_player_settings_script = asset_get_index("scoring_player_settings_save_for_player");
+        if (script_exists(save_player_settings_script)) {
+            script_execute(save_player_settings_script);
+        }
         return true;
     }
     if (scr_tune_picker_rect_contains(speed_plus_r, _gui_x, _gui_y)) {
         var cur_sp = real(scr_tune_picker_get_instance_var(picker, "_sb_set_bpm_percent", 1.0));
-        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", clamp(round((cur_sp + 0.05) * 100) / 100, 0.5, 2.0));
+        var new_sp = clamp(round((cur_sp + 0.05) * 100) / 100, 0.5, 2.0);
+        scr_tune_picker_set_instance_var(picker, "_sb_set_bpm_percent", new_sp);
+        global.player_set_bpm_percent = new_sp;
+        var save_player_settings_script = asset_get_index("scoring_player_settings_save_for_player");
+        if (script_exists(save_player_settings_script)) {
+            script_execute(save_player_settings_script);
+        }
         return true;
     }
 

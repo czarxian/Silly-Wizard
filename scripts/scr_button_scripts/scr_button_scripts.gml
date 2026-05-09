@@ -44,6 +44,7 @@
 			case 23: scr_notebeam_pan_scroll(ctx); break;
 			case 24: scr_loop_mode_toggle(ctx); break;
 			case 25: scr_judge_settings_OK(ctx); break;
+			case 26: scr_tune_reset_to_defaults(ctx); break;
 			case 27: scr_select_player(ctx); break;
 			case 28: scr_player_clear_guest_history(); break;
 			case 29: scr_toggle_loop_score_overview(ctx); break;
@@ -57,6 +58,17 @@
 	function scr_button_get_ctx(_ctx = noone) {
 		if (_ctx != noone && instance_exists(_ctx)) return _ctx;
 		return noone;
+	}
+
+	/// @function scr_button_is_set_mode()
+	/// @description Return true when runtime is in set workflow mode.
+	/// @returns {bool} True if active playback mode is set
+	/// @reads global.playback_context
+	/// @callers scr_button_get_active_settings_segment, scr_tune_bpm_change
+	function scr_button_is_set_mode() {
+		return variable_global_exists("playback_context")
+			&& is_struct(global.playback_context)
+			&& string(global.playback_context[$ "mode"] ?? "") == "set";
 	}
 
 	/// @function scr_button_inst_get(_ctx, _name, _default)
@@ -131,6 +143,66 @@
 		return noone;
 	}
 
+	/// @function scr_button_get_bpm_from_bound_field(_default)
+	/// @description Resolve BPM from the field_ref bound to BPM +/- buttons (button_script_index 17), preferring visible-layer buttons.
+	/// @param _default Value returned when no valid bound field value exists
+	/// @returns Real BPM value or _default
+	/// @objects obj_btn_base
+	function scr_button_get_bpm_from_bound_field(_default = undefined) {
+		var best_visible = noone;
+		var best_any = noone;
+		var btn_count = instance_number(obj_btn_base);
+		for (var i = 0; i < btn_count; i++) {
+			var btn = instance_find(obj_btn_base, i);
+			if (btn == noone) continue;
+			if (real(scr_button_inst_get(btn, "button_script_index", -1)) != 17) continue;
+
+			var field = scr_button_inst_get(btn, "field_ref", noone);
+			if (!instance_exists(field)) continue;
+
+			if (best_any == noone || btn > best_any) best_any = btn;
+
+			var ui_layer_num = real(scr_button_inst_get(btn, "ui_layer_num", -1));
+			if (ui_layer_num >= 0) {
+				var layer_name = GetLayerNameFromIndex(ui_layer_num);
+				var layer_id = layer_get_id(layer_name);
+				if (layer_id != -1 && layer_get_visible(layer_id)) {
+					if (best_visible == noone || btn > best_visible) best_visible = btn;
+				}
+			}
+		}
+
+		var pick_btn = (best_visible != noone) ? best_visible : best_any;
+		if (pick_btn == noone) {
+			scr_button_bpm_debug_log("[BPM-FIELD-LOOKUP] no button found for script_index=17; trying direct field lookup");
+
+			// Fallback: BPM field may exist even if +/- button instances are not present/visible.
+			var direct_field = scr_button_find_field_by_ui_name("metro_field_3");
+			if (direct_field == noone) {
+				direct_field = scr_button_find_field_by_ui_name("tune_BPM_field");
+			}
+
+			if (direct_field != noone && instance_exists(direct_field)) {
+				var direct_val = scr_button_field_get(direct_field, "field_value", _default);
+				scr_button_bpm_debug_log("[BPM-FIELD-LOOKUP] direct field fallback value=" + string(direct_val ?? "<undefined>"));
+				if (!is_undefined(direct_val)) return real(direct_val);
+			}
+
+			return _default;
+		}
+
+		var pick_field = scr_button_inst_get(pick_btn, "field_ref", noone);
+		if (!instance_exists(pick_field)) {
+			scr_button_bpm_debug_log("[BPM-FIELD-LOOKUP] button found but field_ref missing or destroyed");
+			return _default;
+		}
+
+		var val = scr_button_field_get(pick_field, "field_value", _default);
+		scr_button_bpm_debug_log("[BPM-FIELD-LOOKUP] found field: value=" + string(val ?? "<undefined>"));
+		if (is_undefined(val)) return _default;
+		return real(val);
+	}
+
 	/// @function scr_button_clone_struct(_src)
 	/// @description Shallow-clone a struct into a new struct (one level deep).
 	function scr_button_clone_struct(_src) {
@@ -142,6 +214,293 @@
 			out[$ key] = variable_struct_get(_src, key);
 		}
 		return out;
+	}
+
+	/// @function scr_button_sync_single_tune_settings_segment(_segment)
+	/// @description Mirror a single-tune settings segment into both virtual set storage and playback_context.
+	/// @param {struct} _segment Segment/settings struct to mirror
+	/// @reads global.playback_context
+	/// @writes global.current_set, global.current_set_item_index, global.playback_context.mode, global.playback_context.segments
+	/// @callers scr_button_get_active_settings_segment, scr_button_write_setting_to_active_segment, scr_button_resolve_effective_settings
+	function scr_button_sync_single_tune_settings_segment(_segment) {
+		if (!is_struct(_segment)) return;
+
+		if (!variable_global_exists("current_set") || !is_array(global.current_set)) {
+			global.current_set = [];
+		}
+
+		var seg_copy = scr_button_clone_struct(_segment);
+		if (array_length(global.current_set) <= 0) {
+			global.current_set = [seg_copy];
+		} else {
+			global.current_set[0] = seg_copy;
+		}
+		global.current_set_item_index = 0;
+
+		if (!variable_global_exists("playback_context") || !is_struct(global.playback_context)) {
+			global.playback_context = {
+				mode: "tune",
+				display_title: "",
+				active_segment: 0,
+				segments: [],
+				score_override_plan: []
+			};
+		}
+		if (!is_array(global.playback_context.segments)) {
+			global.playback_context.segments = [];
+		}
+		if (string(global.playback_context[$ "mode"] ?? "") == "") {
+			global.playback_context[$ "mode"] = "tune";
+		}
+		if (string(global.playback_context[$ "mode"] ?? "") != "set") {
+			global.playback_context[$ "mode"] = "tune";
+			if (array_length(global.playback_context.segments) <= 0 || !is_struct(global.playback_context.segments[0])) {
+				global.playback_context.segments = [scr_button_clone_struct(seg_copy)];
+			} else {
+				var ctx_seg = global.playback_context.segments[0];
+				var keys = variable_struct_get_names(seg_copy);
+				for (var i = 0; i < array_length(keys); i++) {
+					var key = string(keys[i]);
+					ctx_seg[$ key] = seg_copy[$ key];
+				}
+				global.playback_context.segments[0] = ctx_seg;
+			}
+		}
+	}
+
+	/// @function scr_button_get_active_settings_segment(_create_if_missing)
+	/// @description Resolve the authoritative active settings segment (set item in set mode, virtual one-tune set item in single mode).
+	/// @param {bool} _create_if_missing Create and seed a single-tune segment from globals when missing
+	/// @returns {struct|undefined} Active settings segment
+	/// @reads global.current_set, global.current_set_item_index, global.playback_context, global.current_bpm, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.count_in_measures, global.swing_mult, global.gracenote_override_ms, global.loop_jump_to_selection
+	/// @writes global.current_set, global.current_set_item_index, global.playback_context.mode, global.playback_context.segments
+	/// @callers scr_button_write_setting_to_active_segment, scr_button_prepare_single_tune_playback_events
+	function scr_button_get_active_settings_segment(_create_if_missing = false) {
+		if (scr_button_is_set_mode()) {
+			if (variable_global_exists("current_set")
+				&& is_array(global.current_set)
+				&& array_length(global.current_set) > 0
+				&& variable_global_exists("current_set_item_index")
+				&& global.current_set_item_index >= 0
+				&& global.current_set_item_index < array_length(global.current_set)) {
+				return global.current_set[global.current_set_item_index];
+			}
+			return undefined;
+		}
+
+		if (variable_global_exists("current_set")
+			&& is_array(global.current_set)
+			&& array_length(global.current_set) > 0
+			&& variable_global_exists("current_set_item_index")
+			&& global.current_set_item_index >= 0
+			&& global.current_set_item_index < array_length(global.current_set)
+			&& is_struct(global.current_set[global.current_set_item_index])) {
+			var current_item = global.current_set[global.current_set_item_index];
+			scr_button_sync_single_tune_settings_segment(current_item);
+			return current_item;
+		}
+
+		if (variable_global_exists("playback_context")
+			&& is_struct(global.playback_context)
+			&& is_array(global.playback_context.segments)
+			&& array_length(global.playback_context.segments) > 0
+			&& is_struct(global.playback_context.segments[0])) {
+			var ctx_item = global.playback_context.segments[0];
+			scr_button_sync_single_tune_settings_segment(ctx_item);
+			return ctx_item;
+		}
+
+		if (!_create_if_missing) return undefined;
+
+		var seed_bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 120;
+		var seed_field_bpm = scr_button_get_bpm_from_bound_field(undefined);
+		if (!is_undefined(seed_field_bpm)) seed_bpm = real(seed_field_bpm);
+
+		var seed_metro_mode = variable_global_exists("metronome_mode") ? real(global.metronome_mode) : 0;
+		var seed_metro_field = scr_button_find_field_by_ui_name("metro_field_1");
+		if (seed_metro_field != noone && instance_exists(seed_metro_field)) {
+			seed_metro_mode = real(scr_button_field_get(seed_metro_field, "field_value", seed_metro_mode));
+		}
+
+		var segment = {
+			bpm: seed_bpm,
+			metronome_mode: seed_metro_mode,
+			metronome_pattern: variable_global_exists("metronome_pattern_selection") ? real(global.metronome_pattern_selection) : 0,
+			metronome_volume: variable_global_exists("metronome_volume") ? real(global.metronome_volume) : 100,
+			count_in_measures: variable_global_exists("count_in_measures") ? real(global.count_in_measures) : 0,
+			swing_mult: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
+			gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
+			loop_jump_to_selection: variable_global_exists("loop_jump_to_selection") ? (global.loop_jump_to_selection == true) : false
+		};
+
+		scr_button_sync_single_tune_settings_segment(segment);
+		return segment;
+	}
+
+	/// @function scr_button_force_single_runtime_settings_sync()
+	/// @description In single-tune mode, force the virtual one-tune set segment/context to match current runtime globals.
+	/// @reads global.current_bpm, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.count_in_measures, global.loop_jump_to_selection, global.swing_mult, global.gracenote_override_ms
+	/// @writes global.current_set, global.current_set_item_index, global.playback_context.segments
+	/// @callers scr_tune_bpm_change, scr_gracenote_override_change, scr_swing_mult_change, scr_button_prepare_single_tune_playback_events, start_play
+	function scr_button_force_single_runtime_settings_sync() {
+		if (scr_button_is_set_mode()) return;
+
+		var seg = scr_button_get_active_settings_segment(true);
+		if (!is_struct(seg)) seg = {};
+
+		seg.bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : real(scr_button_struct_get(seg, "bpm", 120));
+		seg.metronome_mode = variable_global_exists("metronome_mode") ? real(global.metronome_mode) : real(scr_button_struct_get(seg, "metronome_mode", 0));
+		seg.metronome_pattern = variable_global_exists("metronome_pattern_selection") ? real(global.metronome_pattern_selection) : real(scr_button_struct_get(seg, "metronome_pattern", 0));
+		seg.metronome_volume = variable_global_exists("metronome_volume") ? real(global.metronome_volume) : real(scr_button_struct_get(seg, "metronome_volume", 100));
+		seg.count_in_measures = variable_global_exists("count_in_measures") ? real(global.count_in_measures) : real(scr_button_struct_get(seg, "count_in_measures", 0));
+		seg.loop_jump_to_selection = variable_global_exists("loop_jump_to_selection") ? (global.loop_jump_to_selection == true) : (scr_button_struct_get(seg, "loop_jump_to_selection", false) == true);
+		seg.swing_mult = variable_global_exists("swing_mult") ? real(global.swing_mult) : real(scr_button_struct_get(seg, "swing_mult", scr_button_struct_get(seg, "swing", 0)));
+		seg.gracenote_override_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : real(scr_button_struct_get(seg, "gracenote_override_ms", scr_button_struct_get(seg, "gracenote_ms", 0)));
+
+		scr_button_sync_single_tune_settings_segment(seg);
+	}
+
+	/// @function scr_button_write_setting_to_active_segment(_key, _value)
+	/// @description Write a setting key/value into the active segment for the current mode.
+	/// @param {string} _key Setting key name (bpm, swing_mult, etc.)
+	/// @param _value Setting value
+	/// @returns {bool} True when write succeeded
+	/// @reads global.current_set, global.current_set_item_index
+	/// @writes global.current_set[idx], global.current_set_item_index, global.playback_context.segments[0]
+	/// @callers scr_metronome_mode_change, scr_metronome_pattern_change, scr_metronome_volume_change, scr_tune_bpm_change, scr_tune_countin_change, scr_gracenote_override_change, scr_swing_mult_change
+	function scr_button_write_setting_to_active_segment(_key, _value) {
+		if (scr_button_is_set_mode()) {
+			if (is_array(global.current_set)) {
+				var idx = global.current_set_item_index;
+				if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
+					var item = global.current_set[idx];
+					if (is_struct(item)) {
+						scr_button_struct_set(item, _key, _value);
+						global.current_set[idx] = item;
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		var single_segment = scr_button_get_active_settings_segment(true);
+		if (!is_struct(single_segment)) return false;
+		scr_button_struct_set(single_segment, _key, _value);
+		scr_button_sync_single_tune_settings_segment(single_segment);
+		return true;
+	}
+
+	/// @function scr_button_resolve_effective_settings(_pull_live_fields)
+	/// @description Resolve authoritative playback settings from the active segment, optionally overlaying visible UI field values.
+	/// @param {bool} _pull_live_fields When true, field values from tune/metro controls override single-tune runtime values
+	/// @returns {struct} Effective settings {bpm, swing_mult, gracenote_override_ms, metronome_mode, metronome_pattern, metronome_volume, count_in_measures, loop_jump_to_selection}
+	/// @reads global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.count_in_measures, global.loop_jump_to_selection
+	/// @writes global.current_bpm, global.single_tune_runtime_bpm, global.swing_mult, global.gracenote_override_ms, global.metronome_mode, global.metronome_pattern_selection, global.metronome_volume, global.count_in_measures, global.loop_jump_to_selection, global.current_set, global.current_set_item_index, global.playback_context.segments
+	/// @callers scr_button_prepare_single_tune_playback_events, start_play
+	function scr_button_resolve_effective_settings(_pull_live_fields = true) {
+		var set_mode = scr_button_is_set_mode();
+		var seg = scr_button_get_active_settings_segment(true);
+		var out = {
+			bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 120,
+			swing_mult: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
+			gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
+			metronome_mode: variable_global_exists("metronome_mode") ? real(global.metronome_mode) : 0,
+			metronome_pattern: variable_global_exists("metronome_pattern_selection") ? real(global.metronome_pattern_selection) : 0,
+			metronome_volume: variable_global_exists("metronome_volume") ? real(global.metronome_volume) : 100,
+			count_in_measures: variable_global_exists("count_in_measures") ? real(global.count_in_measures) : 0,
+			loop_jump_to_selection: variable_global_exists("loop_jump_to_selection") ? (global.loop_jump_to_selection == true) : false
+		};
+
+		if (is_struct(seg)) {
+			if (set_mode) {
+				out.bpm = real(scr_button_struct_get(seg, "bpm", out.bpm));
+				out.swing_mult = real(scr_button_struct_get(seg, "swing_mult", scr_button_struct_get(seg, "swing", out.swing_mult)));
+				out.gracenote_override_ms = real(scr_button_struct_get(seg, "gracenote_override_ms", scr_button_struct_get(seg, "gracenote_ms", out.gracenote_override_ms)));
+			}
+			out.metronome_mode = real(scr_button_struct_get(seg, "metronome_mode", out.metronome_mode));
+			out.metronome_pattern = real(scr_button_struct_get(seg, "metronome_pattern", out.metronome_pattern));
+			out.metronome_volume = real(scr_button_struct_get(seg, "metronome_volume", out.metronome_volume));
+			out.count_in_measures = real(scr_button_struct_get(seg, "count_in_measures", out.count_in_measures));
+			out.loop_jump_to_selection = (scr_button_struct_get(seg, "loop_jump_to_selection", out.loop_jump_to_selection) == true);
+		}
+
+		if (_pull_live_fields && !set_mode) {
+			var mode_field = scr_button_find_field_by_ui_name("metro_field_1");
+			if (mode_field != noone && instance_exists(mode_field)) {
+				out.metronome_mode = real(scr_button_field_get(mode_field, "field_value", out.metronome_mode));
+			}
+
+			var pattern_field = scr_button_find_field_by_ui_name("metro_field_2");
+			if (pattern_field != noone && instance_exists(pattern_field)) {
+				out.metronome_pattern = real(scr_button_field_get(pattern_field, "field_value", out.metronome_pattern));
+			}
+
+			var volume_field = scr_button_find_field_by_ui_name("metro_field_5");
+			if (volume_field != noone && instance_exists(volume_field)) {
+				out.metronome_volume = real(scr_button_field_get(volume_field, "field_value", out.metronome_volume));
+			}
+
+			var countin_field = scr_button_find_field_by_ui_name("metro_field_4");
+			if (countin_field == noone) countin_field = scr_button_find_field_by_ui_name("tune_countin_field");
+			if (countin_field != noone && instance_exists(countin_field)) {
+				out.count_in_measures = real(scr_button_field_get(countin_field, "field_value", out.count_in_measures));
+			}
+		}
+
+		out.bpm = max(1, real(out.bpm));
+		out.swing_mult = max(0, real(out.swing_mult));
+		out.gracenote_override_ms = max(0, real(out.gracenote_override_ms));
+		out.metronome_mode = max(0, real(out.metronome_mode));
+		out.metronome_pattern = max(0, real(out.metronome_pattern));
+		out.metronome_volume = clamp(real(out.metronome_volume), 0, 127);
+		out.count_in_measures = max(0, real(out.count_in_measures));
+
+		global.current_bpm = out.bpm;
+		if (!set_mode) global.single_tune_runtime_bpm = out.bpm;
+		global.swing_mult = out.swing_mult;
+		global.gracenote_override_ms = out.gracenote_override_ms;
+		global.metronome_mode = out.metronome_mode;
+		global.metronome_pattern_selection = out.metronome_pattern;
+		global.metronome_volume = out.metronome_volume;
+		global.count_in_measures = out.count_in_measures;
+		global.loop_jump_to_selection = out.loop_jump_to_selection;
+
+		if (is_struct(seg)) {
+			seg.bpm = out.bpm;
+			seg.swing_mult = out.swing_mult;
+			seg.gracenote_override_ms = out.gracenote_override_ms;
+			seg.metronome_mode = out.metronome_mode;
+			seg.metronome_pattern = out.metronome_pattern;
+			seg.metronome_volume = out.metronome_volume;
+			seg.count_in_measures = out.count_in_measures;
+			seg.loop_jump_to_selection = out.loop_jump_to_selection;
+			if (!set_mode) {
+				scr_button_sync_single_tune_settings_segment(seg);
+			}
+		}
+
+		return out;
+	}
+
+	/// @function scr_button_bpm_debug_log(_line)
+	/// @description Emit BPM diagnostics to Output and ALWAYS to dedicated bpm_trace.log file (independent of Logs toggle).
+	/// @param {string} _line Text line to log
+	/// @reads none
+	/// @writes file at bpm_trace.log (append)
+	/// @objects none
+	/// @callers scr_tune_bpm_change, scr_button_prepare_single_tune_playback_events, start_play
+	function scr_button_bpm_debug_log(_line) {
+		var _msg = string(_line);
+		show_debug_message(_msg);
+
+		// ALWAYS write to dedicated BPM trace file (absolute path in AppData)
+		var _log_path = "C:\\Users\\xian\\AppData\\Local\\Silly_Wizard\\bpm_trace.log";
+		var _f = file_text_open_append(_log_path);
+		if (_f != -1) {
+			file_text_write_string(_f, _msg + "\n");
+			file_text_close(_f);
+		}
 	}
 
 	/// @function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel)
@@ -677,151 +1036,18 @@
 		var tune_data = scr_button_tune_data_get(tune);
 		if (instance_exists(tune) && scr_button_tune_is_loaded(tune)) {
 			show_debug_message("Preprocessing tune for playback...");
-			
-			// Step 1: Preprocess tune JSON into playable MIDI events
-			var set_item = undefined;
-			if (array_length(global.current_set) > 0 && global.current_set_item_index >= 0) {
-				set_item = global.current_set[global.current_set_item_index];
+			var rebuilt = scr_button_prepare_single_tune_playback_events();
+			if (rebuilt) {
+				show_debug_message("Single-tune playback events rebuilt via unified settings resolver.");
 			}
-			var bpm_override = is_struct(set_item) ? scr_button_struct_get(set_item, "bpm", undefined) : undefined;
-			if (is_undefined(bpm_override) && variable_global_exists("current_bpm")) {
-				bpm_override = real(global.current_bpm);
-			}
-			var overrides = undefined;
-			if (is_struct(set_item)) {
-				var swing_override = scr_button_struct_get(set_item, "swing_mult", undefined);
-				if (is_undefined(swing_override)) swing_override = scr_button_struct_get(set_item, "swing", undefined);
-				var grace_override = scr_button_struct_get(set_item, "gracenote_override_ms", undefined);
-				if (is_undefined(grace_override)) grace_override = scr_button_struct_get(set_item, "gracenote_ms", undefined);
-				if (is_undefined(swing_override) && variable_global_exists("swing_mult")) {
-					swing_override = global.swing_mult;
-				}
-				if (is_undefined(grace_override) && variable_global_exists("gracenote_override_ms")) {
-					grace_override = global.gracenote_override_ms;
-				}
-				overrides = {
-					bpm: bpm_override,
-					swing_mult: swing_override,
-					gracenote_override_ms: grace_override
-				};
-			} else if (!is_undefined(bpm_override)
-				|| variable_global_exists("swing_mult")
-				|| variable_global_exists("gracenote_override_ms")) {
-				overrides = {
-					bpm: bpm_override,
-					swing_mult: variable_global_exists("swing_mult") ? global.swing_mult : undefined,
-					gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? global.gracenote_override_ms : undefined
-				};
-			}
-			var tune_events = scr_preprocess_tune(tune, is_struct(overrides) ? overrides : bpm_override);
-		
-			// Step 2: Metronome settings (from set item if available)
-			var metronome_settings = undefined;
-			if (is_struct(set_item)) {
-				metronome_settings = {
-					bpm: scr_button_struct_get(set_item, "bpm", undefined),
-					metronome_mode: scr_button_struct_get(set_item, "metronome_mode", 0),
-					metronome_pattern: scr_button_struct_get(set_item, "metronome_pattern", 0),
-					metronome_volume: scr_button_struct_get(set_item, "metronome_volume", 100)
-				};
-			}
-		
-			// Step 3: Generate metronome events for the tune
-			var metronome_events = metronome_generate_events({
-				events: tune_events,
-				tune_data: tune_data
-			}, metronome_settings);
-		
-			// Step 4: Optional count-in (prepend metronome measures)
-			var countin_events = array_create(0);
-			var count_in_measures = is_struct(set_item) ? real(scr_button_struct_get(set_item, "count_in_measures", 0)) : 0;
-			var count_in_ms = 0;
-			if (count_in_measures > 0) {
-				var meta = scr_button_struct_get(tune_data, "tune_metadata", undefined);
-				var time_sig = metronome_normalize_time_sig(scr_button_struct_get(meta, "meter", "4/4"));
-				var time_sig_parts = string_split(time_sig, "/");
-				var beats_per_measure = real(time_sig_parts[0]);
-				var denom = real(time_sig_parts[1]);
-				var tempo_str = string(scr_button_struct_get(meta, "tempo_default", ""));
-				var bpm_effective = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
-				if (!is_undefined(bpm_override)) bpm_effective = real(bpm_override);
-				var quarter_bpm_effective = metronome_get_effective_quarter_bpm(bpm_effective, time_sig);
-				var ms_per_quarter = 60000 / quarter_bpm_effective;
-				var beat_unit_ms = ms_per_quarter * (4 / denom);
-				count_in_ms = count_in_measures * beats_per_measure * beat_unit_ms;
-			
-				countin_events = metronome_generate_countin_events({
-					events: tune_events,
-					tune_data: tune_data
-				}, metronome_settings, count_in_measures);
-			
-				// Find pickup duration (time before measure 1)
-				// Prefer explicit measure-1 bar marker to avoid false offsets.
-				var pickup_start_ms = 0;
-				for (var i = 0; i < array_length(tune_events); i++) {
-					var ev = tune_events[i];
-					var ev_type = string(scr_button_struct_get(ev, "type", ""));
-					var ev_marker_type = string(scr_button_struct_get(ev, "marker_type", ""));
-					var ev_measure = real(scr_button_struct_get(ev, "measure", 0));
-					if (ev_type == "marker"
-						&& ev_marker_type == "bar"
-						&& ev_measure == 1) {
-						pickup_start_ms = real(scr_button_struct_get(ev, "time", 0));
-						break;
-					}
-				}
-				// Fallback if markers are unavailable.
-				if (pickup_start_ms == 0) {
-					for (var i = 0; i < array_length(tune_events); i++) {
-						var ev = tune_events[i];
-						var ev_type = string(scr_button_struct_get(ev, "type", ""));
-						var ev_measure = real(scr_button_struct_get(ev, "measure", 0));
-						if (ev_type == "note_on" && ev_measure >= 1) {
-							pickup_start_ms = real(scr_button_struct_get(ev, "time", 0));
-							break;
-						}
-					}
-				}
-			
-				// Shift tune + metronome events so measure 1 starts after count-in,
-				// keeping pickup notes aligned within the count-in window.
-				var shift_ms = max(count_in_ms - pickup_start_ms, 0);
-				for (var i = 0; i < array_length(tune_events); i++) {
-					var tune_event = tune_events[i];
-					var tune_event_time = real(scr_button_struct_get(tune_event, "time", 0));
-					scr_button_struct_set(tune_event, "time", tune_event_time + shift_ms);
-				}
-				for (var i = 0; i < array_length(metronome_events); i++) {
-					var metro_event = metronome_events[i];
-					var metro_event_time = real(scr_button_struct_get(metro_event, "time", 0));
-					scr_button_struct_set(metro_event, "time", metro_event_time + shift_ms);
-				}
-			}
-		
-			// Merge arrays manually
-			var total = array_length(tune_events) + array_length(metronome_events) + array_length(countin_events);
-			var merged = array_create(total);
-			var idx = 0;
-			for (var i = 0; i < array_length(countin_events); i++) {
-				merged[idx++] = countin_events[i];
-			}
-			for (var i = 0; i < array_length(tune_events); i++) {
-				merged[idx++] = tune_events[i];
-			}
-			for (var i = 0; i < array_length(metronome_events); i++) {
-				merged[idx++] = metronome_events[i];
-			}
-			// Sort by time
-			array_sort(merged, function(a, b) {
-				return real(scr_button_struct_get(a, "time", 0)) - real(scr_button_struct_get(b, "time", 0));
-			});
-			
-			global.playback_events = merged;
-			show_debug_message("Merged " + string(array_length(tune_events)) + " tune + " + string(array_length(metronome_events)) + " metronome = " + string(array_length(merged)) + " total");
 			// Build playback context so viz/scoring know the active tune
 			var _ctx_tune_struct = scr_tune_load_to_struct(global.tune.tune_data.filename);
 			if (!is_undefined(_ctx_tune_struct)) {
 				scr_playback_context_build_for_tune(_ctx_tune_struct);
+				var _active_after_ctx = scr_button_get_active_settings_segment(true);
+				if (is_struct(_active_after_ctx)) {
+					scr_button_sync_single_tune_settings_segment(_active_after_ctx);
+				}
 			}
 		} else {
 			show_debug_message("WARNING: No tune loaded, proceeding without events");
@@ -1362,15 +1588,9 @@
 			scr_button_field_set(metro_pattern_field, "field_contents", global.metronome_pattern_options[global.metronome_pattern_selection]);
 		}
 
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "metronome_mode", global.metronome_mode);
-					global.current_set[idx] = item;
-				}
-			}
+		scr_button_write_setting_to_active_segment("metronome_mode", global.metronome_mode);
+		if (!scr_button_is_set_mode()) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Metronome mode: " + string(field_contents));
@@ -1403,15 +1623,9 @@
 		scr_button_field_set(field, "field_contents", field_contents);
 
 		global.metronome_pattern_selection = field_value;
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "metronome_pattern", global.metronome_pattern_selection);
-					global.current_set[idx] = item;
-				}
-			}
+		scr_button_write_setting_to_active_segment("metronome_pattern", global.metronome_pattern_selection);
+		if (!scr_button_is_set_mode()) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Metronome pattern: " + string(field_contents));
@@ -1443,15 +1657,9 @@
 		global.METRONOME_CONFIG.velocity_emphasis = new_volume;
 		global.METRONOME_CONFIG.velocity_normal = floor(new_volume * 0.7);
 
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "metronome_volume", global.metronome_volume);
-					global.current_set[idx] = item;
-				}
-			}
+		scr_button_write_setting_to_active_segment("metronome_volume", global.metronome_volume);
+		if (!scr_button_is_set_mode()) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Metronome volume: " + string(new_volume));
@@ -1480,23 +1688,22 @@
 		scr_button_field_set(field, "field_value", new_val);
 		scr_button_field_set(field, "field_contents", string(new_val));
 		global.current_bpm = new_val;
+		global.single_tune_runtime_bpm = new_val;
 
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "bpm", global.current_bpm);
-					global.current_set[idx] = item;
-				}
-			}
-		}
+		scr_button_write_setting_to_active_segment("bpm", global.current_bpm);
+		scr_button_force_single_runtime_settings_sync();
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_3", new_val);
-		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
-			scoring_tune_override_save_current();
+		var save_override_script = asset_get_index("scoring_tune_override_save_current");
+		if (script_exists(save_override_script)) {
+			var override_filename = scr_button_get_single_tune_override_target_filename();
+			script_execute(save_override_script, override_filename);
+		}
+		var _bpm_is_set_mode = scr_button_is_set_mode();
+		if (!_bpm_is_set_mode) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
-		show_debug_message("BPM: " + string(new_val));
+		scr_button_bpm_debug_log("[BPM-CHANGE] field->global: new_val=" + string(new_val) + " is_set_mode=" + string(_bpm_is_set_mode));
 	}
 
 	//CASE 18 - Tune Count-In
@@ -1523,15 +1730,9 @@
 		if (scr_set_is_active()) {
 			// Set mode: count-in applies to whole set (first tune only), not per-tune
 			global.active_set.set_count_in_measures = new_val;
-		} else if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "count_in_measures", global.count_in_measures);
-					global.current_set[idx] = item;
-				}
-			}
+		} else {
+			scr_button_write_setting_to_active_segment("count_in_measures", global.count_in_measures);
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Count-in measures: " + string(new_val));
@@ -1561,19 +1762,16 @@
 		scr_button_field_set(field, "field_contents", string(new_val));
 		global.gracenote_override_ms = new_val;
 
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "gracenote_override_ms", global.gracenote_override_ms);
-					global.current_set[idx] = item;
-				}
-			}
-		}
+		scr_button_write_setting_to_active_segment("gracenote_override_ms", global.gracenote_override_ms);
+		scr_button_force_single_runtime_settings_sync();
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_7", new_val);
-		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
-			scoring_tune_override_save_current();
+		var save_override_script = asset_get_index("scoring_tune_override_save_current");
+		if (script_exists(save_override_script)) {
+			var override_filename = scr_button_get_single_tune_override_target_filename();
+			script_execute(save_override_script, override_filename);
+		}
+		if (!scr_button_is_set_mode()) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Gracenote override (ms): " + string(new_val));
@@ -1603,19 +1801,16 @@
 		scr_button_field_set(field, "field_contents", string(new_val));
 		global.swing_mult = new_val;
 
-		if (is_array(global.current_set)) {
-			var idx = global.current_set_item_index;
-			if (!is_undefined(idx) && idx >= 0 && idx < array_length(global.current_set)) {
-				var item = global.current_set[idx];
-				if (is_struct(item)) {
-					scr_button_struct_set(item, "swing_mult", global.swing_mult);
-					global.current_set[idx] = item;
-				}
-			}
-		}
+		scr_button_write_setting_to_active_segment("swing_mult", global.swing_mult);
+		scr_button_force_single_runtime_settings_sync();
 		scr_set_builder_writeback_field_to_selected_slot("metro_field_6", new_val);
-		if (script_exists(asset_get_index("scoring_tune_override_save_current"))) {
-			scoring_tune_override_save_current();
+		var save_override_script = asset_get_index("scoring_tune_override_save_current");
+		if (script_exists(save_override_script)) {
+			var override_filename = scr_button_get_single_tune_override_target_filename();
+			script_execute(save_override_script, override_filename);
+		}
+		if (!scr_button_is_set_mode()) {
+			scr_button_prepare_single_tune_playback_events();
 		}
 
 		show_debug_message("Swing multiplier: " + string(new_val));
@@ -1746,7 +1941,7 @@
 		if (script_exists(asset_get_index("scoring_tune_overrides_load_for_player"))) {
 			scoring_tune_overrides_load_for_player();
 		}
-		if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
+		if (!scr_set_is_active() && script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
 			scoring_tune_override_apply_current();
 		}
 
@@ -1889,6 +2084,27 @@
 		return result;
 	}
 
+	/// @function scr_button_get_single_tune_override_target_filename()
+	/// @description Resolve the selected tune filename to use when saving single-tune player overrides from the picker UI.
+	/// @returns {string} Selected picker filename when available, otherwise current_tune_filename, otherwise ""
+	/// @reads global.current_tune_filename
+	/// @objects obj_tune_picker
+	/// @callers scr_tune_bpm_change, scr_gracenote_override_change, scr_swing_mult_change
+	function scr_button_get_single_tune_override_target_filename() {
+		var selection = scr_button_resolve_picker_selection();
+		if (is_struct(selection.entry)) {
+			var selected_filename = string(scr_button_struct_get(selection.entry, "filename", ""));
+			if (selected_filename != "") return selected_filename;
+		}
+
+		if (variable_global_exists("current_tune_filename")) {
+			var current_filename = string(global.current_tune_filename);
+			if (current_filename != "") return current_filename;
+		}
+
+		return "";
+	}
+
 	/// @function scr_button_build_tune_load_candidates(_library, _filename)
 	/// @description Build an ordered list of file paths to try when loading a tune by filename.
 	/// @returns Array of candidate path strings
@@ -1974,14 +2190,14 @@
 		}
 	}
 
-	/// @function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label)
+	/// @function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label, _force_tune_defaults)
 	/// @description Try to load a tune from the given file path; if successful, apply set item globals and update UI.
 	/// @returns true if load succeeded, false otherwise
 	/// @reads global.tune (loaded tune instance)
 	/// @writes global.current_set, global.current_set_item_index, global.current_tune_filename, global.current_bpm, global.swing_mult, global.gracenote_override_ms
 	/// @objects obj_tune (reads tune_data after scr_tune_load_json)
-	/// @callers scr_tune_OK
-	function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label) {
+	/// @callers scr_tune_OK, scr_tune_reset_to_defaults
+	function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label, _force_tune_defaults = false) {
 		if (!scr_tune_load_json(_tryfile)) return false;
 
 		var item = create_set_item(_tryfile);
@@ -2001,16 +2217,49 @@
 		global.current_set = [item];
 		global.current_set_item_index = 0;
 		scr_button_apply_globals_from_set_item(item);
+		global.single_tune_runtime_bpm = global.current_bpm;
+		scr_button_sync_single_tune_settings_segment(item);
 
 		var tune_key = string(scr_button_struct_get(_entry, "filename", ""));
 		if (tune_key == "") tune_key = _tryfile;
 		global.current_tune_filename = tune_key;
-		if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
+		if (!_force_tune_defaults && script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
 			scoring_tune_override_apply_current(tune_key);
 			scr_button_struct_set(item, "bpm", global.current_bpm);
 			scr_button_struct_set(item, "swing_mult", global.swing_mult);
 			scr_button_struct_set(item, "gracenote_override_ms", global.gracenote_override_ms);
 			global.current_set[0] = item;
+			scr_button_sync_single_tune_settings_segment(item);
+		} else if (_force_tune_defaults) {
+			var default_bpm = 120;
+			var tempo_str = string(scr_button_struct_get(meta, "tempo_default", ""));
+			if (string_length(tempo_str) > 0) default_bpm = real(tempo_str);
+
+			default_swing = scr_button_struct_get(perf, "swing", scr_button_struct_get(meta, "swing", 0));
+			if (is_undefined(default_swing) || string(default_swing) == "") default_swing = 0;
+
+			var default_grace = scr_button_struct_get(perf, "gracenote_override_ms", scr_button_struct_get(meta, "gracenote_override_ms", scr_button_struct_get(meta, "gracenote_ms", 0)));
+			if (is_undefined(default_grace) || string(default_grace) == "") default_grace = 0;
+
+			global.current_bpm = max(1, real(default_bpm));
+			global.single_tune_runtime_bpm = global.current_bpm;
+			global.swing_mult = max(0, real(default_swing));
+			global.gracenote_override_ms = max(0, real(default_grace));
+
+			scr_button_struct_set(item, "bpm", global.current_bpm);
+			scr_button_struct_set(item, "swing_mult", global.swing_mult);
+			scr_button_struct_set(item, "gracenote_override_ms", global.gracenote_override_ms);
+			global.current_set[0] = item;
+			scr_button_sync_single_tune_settings_segment(item);
+
+			var save_override_script = asset_get_index("scoring_tune_override_save_current");
+			if (script_exists(save_override_script)) {
+				script_execute(save_override_script, tune_key);
+			}
+
+			if (script_exists(asset_get_index("scr_tune_picker_sync_selected_entry_ui"))) {
+				scr_tune_picker_sync_selected_entry_ui();
+			}
 		}
 
 		scr_button_apply_post_tune_load_ui(_button_label, _entry);
@@ -2067,9 +2316,6 @@
 						for (var _ok_ci = 0; _ok_ci < array_length(_ok_cands); _ok_ci++) {
 							if (scr_tune_load_json(_ok_cands[_ok_ci])) {
 								global.current_tune_filename = _ok_fname;
-								if (script_exists(asset_get_index("scoring_tune_override_apply_current"))) {
-									scoring_tune_override_apply_current(_ok_fname);
-								}
 								break;
 							}
 						}
@@ -2090,6 +2336,7 @@
 		var picker_selection = scr_button_resolve_picker_selection();
 		var library = picker_selection.library;
 		var entry = picker_selection.entry;
+		var force_tune_defaults = keyboard_check(vk_shift) && !scr_set_is_active();
 
 		if (is_struct(entry)) {
 			var filename = string(scr_button_struct_get(entry, "filename", ""));
@@ -2101,7 +2348,7 @@
 			    var loaded = false;
 			    for (var i = 0; i < array_length(candidates) && !loaded; i++) {
 			        var tryfile = candidates[i];
-			        loaded = scr_button_try_load_tune_candidate(tryfile, entry, button_label);
+		        loaded = scr_button_try_load_tune_candidate(tryfile, entry, button_label, force_tune_defaults);
 			    }
 
 				if (!loaded) {
@@ -2116,8 +2363,176 @@
 
 		scr_button_inst_set(ctx, "button_label", saved_button_label);
 	}	
+
+	//CASE 26
+	/// @function scr_tune_reset_to_defaults(_ctx)
+	/// @description Reset selected single-tune BPM/swing/gracenote to tune defaults and persist as the current player's override.
+	/// @reads global.tune_library, global.current_tune_filename
+	/// @writes global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.current_set
+	/// @objects obj_tune_picker
+	/// @callers scr_handle_button_click (button 26)
+	function scr_tune_reset_to_defaults(_ctx = noone) {
+		if (scr_set_is_active()) return;
+
+		var ctx = scr_button_get_ctx(_ctx);
+		var button_label = ctx != noone ? string(scr_button_inst_get(ctx, "button_label", "")) : "";
+		if (button_label == "" && ctx != noone) {
+			var ui_layer_num = real(scr_button_inst_get(ctx, "ui_layer_num", -1));
+			if (ui_layer_num >= 0) button_label = GetLayerNameFromIndex(ui_layer_num);
+		}
+
+		var picker_selection = scr_button_resolve_picker_selection();
+		if (!is_struct(picker_selection.entry)) return;
+
+		var filename = string(scr_button_struct_get(picker_selection.entry, "filename", ""));
+		if (filename == "") return;
+
+		var candidates = scr_button_build_tune_load_candidates(picker_selection.library, filename);
+		for (var i = 0; i < array_length(candidates); i++) {
+			if (scr_button_try_load_tune_candidate(candidates[i], picker_selection.entry, button_label, true)) {
+				show_debug_message("Reset tune defaults for " + filename + " to bpm=" + string(global.current_bpm)
+					+ " swing=" + string(global.swing_mult)
+					+ " grace_ms=" + string(global.gracenote_override_ms));
+				return;
+			}
+		}
+	}
 	
 	//CASE 11
+	/// @function scr_button_prepare_single_tune_playback_events()
+	/// @description Rebuild global.playback_events for single-tune mode using current BPM/swing/grace/count-in settings.
+	/// @returns {bool} true when events were rebuilt; false when tune is unavailable
+	/// @reads global.tune, global.current_set, global.current_set_item_index, global.current_bpm, global.swing_mult, global.gracenote_override_ms
+	/// @writes global.playback_events
+	/// @objects obj_tune
+	/// @callers start_play, scr_tune_bpm_change
+	function scr_button_prepare_single_tune_playback_events() {
+		scr_button_force_single_runtime_settings_sync();
+		var tune = global.tune;
+		var tune_data = scr_button_tune_data_get(tune);
+		if (!(instance_exists(tune) && scr_button_tune_is_loaded(tune))) {
+			global.playback_events = [];
+			return false;
+		}
+
+		var _single_is_set_mode = scr_button_is_set_mode();
+		var effective = scr_button_resolve_effective_settings(true);
+		var bpm_override = real(scr_button_struct_get(effective, "bpm", variable_global_exists("current_bpm") ? global.current_bpm : 120));
+		var overrides = {
+			bpm: bpm_override,
+			swing_mult: real(scr_button_struct_get(effective, "swing_mult", variable_global_exists("swing_mult") ? global.swing_mult : 0)),
+			gracenote_override_ms: real(scr_button_struct_get(effective, "gracenote_override_ms", variable_global_exists("gracenote_override_ms") ? global.gracenote_override_ms : 0))
+		};
+
+		scr_button_bpm_debug_log("[EFFECTIVE-SETTINGS] bpm=" + string(overrides.bpm)
+			+ " swing_mult=" + string(overrides.swing_mult)
+			+ " grace_ms=" + string(overrides.gracenote_override_ms)
+			+ " metro_mode=" + string(scr_button_struct_get(effective, "metronome_mode", 0))
+			+ " metro_pattern=" + string(scr_button_struct_get(effective, "metronome_pattern", 0))
+			+ " metro_volume=" + string(scr_button_struct_get(effective, "metronome_volume", 100))
+			+ " count_in=" + string(scr_button_struct_get(effective, "count_in_measures", 0))
+			+ " mode=" + (_single_is_set_mode ? "set" : "single_virtual_set"));
+
+		var tune_events = scr_preprocess_tune(tune, overrides);
+
+		var metronome_settings = {
+			bpm: bpm_override,
+			metronome_mode: real(scr_button_struct_get(effective, "metronome_mode", 0)),
+			metronome_pattern: real(scr_button_struct_get(effective, "metronome_pattern", 0)),
+			metronome_volume: real(scr_button_struct_get(effective, "metronome_volume", 100))
+		};
+
+		var metronome_events = metronome_generate_events({
+			events: tune_events,
+			tune_data: tune_data
+		}, metronome_settings);
+
+		var countin_events = array_create(0);
+		var count_in_measures = real(scr_button_struct_get(effective, "count_in_measures", 0));
+		if (count_in_measures > 0) {
+			var meta = scr_button_struct_get(tune_data, "tune_metadata", undefined);
+			var time_sig = metronome_normalize_time_sig(scr_button_struct_get(meta, "meter", "4/4"));
+			var time_sig_parts = string_split(time_sig, "/");
+			var beats_per_measure = real(time_sig_parts[0]);
+			var denom = real(time_sig_parts[1]);
+			var tempo_str = string(scr_button_struct_get(meta, "tempo_default", ""));
+			var bpm_effective = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
+			if (!is_undefined(bpm_override)) bpm_effective = real(bpm_override);
+			var quarter_bpm_effective = metronome_get_effective_quarter_bpm(bpm_effective, time_sig);
+			var ms_per_quarter = 60000 / quarter_bpm_effective;
+			var beat_unit_ms = ms_per_quarter * (4 / denom);
+			var count_in_ms = count_in_measures * beats_per_measure * beat_unit_ms;
+
+			countin_events = metronome_generate_countin_events({
+				events: tune_events,
+				tune_data: tune_data
+			}, metronome_settings, count_in_measures);
+
+			var pickup_start_ms = 0;
+			for (var i = 0; i < array_length(tune_events); i++) {
+				var ev = tune_events[i];
+				var ev_type = string(scr_button_struct_get(ev, "type", ""));
+				var ev_marker_type = string(scr_button_struct_get(ev, "marker_type", ""));
+				var ev_measure = real(scr_button_struct_get(ev, "measure", 0));
+				if (ev_type == "marker"
+					&& ev_marker_type == "bar"
+					&& ev_measure == 1) {
+					pickup_start_ms = real(scr_button_struct_get(ev, "time", 0));
+					break;
+				}
+			}
+			if (pickup_start_ms == 0) {
+				for (var i = 0; i < array_length(tune_events); i++) {
+					var ev = tune_events[i];
+					var ev_type = string(scr_button_struct_get(ev, "type", ""));
+					var ev_measure = real(scr_button_struct_get(ev, "measure", 0));
+					if (ev_type == "note_on" && ev_measure >= 1) {
+						pickup_start_ms = real(scr_button_struct_get(ev, "time", 0));
+						break;
+					}
+				}
+			}
+
+			var shift_ms = max(count_in_ms - pickup_start_ms, 0);
+			for (var i = 0; i < array_length(tune_events); i++) {
+				var tune_event = tune_events[i];
+				var tune_event_time = real(scr_button_struct_get(tune_event, "time", 0));
+				scr_button_struct_set(tune_event, "time", tune_event_time + shift_ms);
+			}
+			for (var i = 0; i < array_length(metronome_events); i++) {
+				var metro_event = metronome_events[i];
+				var metro_event_time = real(scr_button_struct_get(metro_event, "time", 0));
+				scr_button_struct_set(metro_event, "time", metro_event_time + shift_ms);
+			}
+		}
+
+		var total = array_length(tune_events) + array_length(metronome_events) + array_length(countin_events);
+		var merged = array_create(total);
+		var idx = 0;
+		for (var i = 0; i < array_length(countin_events); i++) merged[idx++] = countin_events[i];
+		for (var i = 0; i < array_length(tune_events); i++) merged[idx++] = tune_events[i];
+		for (var i = 0; i < array_length(metronome_events); i++) merged[idx++] = metronome_events[i];
+
+		array_sort(merged, function(a, b) {
+			return real(scr_button_struct_get(a, "time", 0)) - real(scr_button_struct_get(b, "time", 0));
+		});
+
+		global.playback_events = merged;
+		
+		// Sync playback_context to the rebuilt BPM so timeline reads current value
+		// (in single-tune mode, context was built from JSON tempo_default at room entry, never refreshed)
+		if (variable_global_exists("playback_context")
+			&& is_struct(global.playback_context)
+			&& is_array(global.playback_context.segments)
+			&& array_length(global.playback_context.segments) > 0
+			&& !is_undefined(bpm_override)) {
+			global.playback_context.segments[0].bpm = real(bpm_override);
+			scr_button_bpm_debug_log("[CONTEXT-SYNC] updated playback_context.segments[0].bpm to " + string(bpm_override));
+		}
+		
+		return true;
+	}
+
 	/// @function start_play()
 	/// @description Open MIDI devices, start MIDI polling, activate playback_events, bind timeline.
 	/// @reads global.midi_output_device, global.midi_input_device, global.tune, global.timeline_cfg, global.selected_player_tune_channel, global.playback_events, global.loop_mode_enabled, global.playback_context
@@ -2134,6 +2549,18 @@
 		
 		// global.tune is the obj_tune instance (not an array)
 		var tune = global.tune;
+		var _start_is_set_mode = variable_global_exists("playback_context")
+			&& is_struct(global.playback_context)
+			&& string(global.playback_context[$ "mode"] ?? "") == "set";
+		scr_button_bpm_debug_log("[START-PLAY] mode_detected=" + (variable_global_exists("playback_context") && is_struct(global.playback_context) ? string(global.playback_context[$ "mode"] ?? "<none>") : "<no-context>") + " is_set_mode=" + string(_start_is_set_mode));
+		if (!_start_is_set_mode) {
+			scr_button_force_single_runtime_settings_sync();
+			var _start_effective = scr_button_resolve_effective_settings(true);
+			scr_button_bpm_debug_log("[START-PLAY-EFFECTIVE] bpm=" + string(scr_button_struct_get(_start_effective, "bpm", global.current_bpm))
+				+ " swing=" + string(scr_button_struct_get(_start_effective, "swing_mult", global.swing_mult))
+				+ " grace_ms=" + string(scr_button_struct_get(_start_effective, "gracenote_override_ms", global.gracenote_override_ms)));
+			scr_button_prepare_single_tune_playback_events();
+		}
 		var tune_data = scr_button_tune_data_get(tune);
 		var tune_events = scr_button_struct_get(tune_data, "events", array_create(0));
 
@@ -2205,12 +2632,25 @@
 							_timing_bpm   = real(scr_button_struct_get(_timing, "bpm", 120));
 							_timing_meter = string(scr_button_struct_get(_timing, "meter", "4/4"));
 						}
+						// In single-tune mode, playback_context.segments[0].bpm holds tempo_default from
+						// the JSON (set at room entry, never updated). Override with global.current_bpm
+						// so the notebeam scroll speed matches the events already preprocessed at that BPM.
+						if (!_start_is_set_mode && variable_global_exists("current_bpm")) {
+							var _timing_bpm_old = _timing_bpm;
+							_timing_bpm = real(global.current_bpm);
+							scr_button_bpm_debug_log("[START-PLAY-BPM] overriding stale context bpm: " + string(_timing_bpm_old) + " -> " + string(_timing_bpm));
+						}
 						gv_bind_timeline_on_tune_start(start_events, _timing_bpm, _timing_meter);
-						// Override measure_nav to show only the active segment's measures.
-						gv_rebuild_measure_nav_for_segment(
-						    variable_global_exists("playback_context") && is_struct(global.playback_context)
-						    ? floor(real(global.playback_context[$ "active_segment"] ?? 0))
-						    : 0);
+						// Segment-level nav rebuild is set-only; in single-tune mode (especially loop runtime)
+						// keep the bind-time nav map derived from active playback events.
+						var _pc_is_set = variable_global_exists("playback_context")
+							&& is_struct(global.playback_context)
+							&& string(global.playback_context[$ "mode"] ?? "") == "set";
+						if (_pc_is_set) {
+							gv_rebuild_measure_nav_for_segment(
+								floor(real(global.playback_context[$ "active_segment"] ?? 0))
+							);
+						}
 					} else {
 						gv_bind_from_loaded_tune();
 					}

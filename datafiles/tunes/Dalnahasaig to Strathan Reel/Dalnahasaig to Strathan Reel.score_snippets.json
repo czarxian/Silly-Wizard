@@ -1,0 +1,33 @@
+{
+  "tune": "Dalnahasaig to Strathan Reel",
+  "score_manifest_version": 3,
+  "is_transition": true,
+  "transition_refs": {
+    "prior_tune": "T_Dal",
+    "following_tune": "T_SR",
+    "tail_cut_measures": "0",
+    "head_cut_measures": "0"
+  },
+  "transition_score": {
+    "bridge": {
+      "tune": "Dalnahasaig to Strathan Reel",
+      "group": "bridge",
+      "header": "X:1\nT:Dalnahasaig to Strathan Reel\nM:C\nL:1/8\nR:Transition\nQ:106\nK:HP",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "has_pickup": false,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "group": "bridge",
+          "group_index": 0,
+          "body": "e2",
+          "duration_units": 2,
+          "is_pickup": false
+        }
+      ]
+    }
+  }
+}
