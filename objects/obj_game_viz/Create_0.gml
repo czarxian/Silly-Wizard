@@ -4,6 +4,12 @@
 show_debug_message("[TIMELINE] obj_game_viz Create initialized");
 global.timeline_cfg_debug_gui = false;
 
+var _prev_timeline_cfg = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) ? global.timeline_cfg : undefined;
+var _audio_output_offset_ms = (is_struct(_prev_timeline_cfg) && variable_struct_exists(_prev_timeline_cfg, "audio_output_offset_ms")) ? real(variable_struct_get(_prev_timeline_cfg, "audio_output_offset_ms")) : 0;
+var _visual_alignment_offset_ms = (is_struct(_prev_timeline_cfg) && variable_struct_exists(_prev_timeline_cfg, "visual_alignment_offset_ms")) ? real(variable_struct_get(_prev_timeline_cfg, "visual_alignment_offset_ms")) : 0;
+var _input_capture_offset_ms = (is_struct(_prev_timeline_cfg) && variable_struct_exists(_prev_timeline_cfg, "input_capture_offset_ms")) ? real(variable_struct_get(_prev_timeline_cfg, "input_capture_offset_ms")) : 0;
+var _scoring_compare_offset_ms = (is_struct(_prev_timeline_cfg) && variable_struct_exists(_prev_timeline_cfg, "scoring_compare_offset_ms")) ? real(variable_struct_get(_prev_timeline_cfg, "scoring_compare_offset_ms")) : 0;
+
 // Timeline config
 global.timeline_cfg = {
     enabled: true,
@@ -14,12 +20,15 @@ global.timeline_cfg = {
     tune_channel: 2,
     tune_show_other_parts_ghost: true,
     tune_other_parts_alpha: 0.18,
+    audio_output_offset_ms: _audio_output_offset_ms,
+    visual_alignment_offset_ms: _visual_alignment_offset_ms,
+    input_capture_offset_ms: _input_capture_offset_ms,
+    scoring_compare_offset_ms: _scoring_compare_offset_ms,
     // Player MIDI input channels to visualize in tune canvas + notebeam.
     // Keep as array so channel 1 can be enabled later with [0, 1].
     player_channels: [0],
     player_channel: -1,         // -1 = accept all incoming channels
     playhead_audio_lag_ms: 0,  // Delay visual playhead to better match audible MIDI output latency
-    player_time_offset_ms: 0,
     filter_noise_ms: 15,
     core_min_ms: 100,
     padding_px: 8,

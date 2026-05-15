@@ -180,7 +180,7 @@ function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_
 
 /// @function MIDI_process_messages()
 /// @description Process all buffered MIDI input messages for the current frame. Converts raw MIDI to canonical notes, routes to game viz (gv_on_player_note_on/off), passes through to MIDI output, and optionally logs to event history.
-/// @reads   global.midi_input_device, global.midi_output_device, global.chanter_channel, global.midi_input_clock_offset_ms, global.MIDI_chanter, global.tune_start_real, global.EVENT_HISTORY_ENABLED, global.enable_current_note_layer, global.current_tune_name
+/// @reads   global.midi_input_device, global.midi_output_device, global.chanter_channel, global.midi_input_clock_offset_ms, global.MIDI_chanter, global.tune_start_real, global.EVENT_HISTORY_ENABLED, global.enable_current_note_layer, global.current_tune_name, global.timeline_cfg
 /// @writes  global.midi_input_clock_offset_ms (re-anchor on drift)
 /// @objects none (calls gv_on_player_note_on/off, cn_panel_on_player_note_on/off, event_history_add)
 /// @callers obj_game_controller Step (called every frame during active MIDI session)
@@ -319,6 +319,24 @@ function MIDI_process_messages()
 			} else if (status_type == 128) {  // Note Off
 				ev_type = "note_off";
 			}
+			var audio_offset_ms = 0;
+			var visual_offset_ms = 0;
+			var input_offset_ms = 0;
+			var scoring_offset_ms = 0;
+			if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+				audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
+					? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
+					: 0;
+				visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
+					? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
+					: 0;
+				input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+					? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+					: 0;
+				scoring_offset_ms = variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")
+					? real(variable_struct_get(global.timeline_cfg, "scoring_compare_offset_ms"))
+					: 0;
+			}
 			// Raw log for player MIDI input (minimal fields)
 			event_history_add({
 				timestamp_ms: normalized_time,
@@ -329,6 +347,10 @@ function MIDI_process_messages()
 				expected_time_ms: 0,
 				actual_time_ms: normalized_time,
 				delta_ms: 0,
+				canonical_time_ms: normalized_time + input_offset_ms,
+				audio_target_time_ms: normalized_time + audio_offset_ms,
+				visual_target_time_ms: normalized_time + visual_offset_ms,
+				input_aligned_time_ms: normalized_time + input_offset_ms,
 				event_type: ev_type,
 				source: "player",
 				note_midi: normalized_note_midi,
@@ -341,7 +363,11 @@ function MIDI_process_messages()
 				marker_type: "",
 				measure: 0,
 				beat: 0,
-				beat_fraction: 0
+				beat_fraction: 0,
+				audio_output_offset_ms: audio_offset_ms,
+				visual_alignment_offset_ms: visual_offset_ms,
+				input_capture_offset_ms: input_offset_ms,
+				scoring_compare_offset_ms: scoring_offset_ms
 			});
 		}
 		var out_status = byte1;
@@ -465,6 +491,7 @@ function MIDI_scan_output_devices() {
 /// @function MIDI_show_output_devices()
 /// @description Show a dialog listing all available MIDI output device names (debug utility).
 function MIDI_show_output_devices() {
+	var str, i;
 	str = "MIDI OUTPUT DEVICES\n\n";
 	for(i=0; i<midi_output_device_count(); i++)  {
 		str += midi_output_device_name(i)+"\n";

@@ -21,6 +21,22 @@ function scoring_get_player_id() {
     return player_key;
 }
 
+/// @function scoring_calibration_debug_log(_line)
+/// @description Write calibration diagnostic to calibration_debug.log file in datafiles/debug.
+/// @param {string} _line Text line to log
+function scoring_calibration_debug_log(_line) {
+    var _msg = string(_line);
+    show_debug_message("[CALIB_LOG] " + _msg);  // Always show in output for visibility
+    
+    // Write to relative path (GameMaker resolves relative to working_directory which is C:\Users\xian\AppData\Local\Silly_Wizard\)
+    var _log_path = "datafiles/debug/calibration_debug.log";
+    var _f = file_text_open_append(_log_path);
+    if (_f != -1) {
+        file_text_write_string(_f, _msg + "\n");
+        file_text_close(_f);
+    }
+}
+
 /// @function scoring_get_context_key(_tune_id, _player_id, _bpm, _swing, _part_key)
 /// @description Build a canonical context key string for keying scoring history records.
 /// @param {string} _tune_id    Tune identifier
@@ -269,50 +285,176 @@ function scoring_measure_results_to_map(_measure_results) {
 /// @function scoring_apply_run_to_runtime(_run_summary)
 /// @description Store a scoring run summary into all runtime globals and update timeline_state maps. Called at the end of scoring_build_ms_overlap_summary.
 /// @param {struct} _run_summary  Scoring summary struct from scoring_build_ms_overlap_summary
+/// @param {bool} [_promote_selected]  When true, also promote this run to global top-level score fields and selected judge
 /// @reads   global.timeline_state
-/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state.score_selected_judge, global.timeline_state.score_measure_maps
+/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state.score_selected_judge, global.timeline_state.score_measure_maps, global.timeline_state.score_overall_by_judge, global.timeline_state.score_raw_by_judge, global.timeline_state.score_measure_results_by_judge, global.timeline_state.score_by_segment
 /// @objects none
 /// @callers scoring_build_ms_overlap_summary
-function scoring_apply_run_to_runtime(_run_summary) {
+function scoring_apply_run_to_runtime(_run_summary, _promote_selected = true) {
     if (!is_struct(_run_summary)) return;
 
-    global.scoring_last_run = _run_summary;
-
+    var promote_selected = bool(_promote_selected);
     var overall = real(_run_summary.overall_score ?? 0);
-    global.performance_score = overall;
-    global.last_score = overall;
-    global.run_score = overall;
-    global.final_score = overall;
-    global.overall_score = overall;
 
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) {
+        if (promote_selected) {
+            global.scoring_last_run = _run_summary;
+            global.performance_score = overall;
+            global.last_score = overall;
+            global.run_score = overall;
+            global.final_score = overall;
+            global.overall_score = overall;
+        }
         return;
     }
 
-    var judge_id = string(_run_summary.selected_judge_id ?? "ms_overlap");
+    var judge_id = string(_run_summary.judge_id ?? _run_summary.selected_judge_id ?? "ms_overlap");
     var measure_results = variable_struct_exists(_run_summary, "measure_scores")
         ? _run_summary.measure_scores
         : [];
     var map = scoring_measure_results_to_map(measure_results);
 
-    variable_struct_set(global.timeline_state, "score_selected_judge", judge_id);
     if (!variable_struct_exists(global.timeline_state, "score_measure_maps") || !is_struct(global.timeline_state.score_measure_maps)) {
         variable_struct_set(global.timeline_state, "score_measure_maps", {});
     }
     var maps = variable_struct_get(global.timeline_state, "score_measure_maps");
     maps[$ judge_id] = map;
     variable_struct_set(global.timeline_state, "score_measure_maps", maps);
+
+    if (!variable_struct_exists(global.timeline_state, "score_overall_by_judge") || !is_struct(global.timeline_state.score_overall_by_judge)) {
+        variable_struct_set(global.timeline_state, "score_overall_by_judge", {});
+    }
+    var overall_map = variable_struct_get(global.timeline_state, "score_overall_by_judge");
+    overall_map[$ judge_id] = overall;
+    variable_struct_set(global.timeline_state, "score_overall_by_judge", overall_map);
+
+    if (!variable_struct_exists(global.timeline_state, "score_raw_by_judge") || !is_struct(global.timeline_state.score_raw_by_judge)) {
+        variable_struct_set(global.timeline_state, "score_raw_by_judge", {});
+    }
+    var raw_map = variable_struct_get(global.timeline_state, "score_raw_by_judge");
+    raw_map[$ judge_id] = variable_struct_exists(_run_summary, "raw") ? _run_summary.raw : {};
+    variable_struct_set(global.timeline_state, "score_raw_by_judge", raw_map);
+
+    if (!variable_struct_exists(global.timeline_state, "score_measure_results_by_judge") || !is_struct(global.timeline_state.score_measure_results_by_judge)) {
+        variable_struct_set(global.timeline_state, "score_measure_results_by_judge", {});
+    }
+    var results_map = variable_struct_get(global.timeline_state, "score_measure_results_by_judge");
+    results_map[$ judge_id] = measure_results;
+    variable_struct_set(global.timeline_state, "score_measure_results_by_judge", results_map);
+
+    if (variable_struct_exists(_run_summary, "score_by_segment") && is_array(_run_summary.score_by_segment)) {
+        var incoming = _run_summary.score_by_segment;
+        var merged = (variable_struct_exists(global.timeline_state, "score_by_segment") && is_array(global.timeline_state.score_by_segment))
+            ? global.timeline_state.score_by_segment
+            : [];
+
+        var n_in = array_length(incoming);
+        if (!is_array(merged) || array_length(merged) < n_in) {
+            var resized = array_create(n_in, undefined);
+            for (var ri = 0; ri < array_length(merged); ri++) resized[ri] = merged[ri];
+            merged = resized;
+        }
+
+        for (var si = 0; si < n_in; si++) {
+            var src_seg = incoming[si];
+            if (!is_struct(src_seg)) continue;
+
+            var dst_seg = merged[si];
+            if (!is_struct(dst_seg)) dst_seg = {};
+
+            var src_maps = variable_struct_exists(src_seg, "score_measure_maps") && is_struct(src_seg.score_measure_maps)
+                ? src_seg.score_measure_maps
+                : {};
+            var dst_maps = variable_struct_exists(dst_seg, "score_measure_maps") && is_struct(dst_seg.score_measure_maps)
+                ? dst_seg.score_measure_maps
+                : {};
+            dst_maps[$ judge_id] = variable_struct_exists(src_maps, judge_id) ? src_maps[$ judge_id] : scoring_measure_results_to_map(src_seg.measure_scores ?? []);
+            dst_seg.score_measure_maps = dst_maps;
+
+            var dst_results_by_judge = variable_struct_exists(dst_seg, "measure_results_by_judge") && is_struct(dst_seg.measure_results_by_judge)
+                ? dst_seg.measure_results_by_judge
+                : {};
+            dst_results_by_judge[$ judge_id] = variable_struct_exists(src_seg, "measure_scores") ? src_seg.measure_scores : [];
+            dst_seg.measure_results_by_judge = dst_results_by_judge;
+
+            var dst_overall_by_judge = variable_struct_exists(dst_seg, "overall_by_judge") && is_struct(dst_seg.overall_by_judge)
+                ? dst_seg.overall_by_judge
+                : {};
+            dst_overall_by_judge[$ judge_id] = real(src_seg.overall_score ?? 0);
+            dst_seg.overall_by_judge = dst_overall_by_judge;
+
+            var dst_raw_by_judge = variable_struct_exists(dst_seg, "raw_by_judge") && is_struct(dst_seg.raw_by_judge)
+                ? dst_seg.raw_by_judge
+                : {};
+            dst_raw_by_judge[$ judge_id] = variable_struct_exists(src_seg, "raw") ? src_seg.raw : {};
+            dst_seg.raw_by_judge = dst_raw_by_judge;
+
+            if (promote_selected) {
+                dst_seg.measure_scores = variable_struct_exists(src_seg, "measure_scores") ? src_seg.measure_scores : [];
+                dst_seg.overall_score = real(src_seg.overall_score ?? 0);
+                dst_seg.raw = variable_struct_exists(src_seg, "raw") ? src_seg.raw : {};
+                dst_seg.score_selected_judge = judge_id;
+            } else if (!variable_struct_exists(dst_seg, "score_selected_judge")) {
+                var seg_default_judge = variable_struct_exists(global.timeline_state, "score_selected_judge")
+                    ? string(global.timeline_state.score_selected_judge)
+                    : "ms_overlap";
+                if (seg_default_judge == "") seg_default_judge = "ms_overlap";
+                dst_seg.score_selected_judge = seg_default_judge;
+            }
+
+            merged[si] = dst_seg;
+        }
+
+        variable_struct_set(global.timeline_state, "score_by_segment", merged);
+    }
+
+    if (promote_selected) {
+        global.scoring_last_run = _run_summary;
+        global.performance_score = overall;
+        global.last_score = overall;
+        global.run_score = overall;
+        global.final_score = overall;
+        global.overall_score = overall;
+        variable_struct_set(global.timeline_state, "score_selected_judge", judge_id);
+    }
 }
 
-/// @function scoring_build_ms_overlap_summary(_export_info)
+/// @function scoring_shift_player_spans(_spans, _offset_ms)
+/// @description Return a copy of a player span array with all timestamps shifted by _offset_ms. Used to apply scoring_compare_offset_ms before comparison.
+/// @param {array} _spans      Source span array {start_ms, end_ms, lane_idx, ...}
+/// @param {real}  _offset_ms  Millisecond shift (positive = shift later, negative = shift earlier)
+/// @returns {array}  New shifted span array (shallow field copy + adjusted timestamps)
+function scoring_shift_player_spans(_spans, _offset_ms) {
+    var out = [];
+    if (!is_array(_spans)) return out;
+    var n = array_length(_spans);
+    for (var i = 0; i < n; i++) {
+        var s = _spans[i];
+        if (!is_struct(s)) continue;
+        var keys = struct_get_names(s);
+        var copy = {};
+        for (var ki = 0; ki < array_length(keys); ki++) {
+            copy[$ keys[ki]] = s[$ keys[ki]];
+        }
+        copy.start_ms = real(s.start_ms ?? 0) + _offset_ms;
+        copy.end_ms   = real(s.end_ms   ?? 0) + _offset_ms;
+        array_push(out, copy);
+    }
+    return out;
+}
+
+/// @function scoring_build_ms_overlap_summary(_export_info, _judge_id, _score_compare_offset_override_ms, _apply_to_runtime)
 /// @description Run full ms_overlap scoring across all measures (tune or set mode), accumulate per-segment and overall scores, call scoring_apply_run_to_runtime, and return the summary struct.
 /// @param {struct|undefined} [_export_info]  Optional {tune_id, bpm, swing} for context key generation
+/// @param {string} [_judge_id]  Judge id to stamp on the summary (default "ms_overlap")
+/// @param {real|undefined} [_score_compare_offset_override_ms]  Optional override for scoring compare offset; undefined uses timeline_cfg
+/// @param {bool} [_apply_to_runtime]  True to promote this summary as active runtime score, false to cache only
 /// @returns {struct}  Full scoring summary: {schema_version, judge_id, overall_score, measure_scores, raw, ...}
 /// @reads   global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries, score_by_segment), global.playback_context, global.current_bpm, global.swing_mult, global.score_segments_sprites, global.score_snippet_durations, global.score_units_per_measure, global.score_has_pickup
 /// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state (via scoring_apply_run_to_runtime + score_by_segment), global.score_snippet_durations, global.score_units_per_measure, global.score_has_pickup
 /// @objects none
 /// @callers scr_button_scripts (end-of-tune path), obj_game_controller
-function scoring_build_ms_overlap_summary(_export_info = undefined) {
+function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = "ms_overlap", _score_compare_offset_override_ms = undefined, _apply_to_runtime = true) {
     var tune_id = "";
     var bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
     var swing = variable_global_exists("swing_mult") ? string(global.swing_mult) : "";
@@ -339,9 +481,26 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
         }
     }
 
+    var _score_compare_offset_ms = 0;
+    if (!is_undefined(_score_compare_offset_override_ms)) {
+        _score_compare_offset_ms = real(_score_compare_offset_override_ms);
+    } else {
+        _score_compare_offset_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+            && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms"))
+            ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0;
+    }
+    
+    scoring_calibration_debug_log("[JUDGE_BUILD] " + string(_judge_id) + " | override=" + string(_score_compare_offset_override_ms) + " | final_offset=" + string(_score_compare_offset_ms));
+    
+    if (_score_compare_offset_ms != 0 && is_array(player_spans) && array_length(player_spans) > 0) {
+        player_spans = scoring_shift_player_spans(player_spans, _score_compare_offset_ms);
+    }
+
     var _settings = scoring_ms_overlap_get_effective_settings();
     var _count_rests = bool(_settings.count_rests);
-    var judge_id = "ms_overlap";
+    var judge_id = string(_judge_id);
+    if (judge_id == "") judge_id = "ms_overlap";
+    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
 
     // Overall accumulators (aggregated across all scored measures)
     var measures_out = [];
@@ -454,10 +613,19 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
             var _seg_map  = scoring_measure_results_to_map(_seg_measures);
             var _seg_maps = {};
             _seg_maps[$ judge_id] = _seg_map;
+            var _seg_results_by_judge = {};
+            _seg_results_by_judge[$ judge_id] = _seg_measures;
+            var _seg_overall_by_judge = {};
+            _seg_overall_by_judge[$ judge_id] = _seg_overall;
+            var _seg_raw_by_judge = {};
+            _seg_raw_by_judge[$ judge_id] = _seg_raw;
             _score_by_seg[_si] = {
                 score_measure_maps:   _seg_maps,
                 score_selected_judge: judge_id,
                 measure_scores:       _seg_measures,
+                measure_results_by_judge: _seg_results_by_judge,
+                overall_by_judge: _seg_overall_by_judge,
+                raw_by_judge: _seg_raw_by_judge,
                 overall_score:        _seg_overall,
                 raw:                  _seg_raw
             };
@@ -473,9 +641,6 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
             global.score_has_pickup = _saved_has_pickup;
         }
 
-        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
-            global.timeline_state.score_by_segment = _score_by_seg;
-        }
     } else {
         // --- Tune mode: score using current timeline measure entries ---
         var measure_entries = scoring_measure_entries_from_timeline();
@@ -507,8 +672,8 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
 
     var summary = {
         schema_version: 1,
-        judge_id: "ms_overlap",
-        judge_name: "MS Overlap (Objective)",
+        judge_id: judge_id,
+        judge_name: judge_name,
         score_version: "v1",
         player_id: player_key,
         tune_id: tune_id,
@@ -516,13 +681,14 @@ function scoring_build_ms_overlap_summary(_export_info = undefined) {
         swing: swing,
         part_key: "all",
         context_key: scoring_get_context_key(tune_id, player_key, bpm, swing, "all"),
-        selected_judge_id: "ms_overlap",
+        selected_judge_id: judge_id,
         overall_score: overall_score,
         measure_scores: measures_out,
-        raw: raw
+        raw: raw,
+        score_by_segment: _is_set ? _score_by_seg : []
     };
 
-    scoring_apply_run_to_runtime(summary);
+    scoring_apply_run_to_runtime(summary, bool(_apply_to_runtime));
     return summary;
 }
 
@@ -627,13 +793,17 @@ function scoring_get_last_run_summary() {
     return undefined;
 }
 
-/// @function scoring_find_measure_result(_measure_num)
-/// @description Find and return the measure result struct for the given measure number. In set mode, reads the active segment's data; otherwise reads global.scoring_last_run.
+/// @function scoring_find_measure_result(_measure_num, _judge_id)
+/// @description Find and return the measure result struct for the given measure number and judge.
 /// @param {real} _measure_num  Measure number (1-based)
+/// @param {string} [_judge_id] Judge id (default "ms_overlap")
 /// @returns {struct|undefined}  Measure result {measure, score, matching_ms, ...} or undefined
 /// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
 /// @callers scr_game_viz, scoring_get_detail_popup_rows, scoring_get_panel_focus
-function scoring_find_measure_result(_measure_num) {
+function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap") {
+    var judge_id = string(_judge_id);
+    if (judge_id == "") judge_id = "ms_overlap";
+
     // In set mode, look in the active segment's data so measure numbers 1-N
     // resolve to the correct tune instead of always matching tune 1.
     var _is_set = variable_global_exists("playback_context")
@@ -647,10 +817,18 @@ function scoring_find_measure_result(_measure_num) {
         var _by_seg = global.timeline_state.score_by_segment;
         _active = clamp(_active, 0, max(0, array_length(_by_seg) - 1));
         var _seg_data = _by_seg[_active];
-        if (is_struct(_seg_data) && variable_struct_exists(_seg_data, "measure_scores")
-            && is_array(_seg_data.measure_scores)) {
+        if (is_struct(_seg_data)) {
+            var arr = [];
+            if (variable_struct_exists(_seg_data, "measure_results_by_judge")
+                && is_struct(_seg_data.measure_results_by_judge)
+                && variable_struct_exists(_seg_data.measure_results_by_judge, judge_id)
+                && is_array(_seg_data.measure_results_by_judge[$ judge_id])) {
+                arr = _seg_data.measure_results_by_judge[$ judge_id];
+            } else if (variable_struct_exists(_seg_data, "measure_scores") && is_array(_seg_data.measure_scores)) {
+                arr = _seg_data.measure_scores;
+            }
+
             var target = floor(real(_measure_num));
-            var arr = _seg_data.measure_scores;
             for (var i = 0; i < array_length(arr); i++) {
                 var m = arr[i];
                 if (!is_struct(m)) continue;
@@ -661,11 +839,20 @@ function scoring_find_measure_result(_measure_num) {
     }
 
     var summary = scoring_get_last_run_summary();
-    if (!is_struct(summary)) return undefined;
-    if (!variable_struct_exists(summary, "measure_scores") || !is_array(variable_struct_get(summary, "measure_scores"))) return undefined;
+    var arr = [];
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "score_measure_results_by_judge")
+        && is_struct(global.timeline_state.score_measure_results_by_judge)
+        && variable_struct_exists(global.timeline_state.score_measure_results_by_judge, judge_id)
+        && is_array(global.timeline_state.score_measure_results_by_judge[$ judge_id])) {
+        arr = global.timeline_state.score_measure_results_by_judge[$ judge_id];
+    } else {
+        if (!is_struct(summary)) return undefined;
+        if (!variable_struct_exists(summary, "measure_scores") || !is_array(variable_struct_get(summary, "measure_scores"))) return undefined;
+        arr = variable_struct_get(summary, "measure_scores");
+    }
 
     var target = floor(real(_measure_num));
-    var arr = variable_struct_get(summary, "measure_scores");
     for (var i = 0; i < array_length(arr); i++) {
         var m = arr[i];
         if (!is_struct(m)) continue;
@@ -762,48 +949,75 @@ function scoring_get_current_context_stats() {
     return out;
 }
 
+/// @function scoring_format_optional_percent(_v)
+/// @description Format optional numeric score values as integer percent text, preserving "-" for missing values.
+/// @param _v Value from history stats
+/// @returns {string} Formatted percent or "-"
+function scoring_format_optional_percent(_v) {
+    if (!is_numeric(_v) && (string(_v) == "-" || string(_v) == "")) return "-";
+    var _r = real(_v);
+    return (_r > 0 || string(_v) == "0") ? string(floor(clamp(_r, 0, 100))) + "%" : "-";
+}
+
 /// @function scoring_get_judge_table_rows(_measure_num, _judge_id)
 /// @description Build row data for the judge results table in the scoring UI. Returns one row per active judge with score/grade/best/avg/plays fields.
 /// @param {real}   [_measure_num]  Measure to focus on (-1 = overall)
 /// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
 /// @returns {array}  Array of judge row structs {judge_id, judge_name, score, grade, best, avg, plays}
 /// @reads   global.scoring_last_run (via helpers), global.timeline_state (via scoring_find_measure_result)
-function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "ms_overlap") {
+function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
     var rows = [];
     var summary = scoring_get_last_run_summary();
     var context_stats = scoring_get_current_context_stats();
     if (!is_struct(summary)) return rows;
 
-    var run_score = real(variable_struct_exists(summary, "overall_score") ? variable_struct_get(summary, "overall_score") : 0);
-    var display_score = run_score;
+    var judge_filter = string(_judge_id);
+    var registry = scoring_judge_settings_get_registry();
+    if (!is_array(registry)) registry = [];
+
+    var overall_by_judge = (variable_global_exists("timeline_state")
+        && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "score_overall_by_judge")
+        && is_struct(global.timeline_state.score_overall_by_judge))
+        ? global.timeline_state.score_overall_by_judge
+        : {};
+
     var measure_num = floor(real(_measure_num));
-    if (measure_num >= 1) {
-        var m_result = scoring_find_measure_result(measure_num);
-        if (is_struct(m_result)) {
-            display_score = real(variable_struct_exists(m_result, "score") ? variable_struct_get(m_result, "score") : run_score);
-        }
-    }
-    var run_score_text = string(floor(clamp(display_score, 0, 100))) + "%";
-    var grade = scoring_score_to_grade(display_score);
     var plays_text = string(variable_struct_exists(context_stats, "plays_count") ? variable_struct_get(context_stats, "plays_count") : 0);
 
-    array_push(rows, {
-        judge_id: "ms_overlap",
-        judge_name: "MS Overlap",
-        score: run_score_text,
-        grade: grade,
-        best: (function(_v) {
-                if (!is_numeric(_v) && (string(_v) == "-" || string(_v) == "")) return "-";
-                var _r = real(_v);
-                return (_r > 0 || string(_v) == "0") ? string(floor(clamp(_r, 0, 100))) + "%" : "-";
-            })(variable_struct_exists(context_stats, "best_score") ? variable_struct_get(context_stats, "best_score") : "-"),
-        avg: (function(_v) {
-                if (!is_numeric(_v) && (string(_v) == "-" || string(_v) == "")) return "-";
-                var _r = real(_v);
-                return (_r > 0 || string(_v) == "0") ? string(floor(clamp(_r, 0, 100))) + "%" : "-";
-            })(variable_struct_exists(context_stats, "avg_score") ? variable_struct_get(context_stats, "avg_score") : "-"),
-        plays: plays_text
-    });
+    for (var ri = 0; ri < array_length(registry); ri++) {
+        var r = registry[ri];
+        if (!is_struct(r)) continue;
+        if (!bool(r.enabled ?? true)) continue;
+
+        var rid = string(r.id ?? "");
+        if (rid == "") continue;
+        if (judge_filter != "" && judge_filter != rid) continue;
+
+        var run_score = variable_struct_exists(overall_by_judge, rid)
+            ? real(overall_by_judge[$ rid])
+            : (rid == string(summary.judge_id ?? "") ? real(summary.overall_score ?? 0) : 0);
+        var display_score = run_score;
+        if (measure_num >= 1) {
+            var m_result = scoring_find_measure_result(measure_num, rid);
+            if (is_struct(m_result)) {
+                display_score = real(variable_struct_exists(m_result, "score") ? variable_struct_get(m_result, "score") : run_score);
+            }
+        }
+
+        var run_score_text = string(floor(clamp(display_score, 0, 100))) + "%";
+        var grade = scoring_score_to_grade(display_score);
+
+        array_push(rows, {
+            judge_id: rid,
+            judge_name: string(r.name ?? rid),
+            score: run_score_text,
+            grade: grade,
+            best: scoring_format_optional_percent(variable_struct_exists(context_stats, "best_score") ? variable_struct_get(context_stats, "best_score") : "-"),
+            avg: scoring_format_optional_percent(variable_struct_exists(context_stats, "avg_score") ? variable_struct_get(context_stats, "avg_score") : "-"),
+            plays: plays_text
+        });
+    }
 
     return rows;
 }
@@ -818,12 +1032,7 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var rows = [];
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
-
-    if (judge_id != "ms_overlap") {
-        array_push(rows, "Judge: " + judge_id);
-        array_push(rows, "No detail formatter yet.");
-        return rows;
-    }
+    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
 
     var summary = scoring_get_last_run_summary();
 
@@ -851,11 +1060,37 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var raw = {};
     var score_value = 0;
     if (is_struct(_seg_data)) {
-        raw = _seg_data[$ "raw"] ?? {};
-        score_value = real(_seg_data[$ "overall_score"] ?? 0);
+        var _seg_raw_by_judge = variable_struct_exists(_seg_data, "raw_by_judge")
+            ? variable_struct_get(_seg_data, "raw_by_judge")
+            : {};
+        if (is_struct(_seg_raw_by_judge) && variable_struct_exists(_seg_raw_by_judge, judge_id)) {
+            raw = _seg_raw_by_judge[$ judge_id];
+        } else {
+            raw = _seg_data[$ "raw"] ?? {};
+        }
+        var _seg_overall_by_judge = variable_struct_exists(_seg_data, "overall_by_judge")
+            ? variable_struct_get(_seg_data, "overall_by_judge")
+            : {};
+        if (is_struct(_seg_overall_by_judge) && variable_struct_exists(_seg_overall_by_judge, judge_id)) {
+            score_value = real(_seg_overall_by_judge[$ judge_id]);
+        } else {
+            score_value = real(_seg_data[$ "overall_score"] ?? 0);
+        }
     } else if (is_struct(summary)) {
         raw = variable_struct_exists(summary, "raw") ? variable_struct_get(summary, "raw") : {};
         score_value = real(variable_struct_exists(summary, "overall_score") ? variable_struct_get(summary, "overall_score") : 0);
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "score_raw_by_judge")
+            && is_struct(global.timeline_state.score_raw_by_judge)
+            && variable_struct_exists(global.timeline_state.score_raw_by_judge, judge_id)) {
+            raw = global.timeline_state.score_raw_by_judge[$ judge_id];
+        }
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "score_overall_by_judge")
+            && is_struct(global.timeline_state.score_overall_by_judge)
+            && variable_struct_exists(global.timeline_state.score_overall_by_judge, judge_id)) {
+            score_value = real(global.timeline_state.score_overall_by_judge[$ judge_id]);
+        }
     }
     var matching_ms = real(variable_struct_exists(raw, "matching_ms") ? variable_struct_get(raw, "matching_ms") : 0);
     var total_ms = max(1, real(variable_struct_exists(raw, "total_ms") ? variable_struct_get(raw, "total_ms") : 0));
@@ -866,7 +1101,7 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var detail_scope = "overall";
 
     if (measure_num >= 1) {
-        var m = scoring_find_measure_result(measure_num);
+        var m = scoring_find_measure_result(measure_num, judge_id);
         if (is_struct(m)) {
             score_value = real(variable_struct_exists(m, "score") ? variable_struct_get(m, "score") : score_value);
             matching_ms = real(variable_struct_exists(m, "matching_ms") ? variable_struct_get(m, "matching_ms") : matching_ms);
@@ -879,7 +1114,7 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
 
     var mismatch_ms = max(0, total_ms - matching_ms);
 
-    array_push(rows, "Judge: Matching time");
+    array_push(rows, "Judge: " + judge_name);
     array_push(rows, "Scope: " + detail_scope);
     array_push(rows, "Score: " + string(round(clamp(score_value, 0, 100))) + "%");
     array_push(rows, "Matching ms: " + string(round(matching_ms)));
@@ -896,7 +1131,11 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
 /// @param {real} _measure_num  Measure number (1-based)
 /// @returns {array}  String rows
 function scoring_get_measure_popup_rows(_measure_num) {
-    return scoring_get_detail_popup_rows(_measure_num, "ms_overlap");
+    var judge_id = (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "score_selected_judge"))
+        ? string(global.timeline_state.score_selected_judge)
+        : "ms_overlap";
+    return scoring_get_detail_popup_rows(_measure_num, judge_id);
 }
 
 /// @function scoring_get_panel_focus(_measure_num, _judge_id)
@@ -908,7 +1147,7 @@ function scoring_get_measure_popup_rows(_measure_num) {
 function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
     var summary = scoring_get_last_run_summary();
     var judge_id = is_string(_judge_id) && string_length(_judge_id) > 0 ? string(_judge_id) : "ms_overlap";
-    var judge_name = "Matching time";
+    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
     var score_value = 0;
     var subtitle = "overall";
 
@@ -929,15 +1168,29 @@ function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
     }
 
     if (is_struct(_seg_data)) {
-        score_value = real(_seg_data[$ "overall_score"] ?? 0);
+        var _focus_overall_by_judge = variable_struct_exists(_seg_data, "overall_by_judge")
+            ? variable_struct_get(_seg_data, "overall_by_judge")
+            : {};
+        if (is_struct(_focus_overall_by_judge) && variable_struct_exists(_focus_overall_by_judge, judge_id)) {
+            score_value = real(_focus_overall_by_judge[$ judge_id]);
+        } else {
+            score_value = real(_seg_data[$ "overall_score"] ?? 0);
+        }
     } else if (is_struct(summary)) {
-        score_value = real(variable_struct_exists(summary, "overall_score") ? variable_struct_get(summary, "overall_score") : 0);
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "score_overall_by_judge")
+            && is_struct(global.timeline_state.score_overall_by_judge)
+            && variable_struct_exists(global.timeline_state.score_overall_by_judge, judge_id)) {
+            score_value = real(global.timeline_state.score_overall_by_judge[$ judge_id]);
+        } else {
+            score_value = real(variable_struct_exists(summary, "overall_score") ? variable_struct_get(summary, "overall_score") : 0);
+        }
     }
 
     if (is_struct(summary) || is_struct(_seg_data)) {
         var measure_num = floor(real(_measure_num));
         if (measure_num >= 1) {
-            var m = scoring_find_measure_result(measure_num);
+            var m = scoring_find_measure_result(measure_num, judge_id);
             if (is_struct(m)) {
                 score_value = real(variable_struct_exists(m, "score") ? variable_struct_get(m, "score") : score_value);
                 subtitle = "measure " + string(measure_num);
@@ -955,17 +1208,17 @@ function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
 }
 
 /// @function scoring_profile_get_player_id(_player_id)
-/// @description Resolve and sanitize player ID (alphanumeric + _ -) for use as a file path component. Falls back to global.current_player_id then "default".
+/// @description Resolve and sanitize player ID (alphanumeric + _ -) for use as a file path component. Falls back to global.current_player_id then "player_1".
 /// @param {string} [_player_id]  Explicit player ID or undefined
 /// @returns {string}  Lowercase sanitized player ID
 /// @reads   global.current_player_id
 function scoring_profile_get_player_id(_player_id = undefined) {
-    var pid = "default";
+    var pid = "player_1";
     if (!is_undefined(_player_id)) pid = string(_player_id);
     else if (variable_global_exists("current_player_id")) pid = string(global.current_player_id);
 
     pid = string_trim(pid);
-    if (pid == "") pid = "default";
+    if (pid == "") pid = "player_1";
 
     var safe = "";
     var n = string_length(pid);
@@ -979,7 +1232,7 @@ function scoring_profile_get_player_id(_player_id = undefined) {
         safe += is_ok ? ch : "_";
     }
 
-    if (safe == "") safe = "default";
+    if (safe == "") safe = "player_1";
     return string_lower(safe);
 }
 
@@ -1088,12 +1341,13 @@ function scoring_judge_settings_get_store() {
 }
 
 /// @function scoring_judge_settings_get_registry()
-/// @description Build the list of available judges with current settings merged from the store. Currently returns one judge: "ms_overlap".
+/// @description Build the list of available judges with current settings merged from the store.
 /// @returns {array}  Array of {id, name, description, enabled, settings} judge descriptors
 /// @reads   global.judge_settings_store (via get_store)
 function scoring_judge_settings_get_registry() {
     var store = scoring_judge_settings_get_store();
     var enabled = true;
+    var enabled_uncal = true;
     var settings_obj = {
         count_rests:     false,
         grade_a:         90,
@@ -1117,11 +1371,23 @@ function scoring_judge_settings_get_registry() {
             }
         }
     }
+    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap_uncal")) {
+        var entry_uncal = store.judges[$ "ms_overlap_uncal"];
+        if (is_struct(entry_uncal) && variable_struct_exists(entry_uncal, "enabled")) {
+            enabled_uncal = bool(variable_struct_get(entry_uncal, "enabled"));
+        }
+    }
     return [{
         id: "ms_overlap",
-        name: "Matching time",
-        description: "Percent of measure milliseconds where tune and player match.",
+        name: "Matching time (Calibrated)",
+        description: "Percent of measure milliseconds where tune and player match after scoring calibration offset.",
         enabled: enabled,
+        settings: settings_obj
+    }, {
+        id: "ms_overlap_uncal",
+        name: "Matching time (Uncalibrated)",
+        description: "Percent of measure milliseconds where tune and player match with no scoring calibration offset.",
+        enabled: enabled_uncal,
         settings: settings_obj
     }];
 }
@@ -1274,8 +1540,16 @@ function scoring_player_settings_build_payload(_player_id = undefined) {
         metronome_volume:        variable_global_exists("metronome_volume") ? real(global.metronome_volume) : 100,
         set_bpm_percent:         variable_global_exists("player_set_bpm_percent") ? real(global.player_set_bpm_percent) : 1.0,
         notebeam_measures_ahead:  (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_ahead")) ? real(global.timeline_cfg.measures_ahead) : 2.0,
-        notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0
+        notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0,
+        audio_output_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) ? real(global.timeline_cfg.audio_output_offset_ms) : 0,
+        visual_alignment_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")) ? real(global.timeline_cfg.visual_alignment_offset_ms) : 0,
+        input_capture_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) ? real(global.timeline_cfg.input_capture_offset_ms) : 0,
+        scoring_compare_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")) ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0
     };
+
+    if (script_exists(asset_get_index("timing_calibration_build_settings_payload"))) {
+        settings.timing_calibration = timing_calibration_build_settings_payload();
+    }
 
     return {
         schema_version: 1,
@@ -1292,6 +1566,10 @@ function scoring_player_settings_save_for_player(_player_id = undefined) {
     scoring_profile_ensure_player_folder(_player_id);
     var path = scoring_profile_get_app_settings_path(_player_id);
     var payload = scoring_player_settings_build_payload(_player_id);
+    
+    var score_offset = (is_struct(payload) && is_struct(payload.settings)) ? (payload.settings.scoring_compare_offset_ms ?? "MISSING") : "NO_PAYLOAD";
+    scoring_calibration_debug_log("[SAVE] path=" + path + " | scoring_compare_offset_ms=" + string(score_offset));
+    
     return scoring_json_write_struct(path, payload);
 }
 
@@ -1351,6 +1629,8 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
     var in_name_saved = string(variable_struct_exists(s, "midi_input_device_name") ? s[$ "midi_input_device_name"] : "");
     var out_idx_saved = real(variable_struct_exists(s, "midi_output_device") ? s[$ "midi_output_device"] : (variable_global_exists("midi_output_device") ? global.midi_output_device : 0));
     var out_name_saved = string(variable_struct_exists(s, "midi_output_device_name") ? s[$ "midi_output_device_name"] : "");
+    
+    scoring_calibration_debug_log("[LOAD_MIDI] Saved: in='" + in_name_saved + "' out='" + out_name_saved + "'");
 
     if (midi_input_device_count() > 0) {
         global.midi_input_device = scoring_player_settings_resolve_midi_input_index(in_name_saved, in_idx_saved);
@@ -1367,6 +1647,9 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
         global.midi_output_device = 0;
         global.midi_output_device_name = "no MIDI output devices found";
     }
+    
+    scoring_calibration_debug_log("[LOAD_MIDI] Resolved: in='" + global.midi_input_device_name + "' out='" + global.midi_output_device_name + "'");
+    scoring_calibration_debug_log("[LOAD_MIDI] MIDI_chanter='" + (global.MIDI_chanter ?? "MISSING") + "'");
 
     global.midi_input_channel = real(variable_struct_exists(s, "midi_input_channel") ? s[$ "midi_input_channel"] : (variable_global_exists("midi_input_channel") ? global.midi_input_channel : 0));
     global.midi_ouput_channel = real(variable_struct_exists(s, "midi_output_channel") ? s[$ "midi_output_channel"] : (variable_global_exists("midi_ouput_channel") ? global.midi_ouput_channel : 0));
@@ -1383,6 +1666,19 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
         var _cfg = gv_ensure_timeline_cfg_defaults();
         if (variable_struct_exists(s, "notebeam_measures_ahead"))  variable_struct_set(_cfg, "measures_ahead",  max(0.25, real(s[$ "notebeam_measures_ahead"])));
         if (variable_struct_exists(s, "notebeam_measures_behind")) variable_struct_set(_cfg, "measures_behind", max(0.25, real(s[$ "notebeam_measures_behind"])));
+        // NOTE: Do NOT set timing offsets from top-level fields here — let timing_calibration_hydrate_from_settings() be the authoritative source
+        // if (variable_struct_exists(s, "audio_output_offset_ms")) variable_struct_set(_cfg, "audio_output_offset_ms", real(s[$ "audio_output_offset_ms"]));
+        // if (variable_struct_exists(s, "visual_alignment_offset_ms")) variable_struct_set(_cfg, "visual_alignment_offset_ms", real(s[$ "visual_alignment_offset_ms"]));
+        // if (variable_struct_exists(s, "input_capture_offset_ms")) variable_struct_set(_cfg, "input_capture_offset_ms", real(s[$ "input_capture_offset_ms"]));
+        // if (variable_struct_exists(s, "scoring_compare_offset_ms")) variable_struct_set(_cfg, "scoring_compare_offset_ms", real(s[$ "scoring_compare_offset_ms"]));
+    }
+
+    if (script_exists(asset_get_index("timing_calibration_hydrate_from_settings"))) {
+        var _hydrate_ok = timing_calibration_hydrate_from_settings(s);
+        var cfg_offset = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg))
+            ? (global.timeline_cfg.scoring_compare_offset_ms ?? 0)
+            : 0;
+        scoring_calibration_debug_log("[STARTUP_RESULT] hydrate returned " + string(_hydrate_ok) + " | timeline_cfg.scoring_compare_offset_ms=" + string(cfg_offset));
     }
 
     var picker = instance_find(obj_tune_picker, 0);
@@ -2119,6 +2415,13 @@ function scoring_build_loop_iteration_scores() {
     } else if (variable_struct_exists(global.timeline_state, "player_in")
         && is_array(variable_struct_get(global.timeline_state, "player_in"))) {
         player_spans = variable_struct_get(global.timeline_state, "player_in");
+    }
+
+    var _score_compare_offset_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms"))
+        ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0;
+    if (_score_compare_offset_ms != 0 && is_array(player_spans) && array_length(player_spans) > 0) {
+        player_spans = scoring_shift_player_spans(player_spans, _score_compare_offset_ms);
     }
 
     var _settings = scoring_ms_overlap_get_effective_settings();

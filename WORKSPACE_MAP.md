@@ -8,6 +8,20 @@
 
 ---
 
+## Export File Locations (Quick Reference)
+
+When a tune playback completes, exports are written to:
+- **CSV (event history):** `datafiles/performances/{clean_tune_name}/{clean_tune_name}_{timestamp}_{bpm}_{swing}_{grace_override_ms}.csv`
+- **Summary JSON:** `datafiles/performances/{clean_tune_name}/{clean_tune_name}_{timestamp}_{bpm}_{swing}_{grace_override_ms}_summary.json`
+
+Example for "Jock Wilson's Ball" (90 BPM, 0 swing, 30ms grace):
+- `datafiles/performances/Jock Wilsons Ball/Jock Wilsons Ball_20260510-183441_90_0_30.csv`
+- `datafiles/performances/Jock Wilsons Ball/Jock Wilsons Ball_20260510-183441_90_0_30_summary.json`
+
+**Entry point:** `event_history_get_export_info()` in `scr_event_log.gml` builds the paths. Trigger: `export_event_history()` (button 13) or auto-export on playback completion if `global.EVENT_HISTORY_AUTO_EXPORT` is true.
+
+---
+
 ## Documentation Index
 
 | File | Purpose |
@@ -173,6 +187,13 @@ This describes how a tune is triggered and how events flow through the system:
 - Player MIDI input logging remains an active enhancement target (`source: "player"`, actual timing from input device)
 - Metronome generation is currently implemented and contributes beat/measure marker context during playback
 - CSV/export analysis is designed to compare expected/game/player timing as player-input logging expands
+
+### Calibration Handoff (Current)
+- Split timing domains are active in runtime config: `audio_output_offset_ms`, `visual_alignment_offset_ms`, `input_capture_offset_ms`, `scoring_compare_offset_ms`.
+- Non-UI calibration APIs are implemented in `scr_tune_scripts.gml` (session start/probe draft/accept/cancel, per-device profile hydrate/store).
+- Player settings persist `settings.timing_calibration` via `scr_scoring.gml` save/load.
+- Scheduler timing now applies `audio_output_offset_ms` in both timesource and step scheduler paths.
+- Settings v1 calibration controls are wired in `settings_window_layer` and dispatched via `scr_button_scripts` cases 31-37 (mode, manual nudge, run, probe draft, accept, cancel, apply profile).
 
 ---
 
@@ -354,7 +375,7 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.EMBELLISHMENT_CONFIG` | struct | BPM-aware gracenote timing constants — see struct schema below | `obj_game_controller` Create | `scr_embellishments` `embellishment_to_notes()` |
 | `global.METRONOME_DRUM_PROFILES` | struct | Named drum note-mapping profiles: `{"General MIDI": {kick, snare, hi_hat, …}}` | `obj_game_controller` Create | `scr_metronome` |
 | `global.current_metronome_drum_profile` | string | Active profile key (e.g. `"General MIDI"`) | `obj_game_controller` Create | `scr_metronome` |
-| `global.timeline_cfg` | struct | Viz config: `{enabled, tune_channel, tune_show_other_parts_ghost, tune_other_parts_alpha, score_lane_debug_log, score_lane_debug_boundary_window_ms, score_lane_debug_focus_title, score_lane_debug_file_log, score_lane_debug_file_path, score_lane_anchor_guides_enabled, score_lane_anchor_guide_color, score_lane_anchor_guide_alpha, score_lane_anchor_guide_width, ...}` | `obj_game_controller` Create | `scr_game_viz` |
+| `global.timeline_cfg` | struct | Viz/timing config: `{enabled, tune_channel, tune_show_other_parts_ghost, tune_other_parts_alpha, audio_output_offset_ms, visual_alignment_offset_ms, input_capture_offset_ms, scoring_compare_offset_ms, score_lane_debug_log, score_lane_debug_boundary_window_ms, score_lane_debug_focus_title, score_lane_debug_file_log, score_lane_debug_file_path, score_lane_anchor_guides_enabled, score_lane_anchor_guide_color, score_lane_anchor_guide_alpha, score_lane_anchor_guide_width, ...}` | `obj_game_controller` Create | `scr_game_viz` |
 | `global.timeline_state` | struct | Full runtime playback/viz state — see struct schema below | `obj_game_viz` Create | `scr_game_viz`, `scr_scoring`, `scr_tune_scripts` |
 | `global.active_set` | struct | Loaded set metadata + segments + score override plan — see struct schema below | `scr_set_scripts` `scr_set_init_global()` | `scr_set_scripts`, `scr_button_scripts`, `scr_scoring` |
 | `global.playback_events` | array | Stitched MIDI + marker event array (shared by single-tune and set paths) | `scr_set_scripts` / `scr_button_scripts` | `scr_tune_scripts`, `scr_game_viz`, `scr_scoring` |
@@ -373,7 +394,7 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.EVENT_HISTORY_ENABLED` | bool | Master on/off for event logging | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.EVENT_HISTORY_AUTO_EXPORT` | bool | Auto-export CSV after playback ends | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.scoring_last_run` | struct\|undefined | Result of most recent scoring run; undefined until first run | `scr_scoring` (lazy init) | `scr_scoring`, UI display |
-| `global.timing_calibration` | struct | Calibration session state: `{active, status, tune_filename, applied_offset_ms, …}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions |
+| `global.timing_calibration` | struct | Calibration/session state: `{active, status, calibration_mode, active_device_key, device_profiles, session_previous_offsets, session_draft_offsets, session_has_draft, audio_offset_ms, visual_offset_ms, input_offset_ms, scoring_offset_ms, jitter_summary, ...}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions |
 | `global.metronome_mode` | real | 0=None 1=Click 2=Drums | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts`, `scr_scoring` |
 | `global.metronome_pattern_selection` | real | Index into `global.metronome_pattern_options` | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
 | `global.metronome_volume` | real | MIDI velocity 0–127 | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
@@ -636,7 +657,7 @@ The nested `"metadata"` wrapper structure is **not supported** and will cause th
   - Default fallback in code: `score_lane_debug.log` (relative to GameMaker `working_directory`).
   - Current workspace example file: `datafiles/debug/score_lane_debug.latest.log`.
 - **Event history and performance exports**:
-  - Event CSV export writes under `datafiles/` via `event_history_export_csv`.
+  - Event CSV export writes under `datafiles/` via `event_history_export_csv` and includes split timing columns (`canonical_time_ms`, `audio_target_time_ms`, `visual_target_time_ms`, `input_aligned_time_ms`, plus offset columns).
   - Session/performance artifacts write under `datafiles/performances/`.
 
 Troubleshooting tip: for BPM issues you can use either Output or the score-lane log file (Logs ON). For score/image mapping issues, use the score-lane file log.

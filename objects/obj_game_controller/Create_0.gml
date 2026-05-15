@@ -192,14 +192,22 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
 	global.Midi_current_event_time=0;	
 	global.Midi_next_event_deltatime=0;
 
-// Load judge settings for the default player on startup
+// Ensure active player identity exists before loading any per-player settings.
+if (!variable_global_exists("current_player_index")) {
+	global.current_player_index = 0;
+}
+if (!variable_global_exists("current_player_id") || string_trim(string(global.current_player_id)) == "") {
+	global.current_player_id = "player_1";
+}
+
+// Load settings for the active player on startup.
 if (script_exists(asset_get_index("scoring_judge_settings_load_for_player"))) {
-	scoring_judge_settings_load_for_player();
+	scoring_judge_settings_load_for_player(global.current_player_id);
 }
 if (script_exists(asset_get_index("scoring_player_settings_load_for_player"))) {
-	scoring_player_settings_load_for_player();
+	scoring_player_settings_load_for_player(global.current_player_id);
 }
 if (script_exists(asset_get_index("scoring_tune_overrides_load_for_player"))) {
-	scoring_tune_overrides_load_for_player();
+	scoring_tune_overrides_load_for_player(global.current_player_id);
 }
 

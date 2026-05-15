@@ -48,7 +48,7 @@ function gv_ensure_player_surface_cache(_width, _height) {
 /// @param _ry2 Bottom clip boundary (row y2)
 /// @param _playhead_ms Current playhead position in milliseconds
 /// @reads global.timeline_state (player_in, pending_player, ms_behind, ms_ahead)
-/// @reads global.timeline_cfg (player_bar_color, player_bar_alpha, player_time_offset_ms, etc.)
+/// @reads global.timeline_cfg (player_bar_color, player_bar_alpha, input_capture_offset_ms, etc.)
 /// @callers scr_game_viz (Draw event, replaces per-frame span loop)
 function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1, _ry1, _rx2, _ry2, _playhead_ms) {
     // Render all player spans to cached surface (replaces gv_draw_player_row inner loop logic)
@@ -70,8 +70,8 @@ function gv_draw_player_row_to_surface(_surface, _surf_width, _surf_height, _rx1
     now_ratio = clamp(now_ratio, 0.05, 0.95);
     var ms_behind = global.timeline_state.ms_behind;
     var ms_ahead = global.timeline_state.ms_ahead;
-    var player_offset_ms = variable_struct_exists(global.timeline_cfg, "player_time_offset_ms")
-        ? real(global.timeline_cfg.player_time_offset_ms)
+    var player_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+        ? real(global.timeline_cfg.input_capture_offset_ms)
         : 0;
     var player_bar_color = variable_struct_exists(global.timeline_cfg, "player_bar_color")
         ? global.timeline_cfg.player_bar_color

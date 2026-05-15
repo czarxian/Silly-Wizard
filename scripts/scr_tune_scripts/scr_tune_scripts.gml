@@ -34,15 +34,77 @@ function timing_calibration_ensure_state() {
         global.timing_calibration = {
             active: false,
             status: "idle",
-            tune_filename: "tunes/Calibrate.json",
-            previous_offset_ms: 0,
-            applied_offset_ms: 0,
+            tune_filename: "Calibration/Calibration.json",
+            calibration_mode: "balanced",
+            active_device_key: "",
+            device_profiles: {},
+            audio_offset_ms: 0,
+            visual_offset_ms: 0,
+            input_offset_ms: 0,
+            scoring_offset_ms: 0,
+            session_has_draft: false,
+            session_previous_offsets: {
+                audio_output_offset_ms: 0,
+                visual_alignment_offset_ms: 0,
+                input_capture_offset_ms: 0,
+                scoring_compare_offset_ms: 0
+            },
+            session_draft_offsets: {
+                audio_output_offset_ms: 0,
+                visual_alignment_offset_ms: 0,
+                input_capture_offset_ms: 0,
+                scoring_compare_offset_ms: 0
+            },
+            last_recommended_offset_ms: 0,
             last_match_count: 0,
             last_median_delta_ms: 0,
             last_message: "Timing calibration has not been run.",
             requested_at_ms: 0,
             completed_at_ms: 0,
-            count_in_measures: 2
+            count_in_measures: 2,
+            jitter_summary: {
+                updated_at_ms: 0,
+                scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+                controller_step_interval_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+                midi_process_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+                draw_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 }
+            }
+        };
+    }
+
+    var state = global.timing_calibration;
+    if (!variable_struct_exists(state, "calibration_mode")) state.calibration_mode = "balanced";
+    if (!variable_struct_exists(state, "active_device_key")) state.active_device_key = "";
+    if (!variable_struct_exists(state, "device_profiles") || !is_struct(state.device_profiles)) state.device_profiles = {};
+    if (!variable_struct_exists(state, "audio_offset_ms")) state.audio_offset_ms = 0;
+    if (!variable_struct_exists(state, "visual_offset_ms")) state.visual_offset_ms = 0;
+    if (!variable_struct_exists(state, "input_offset_ms")) state.input_offset_ms = 0;
+    if (!variable_struct_exists(state, "scoring_offset_ms")) state.scoring_offset_ms = 0;
+    if (!variable_struct_exists(state, "session_has_draft")) state.session_has_draft = false;
+    if (!variable_struct_exists(state, "session_previous_offsets") || !is_struct(state.session_previous_offsets)) {
+        state.session_previous_offsets = {
+            audio_output_offset_ms: 0,
+            visual_alignment_offset_ms: 0,
+            input_capture_offset_ms: 0,
+            scoring_compare_offset_ms: 0
+        };
+    }
+    if (!variable_struct_exists(state, "session_draft_offsets") || !is_struct(state.session_draft_offsets)) {
+        state.session_draft_offsets = {
+            audio_output_offset_ms: 0,
+            visual_alignment_offset_ms: 0,
+            input_capture_offset_ms: 0,
+            scoring_compare_offset_ms: 0
+        };
+    }
+    if (!variable_struct_exists(state, "last_recommended_offset_ms")) state.last_recommended_offset_ms = 0;
+    if (!variable_struct_exists(state, "jitter_summary") || !is_struct(state.jitter_summary)) {
+        state.jitter_summary = {
+            updated_at_ms: 0,
+            scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            controller_step_interval_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            midi_process_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            draw_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 }
         };
     }
 
@@ -63,6 +125,199 @@ function timing_calibration_get_status_text() {
 function timing_calibration_is_active() {
     var state = timing_calibration_ensure_state();
     return state.active;
+}
+
+/// @function timing_calibration_normalize_mode(_mode)
+/// @description Normalize calibration mode text to one of "click", "visual", or "balanced".
+/// @param _mode Requested mode label
+/// @returns Normalized mode string
+function timing_calibration_normalize_mode(_mode) {
+    var mode = string_lower(string(_mode));
+    if (mode == "click" || mode == "visual" || mode == "balanced") return mode;
+    return "balanced";
+}
+
+/// @function timing_calibration_get_current_offsets()
+/// @description Return current split offsets from global.timeline_cfg.
+/// @returns Struct {audio_output_offset_ms, visual_alignment_offset_ms, input_capture_offset_ms, scoring_compare_offset_ms}
+/// @reads global.timeline_cfg (via gv_ensure_timeline_cfg_defaults)
+function timing_calibration_get_current_offsets() {
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var audio_offset_ms = 0;
+    var visual_offset_ms = 0;
+    var input_offset_ms = 0;
+    var score_offset_ms = 0;
+    if (variable_struct_exists(cfg, "audio_output_offset_ms")) audio_offset_ms = real(variable_struct_get(cfg, "audio_output_offset_ms"));
+    if (variable_struct_exists(cfg, "visual_alignment_offset_ms")) visual_offset_ms = real(variable_struct_get(cfg, "visual_alignment_offset_ms"));
+    if (variable_struct_exists(cfg, "input_capture_offset_ms")) input_offset_ms = real(variable_struct_get(cfg, "input_capture_offset_ms"));
+    if (variable_struct_exists(cfg, "scoring_compare_offset_ms")) score_offset_ms = real(variable_struct_get(cfg, "scoring_compare_offset_ms"));
+
+    return {
+        audio_output_offset_ms: audio_offset_ms,
+        visual_alignment_offset_ms: visual_offset_ms,
+        input_capture_offset_ms: input_offset_ms,
+        scoring_compare_offset_ms: score_offset_ms
+    };
+}
+
+/// @function timing_calibration_get_device_key()
+/// @description Build a stable per-device signature key for calibration profiles.
+/// @returns Device key string
+/// @reads global.midi_input_device_name, global.midi_output_device_name, global.MIDI_chanter
+function timing_calibration_get_device_key() {
+    var midi_in = variable_global_exists("midi_input_device_name") ? string(global.midi_input_device_name) : "midi_in_unknown";
+    var midi_out = variable_global_exists("midi_output_device_name") ? string(global.midi_output_device_name) : "midi_out_unknown";
+    var chanter = variable_global_exists("MIDI_chanter") ? string(global.MIDI_chanter) : "default";
+    return string_lower(string_trim(midi_in)) + "|" + string_lower(string_trim(midi_out)) + "|" + string_lower(string_trim(chanter));
+}
+
+/// @function timing_calibration_recommend_offsets_for_mode(_recommended_ms, _mode, _base_offsets)
+/// @description Convert a probe recommendation into split domain offsets for the selected mode.
+/// @param _recommended_ms Probe recommendation in ms
+/// @param _mode Mode string (click/visual/balanced)
+/// @param _base_offsets Base offsets struct to modify
+/// @returns Struct offsets in split format
+function timing_calibration_recommend_offsets_for_mode(_recommended_ms, _mode, _base_offsets) {
+    var mode = timing_calibration_normalize_mode(_mode);
+    var rec_ms = real(_recommended_ms);
+    var base = is_struct(_base_offsets) ? _base_offsets : timing_calibration_get_current_offsets();
+
+    var out = {
+        audio_output_offset_ms: real(base.audio_output_offset_ms ?? 0),
+        visual_alignment_offset_ms: real(base.visual_alignment_offset_ms ?? 0),
+        input_capture_offset_ms: real(base.input_capture_offset_ms ?? 0),
+        scoring_compare_offset_ms: real(base.scoring_compare_offset_ms ?? 0)
+    };
+
+    if (mode == "click") {
+        out.input_capture_offset_ms += rec_ms;
+        out.scoring_compare_offset_ms += rec_ms;
+    } else if (mode == "visual") {
+        out.visual_alignment_offset_ms += rec_ms;
+        out.scoring_compare_offset_ms += rec_ms;
+    } else {
+        out.visual_alignment_offset_ms += rec_ms * 0.5;
+        out.input_capture_offset_ms += rec_ms * 0.5;
+        out.scoring_compare_offset_ms += rec_ms;
+    }
+
+    return out;
+}
+
+/// @function timing_calibration_store_current_device_profile(_mode)
+/// @description Persist current split offsets to the active device profile in calibration state.
+/// @param _mode Optional calibration mode label
+/// @returns Struct profile stored for current device
+/// @reads global.timeline_cfg (via timing_calibration_get_current_offsets)
+/// @writes global.timing_calibration.device_profiles, global.timing_calibration.active_device_key
+function timing_calibration_store_current_device_profile(_mode = undefined) {
+    var state = timing_calibration_ensure_state();
+    var mode = is_undefined(_mode) ? timing_calibration_normalize_mode(state.calibration_mode) : timing_calibration_normalize_mode(_mode);
+    var device_key = timing_calibration_get_device_key();
+    var offsets = timing_calibration_get_current_offsets();
+    
+    scoring_calibration_debug_log("[STORE_PROFILE] device_key='" + device_key + "' | score_ms=" + string(offsets.scoring_compare_offset_ms ?? 0));
+
+    state.calibration_mode = mode;
+    state.active_device_key = device_key;
+    state.device_profiles[$ device_key] = {
+        mode: mode,
+        audio_output_offset_ms: real(offsets.audio_output_offset_ms ?? 0),
+        visual_alignment_offset_ms: real(offsets.visual_alignment_offset_ms ?? 0),
+        input_capture_offset_ms: real(offsets.input_capture_offset_ms ?? 0),
+        scoring_compare_offset_ms: real(offsets.scoring_compare_offset_ms ?? 0),
+        updated_at_ms: timing_get_engine_now_ms()
+    };
+
+    return state.device_profiles[$ device_key];
+}
+
+/// @function timing_calibration_apply_profile_for_current_device()
+/// @description Apply saved split offsets for the active device profile if one exists.
+/// @returns True if profile existed and was applied
+/// @writes global.timeline_cfg.* offsets (via timing_calibration_apply_offsets)
+function timing_calibration_apply_profile_for_current_device() {
+    var state = timing_calibration_ensure_state();
+    var device_key = timing_calibration_get_device_key();
+    state.active_device_key = device_key;
+    
+    scoring_calibration_debug_log("[APPLY_PROFILE] Attempting to match device_key: '" + device_key + "'");
+    
+    if (!is_struct(state.device_profiles)) {
+        scoring_calibration_debug_log("[APPLY_PROFILE] device_profiles is not a struct");
+        return false;
+    }
+    
+    if (!variable_struct_exists(state.device_profiles, device_key)) {
+        var available_keys = struct_get_names(state.device_profiles);
+        scoring_calibration_debug_log("[APPLY_PROFILE] Key NOT found. Available: " + string(available_keys));
+        return false;
+    }
+
+    var prof = state.device_profiles[$ device_key];
+    if (!is_struct(prof)) {
+        scoring_calibration_debug_log("[APPLY_PROFILE] Profile is not a struct");
+        return false;
+    }
+    
+    var score_ms = real(prof.scoring_compare_offset_ms ?? 0);
+    scoring_calibration_debug_log("[APPLY_PROFILE] SUCCESS! Applying score_ms=" + string(score_ms));
+    state.calibration_mode = timing_calibration_normalize_mode(prof.mode ?? state.calibration_mode);
+    timing_calibration_apply_offsets(
+        real(prof.audio_output_offset_ms ?? 0),
+        real(prof.visual_alignment_offset_ms ?? 0),
+        real(prof.input_capture_offset_ms ?? 0),
+        score_ms,
+        "profile-load"
+    );
+    return true;
+}
+
+/// @function timing_calibration_build_settings_payload()
+/// @description Build calibration settings payload for player app settings save.
+/// @returns Struct payload for embedding under app settings
+function timing_calibration_build_settings_payload() {
+    var state = timing_calibration_ensure_state();
+    return {
+        calibration_mode: timing_calibration_normalize_mode(state.calibration_mode),
+        active_device_key: string(state.active_device_key ?? ""),
+        device_profiles: state.device_profiles
+    };
+}
+
+/// @function timing_calibration_hydrate_from_settings(_settings)
+/// @description Restore calibration settings from a saved app settings payload and apply current-device profile.
+/// @param _settings Settings struct loaded from app_settings.json
+/// @returns True if a matching current-device profile was applied
+/// @writes global.timing_calibration.*
+function timing_calibration_hydrate_from_settings(_settings) {
+    var state = timing_calibration_ensure_state();
+    if (!is_struct(_settings)) {
+        scoring_calibration_debug_log("[HYDRATE] _settings is not a struct - hydration failed");
+        return false;
+    }
+
+    var tc = variable_struct_exists(_settings, "timing_calibration") && is_struct(variable_struct_get(_settings, "timing_calibration"))
+        ? variable_struct_get(_settings, "timing_calibration")
+        : _settings;
+    
+    scoring_calibration_debug_log("[HYDRATE] Found timing_calibration: device_profiles=" + string(variable_struct_exists(tc, "device_profiles")));
+
+    if (variable_struct_exists(tc, "calibration_mode")) {
+        state.calibration_mode = timing_calibration_normalize_mode(tc[$ "calibration_mode"]);
+    }
+    if (variable_struct_exists(tc, "active_device_key")) {
+        state.active_device_key = string(tc[$ "active_device_key"]);
+    }
+    if (variable_struct_exists(tc, "device_profiles") && is_struct(tc[$ "device_profiles"])) {
+        state.device_profiles = tc[$ "device_profiles"];
+        var dp_keys = struct_get_names(tc[$ "device_profiles"]);
+        scoring_calibration_debug_log("[HYDRATE] Loaded device_profiles with " + string(array_length(dp_keys)) + " keys");
+    }
+
+    var result = timing_calibration_apply_profile_for_current_device();
+    scoring_calibration_debug_log("[HYDRATE] apply_profile_for_current_device returned: " + string(result));
+    return result;
 }
 
 /// @function timing_calibration_collect_expected_note_ons()
@@ -227,7 +482,7 @@ function timing_calibration_median(_values) {
 /// @description Collect and match this run's player events against the planned tune; return analysis result.
 /// @param _max_delta_ms Max window for matching (default 350ms)
 /// @param _min_matches Minimum successful matches required (default 8)
-/// @returns Struct { success, match_count, median_delta_ms, recommended_offset_ms, message }
+/// @returns Struct { success, match_count, filtered_match_count, filter_label, median_delta_ms, recommended_offset_ms, message }
 function timing_calibration_analyze_current_run(_max_delta_ms = 350, _min_matches = 8) {
     var max_delta_ms = max(50, real(_max_delta_ms));
     var min_matches = max(3, floor(real(_min_matches)));
@@ -241,6 +496,8 @@ function timing_calibration_analyze_current_run(_max_delta_ms = 350, _min_matche
         return {
             success: false,
             match_count: match_count,
+            filtered_match_count: 0,
+            filter_label: "none",
             median_delta_ms: 0,
             recommended_offset_ms: 0,
             message: "Timing probe incomplete: matched " + string(match_count)
@@ -248,16 +505,50 @@ function timing_calibration_analyze_current_run(_max_delta_ms = 350, _min_matche
         };
     }
 
-    var median_delta_ms = timing_calibration_median(deltas);
+    var filtered_deltas = deltas;
+    var filtered_match_count = match_count;
+    var filter_label = "full";
+
+    // Use the interquartile core when there are enough matches to reduce human outlier influence.
+    if (match_count >= 8) {
+        var sorted = array_create(match_count, 0);
+        for (var i = 0; i < match_count; i++) {
+            sorted[i] = real(deltas[i]);
+        }
+        array_sort(sorted, function(a, b) { return real(a) - real(b); });
+
+        var q1_idx = floor((match_count - 1) * 0.25);
+        var q3_idx = floor((match_count - 1) * 0.75);
+        if (q3_idx < q1_idx) q3_idx = q1_idx;
+
+        var core = [];
+        for (var ci = q1_idx; ci <= q3_idx; ci++) {
+            array_push(core, real(sorted[ci]));
+        }
+
+        var core_count = array_length(core);
+        var min_core_count = max(3, ceil(min_matches * 0.5));
+        if (core_count >= min_core_count) {
+            filtered_deltas = core;
+            filtered_match_count = core_count;
+            filter_label = "middle50";
+        }
+    }
+
+    var median_delta_ms = timing_calibration_median(filtered_deltas);
     var recommended_offset_ms = -median_delta_ms;
     return {
         success: true,
         match_count: match_count,
+        filtered_match_count: filtered_match_count,
+        filter_label: filter_label,
         median_delta_ms: median_delta_ms,
         recommended_offset_ms: recommended_offset_ms,
         message: "Timing probe: recommended offset " + string_format(recommended_offset_ms, 0, 1)
-            + " ms from " + string(match_count)
-            + " matches (median delta " + string_format(median_delta_ms, 0, 1) + " ms)."
+            + " ms from " + string(filtered_match_count)
+            + " / " + string(match_count)
+            + " matches (" + filter_label
+            + " median delta " + string_format(median_delta_ms, 0, 1) + " ms)."
     };
 }
 
@@ -288,6 +579,73 @@ function timing_calibration_probe_from_current_run() {
     }
 
     return result;
+}
+
+/// @function timing_calibration_summarize_ring_buffer(_buf, _count)
+/// @description Compute p50/p95/p99/max/n stats from a numeric ring buffer snapshot.
+/// @param _buf Numeric array buffer
+/// @param _count Number of valid samples in buffer
+/// @returns Struct {p50, p95, p99, max, n}
+function timing_calibration_summarize_ring_buffer(_buf, _count) {
+    var n = min(array_length(_buf), max(0, floor(real(_count))));
+    if (n <= 0) {
+        return { p50: 0, p95: 0, p99: 0, max: 0, n: 0 };
+    }
+
+    var vals = array_create(n, 0);
+    for (var i = 0; i < n; i++) {
+        vals[i] = max(0, real(_buf[i]));
+    }
+    array_sort(vals, true);
+
+    var i50 = floor((n - 1) * 0.50);
+    var i95 = floor((n - 1) * 0.95);
+    var i99 = floor((n - 1) * 0.99);
+    return {
+        p50: real(vals[i50]),
+        p95: real(vals[i95]),
+        p99: real(vals[i99]),
+        max: real(vals[n - 1]),
+        n: n
+    };
+}
+
+/// @function timing_calibration_capture_jitter_summary()
+/// @description Snapshot current RT jitter diagnostics into global.timing_calibration.jitter_summary.
+/// @returns Struct jitter summary
+/// @reads global.rt_budget_sched_late_buf/count, global.rt_budget_controller_step_dt_buf/count, global.rt_budget_midi_step_buf/count, global.rt_budget_draw_buf/count
+/// @writes global.timing_calibration.jitter_summary
+/// @callers tune_cleanup_after_finish
+function timing_calibration_capture_jitter_summary() {
+    var state = timing_calibration_ensure_state();
+
+    var sched = (variable_global_exists("rt_budget_sched_late_buf") && is_array(global.rt_budget_sched_late_buf))
+        ? timing_calibration_summarize_ring_buffer(global.rt_budget_sched_late_buf, real(global.rt_budget_sched_late_count ?? 0))
+        : { p50: 0, p95: 0, p99: 0, max: 0, n: 0 };
+    var ctrl_dt = (variable_global_exists("rt_budget_controller_step_dt_buf") && is_array(global.rt_budget_controller_step_dt_buf))
+        ? timing_calibration_summarize_ring_buffer(global.rt_budget_controller_step_dt_buf, real(global.rt_budget_controller_step_dt_count ?? 0))
+        : { p50: 0, p95: 0, p99: 0, max: 0, n: 0 };
+    var midi = (variable_global_exists("rt_budget_midi_step_buf") && is_array(global.rt_budget_midi_step_buf))
+        ? timing_calibration_summarize_ring_buffer(global.rt_budget_midi_step_buf, real(global.rt_budget_midi_step_count ?? 0))
+        : { p50: 0, p95: 0, p99: 0, max: 0, n: 0 };
+    var draw = (variable_global_exists("rt_budget_draw_buf") && is_array(global.rt_budget_draw_buf))
+        ? timing_calibration_summarize_ring_buffer(global.rt_budget_draw_buf, real(global.rt_budget_draw_count ?? 0))
+        : { p50: 0, p95: 0, p99: 0, max: 0, n: 0 };
+
+    state.jitter_summary = {
+        updated_at_ms: timing_get_engine_now_ms(),
+        scheduler_late_ms: sched,
+        controller_step_interval_ms: ctrl_dt,
+        midi_process_ms: midi,
+        draw_ms: draw
+    };
+
+    show_debug_message("[CALIBRATION] jitter snapshot sched_p95=" + string_format(real(sched.p95 ?? 0), 0, 3)
+        + " ctrl_dt_p95=" + string_format(real(ctrl_dt.p95 ?? 0), 0, 3)
+        + " midi_p95=" + string_format(real(midi.p95 ?? 0), 0, 3)
+        + " draw_p95=" + string_format(real(draw.p95 ?? 0), 0, 3));
+
+    return state.jitter_summary;
 }
 
 
@@ -1070,11 +1428,34 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
 
                 var expected_elapsed = real(item.expected_time_ms ?? 0);
                 var actual_elapsed = real(item.actual_time_ms ?? expected_elapsed);
+                var audio_offset_ms = 0;
+                var visual_offset_ms = 0;
+                var input_offset_ms = 0;
+                var scoring_offset_ms = 0;
+                if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+                    audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
+                        : 0;
+                    visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
+                        : 0;
+                    input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+                        : 0;
+                    scoring_offset_ms = variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "scoring_compare_offset_ms"))
+                        : 0;
+                }
+
                 event_history_add({
                     timestamp_ms: actual_elapsed,
                     expected_time_ms: expected_elapsed,
                     actual_time_ms: actual_elapsed,
                     delta_ms: actual_elapsed - expected_elapsed,
+                    canonical_time_ms: expected_elapsed,
+                    audio_target_time_ms: expected_elapsed + audio_offset_ms,
+                    visual_target_time_ms: expected_elapsed + visual_offset_ms,
+                    input_aligned_time_ms: actual_elapsed + input_offset_ms,
                     event_type: ev_type,
                     source: "game",
                     note_midi: ev_note,
@@ -1088,6 +1469,10 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
                     measure: ev_measure,
                     beat: ev_beat,
                     beat_fraction: ev_beat_fraction,
+                    audio_output_offset_ms: audio_offset_ms,
+                    visual_alignment_offset_ms: visual_offset_ms,
+                    input_capture_offset_ms: input_offset_ms,
+                    scoring_compare_offset_ms: scoring_offset_ms,
                     loop_iteration: struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : 0
                 });
             }
@@ -1192,7 +1577,14 @@ function tune_start(_tune_events) {
     // Anchor real playback start before timer begins
     global.tune_start_real = timing_get_engine_now_ms();
 
-    var first_due_ms = real(global.tune_event_groups[0].time ?? 0);
+    var audio_sched_offset_ms = 0;
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+        if (variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
+            audio_sched_offset_ms = real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"));
+        }
+    }
+    var first_due_ms = real(global.tune_event_groups[0].time ?? 0) + audio_sched_offset_ms;
+    first_due_ms = max(0.001, first_due_ms);
     show_debug_message("delta_ms " + string(first_due_ms)); //For testing only
     if (use_step_scheduler) {
         global.tune_timer = noone;
@@ -1244,8 +1636,15 @@ function script_tune_callback_batched() {
         global.loop_runtime_current_iteration = floor(real(group.loop_iteration ?? 0));
     }
     var real_elapsed = timing_get_engine_now_ms() - global.tune_start_real;
-    var expected_elapsed = group.time;
-    tune_rt_budget_diag_record_scheduler_late_ms(real_elapsed - expected_elapsed);
+    var expected_elapsed = real(group.time ?? 0);
+    var audio_sched_offset_ms = 0;
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+        if (variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
+            audio_sched_offset_ms = real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"));
+        }
+    }
+    var scheduled_elapsed = expected_elapsed + audio_sched_offset_ms;
+    tune_rt_budget_diag_record_scheduler_late_ms(real_elapsed - scheduled_elapsed);
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.last_dispatched_expected_ms = real(expected_elapsed);
     }
@@ -1263,7 +1662,7 @@ function script_tune_callback_batched() {
     // Temp: log first and last few groups to verify delta calculation
     if ((!variable_global_exists("PLAYBACK_DEBUG_GROUP_TIMING") || global.PLAYBACK_DEBUG_GROUP_TIMING)
         && (global.tune_group_index < 3 || global.tune_group_index > array_length(global.tune_event_groups) - 3)) {
-        show_debug_message("Group " + string(global.tune_group_index) + " (" + string(n_group_events) + " events): real=" + string(real_elapsed) + " expected=" + string(expected_elapsed) + " delta=" + string(real_elapsed - expected_elapsed));
+        show_debug_message("Group " + string(global.tune_group_index) + " (" + string(n_group_events) + " events): real=" + string(real_elapsed) + " expected=" + string(scheduled_elapsed) + " delta=" + string(real_elapsed - scheduled_elapsed));
     }
     
     // Process ALL events in this timestamp group
@@ -1392,7 +1791,7 @@ function script_tune_callback_batched() {
             kind: "current_note_display",
             note: real(last_note_on_note),
             channel: real(last_note_on_channel),
-            delta_ms: real(real_elapsed - expected_elapsed)
+            delta_ms: real(real_elapsed - scheduled_elapsed)
         });
     }
     
@@ -1428,8 +1827,8 @@ function script_tune_callback_batched() {
     }
 
     // Schedule next group
-    var next_time = global.tune_event_groups[global.tune_group_index].time;
-    var prev_time = group.time;
+    var next_time = real(global.tune_event_groups[global.tune_group_index].time ?? 0) + audio_sched_offset_ms;
+    var prev_time = expected_elapsed + audio_sched_offset_ms;
     var delta_ms = next_time - prev_time;
     if (global.PLAYBACK_SCHEDULER_CATCHUP) {
         var real_elapsed_now = timing_get_engine_now_ms() - global.tune_start_real;
@@ -1465,6 +1864,12 @@ function tune_scheduler_step_tick() {
     if (global.tune_group_index < 0 || global.tune_group_index >= n_groups) return;
 
     var elapsed_ms = timing_get_engine_now_ms() - real(global.tune_start_real ?? 0);
+    var audio_sched_offset_ms = 0;
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+        if (variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
+            audio_sched_offset_ms = real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"));
+        }
+    }
     var lookahead_ms = max(0, real(global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS ?? 0));
     var max_groups = max(1, floor(real(global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP ?? 32)));
     var max_pump_us = max(100, real(global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US ?? 1000));
@@ -1475,7 +1880,7 @@ function tune_scheduler_step_tick() {
     var min_overdue_ms = 1000000000;
     while (dispatched < max_groups && global.tune_group_index < n_groups) {
         if (get_timer() - pump_start_us >= max_pump_us) break;
-        var due_time_ms = real(global.tune_event_groups[global.tune_group_index].time ?? 0);
+        var due_time_ms = real(global.tune_event_groups[global.tune_group_index].time ?? 0) + audio_sched_offset_ms;
         if (due_time_ms > elapsed_ms + lookahead_ms) break;
         var overdue_ms = elapsed_ms - due_time_ms;
         if (overdue_ms > max_overdue_ms) max_overdue_ms = overdue_ms;
@@ -1629,9 +2034,177 @@ function schedule_tune_cleanup(_delay_ms) {
 
 /// @function tune_cleanup_after_finish()
 /// @description Cleanup callback: stop all MIDI notes and disable MIDI input checking
+/// @reads global.rt_budget_sched_late_buf/count, global.rt_budget_controller_step_dt_buf/count, global.rt_budget_midi_step_buf/count, global.rt_budget_draw_buf/count
+/// @writes global.timing_calibration.jitter_summary
 
 function tune_cleanup_after_finish() {
+    timing_calibration_capture_jitter_summary();
     MIDI_send_off();  // Stop all notes on all channels
     MIDI_stop_checking_messages_and_errors();  // Stop MIDI input checking and close devices
     show_debug_message("âœ“ Tune cleanup complete");
+}
+
+/// @function timing_calibration_apply_offsets(_audio_ms, _visual_ms, _input_ms, _score_ms, _source_label)
+/// @description Apply split timing offsets to global.timeline_cfg and mirror values into global.timing_calibration.
+/// @param _audio_ms Audio output offset in ms
+/// @param _visual_ms Visual alignment offset in ms
+/// @param _input_ms Input capture offset in ms
+/// @param _score_ms Scoring compare offset in ms
+/// @param _source_label Optional text label for diagnostics
+/// @returns Struct { audio_output_offset_ms, visual_alignment_offset_ms, input_capture_offset_ms, scoring_compare_offset_ms }
+/// @reads global.timeline_cfg (via gv_ensure_timeline_cfg_defaults), global.timing_calibration
+/// @writes global.timeline_cfg.audio_output_offset_ms, global.timeline_cfg.visual_alignment_offset_ms, global.timeline_cfg.input_capture_offset_ms, global.timeline_cfg.scoring_compare_offset_ms
+/// @writes global.timing_calibration.audio_offset_ms, global.timing_calibration.visual_offset_ms, global.timing_calibration.input_offset_ms, global.timing_calibration.scoring_offset_ms
+function timing_calibration_apply_offsets(_audio_ms, _visual_ms, _input_ms, _score_ms, _source_label = "manual") {
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var audio_ms = real(_audio_ms);
+    var visual_ms = real(_visual_ms);
+    var input_ms = real(_input_ms);
+    var score_ms = real(_score_ms);
+
+    variable_struct_set(cfg, "audio_output_offset_ms", audio_ms);
+    variable_struct_set(cfg, "visual_alignment_offset_ms", visual_ms);
+    variable_struct_set(cfg, "input_capture_offset_ms", input_ms);
+    variable_struct_set(cfg, "scoring_compare_offset_ms", score_ms);
+
+    var state = timing_calibration_ensure_state();
+    state.audio_offset_ms = audio_ms;
+    state.visual_offset_ms = visual_ms;
+    state.input_offset_ms = input_ms;
+    state.scoring_offset_ms = score_ms;
+
+    show_debug_message("[CALIBRATION] offsets applied source=" + string(_source_label)
+        + " audio=" + string_format(audio_ms, 0, 2)
+        + " visual=" + string_format(visual_ms, 0, 2)
+        + " input=" + string_format(input_ms, 0, 2)
+        + " score=" + string_format(score_ms, 0, 2));
+
+    return {
+        audio_output_offset_ms: audio_ms,
+        visual_alignment_offset_ms: visual_ms,
+        input_capture_offset_ms: input_ms,
+        scoring_compare_offset_ms: score_ms
+    };
+}
+
+/// @function timing_calibration_start_session(_mode)
+/// @description Start a calibration session and snapshot current offsets for cancel/rollback.
+/// @param _mode Calibration mode label (click/visual/balanced)
+/// @returns Struct state snapshot
+/// @writes global.timing_calibration.active/status/calibration_mode/session_previous_offsets/session_draft_offsets
+function timing_calibration_start_session(_mode = "balanced") {
+    var state = timing_calibration_ensure_state();
+    var mode = timing_calibration_normalize_mode(_mode);
+    var current = timing_calibration_get_current_offsets();
+
+    state.active = true;
+    state.status = "running";
+    state.calibration_mode = mode;
+    state.requested_at_ms = timing_get_engine_now_ms();
+    state.session_has_draft = false;
+    state.session_previous_offsets = current;
+    state.session_draft_offsets = current;
+    state.last_message = "Calibration session started in " + mode + " mode.";
+    return state;
+}
+
+/// @function timing_calibration_prepare_draft_from_probe(_mode)
+/// @description Run the probe and prepare draft offsets according to the selected calibration mode.
+/// @param _mode Optional calibration mode override
+/// @returns Struct {success, mode, recommended_offset_ms, draft_offsets, message}
+/// @writes global.timing_calibration.session_draft_offsets/session_has_draft/last_message/last_recommended_offset_ms/status
+function timing_calibration_prepare_draft_from_probe(_mode = undefined) {
+    var state = timing_calibration_ensure_state();
+    var mode = is_undefined(_mode) ? timing_calibration_normalize_mode(state.calibration_mode) : timing_calibration_normalize_mode(_mode);
+    var probe = timing_calibration_probe_from_current_run();
+
+    if (!bool(probe.success ?? false)) {
+        state.status = "probe_failed";
+        state.session_has_draft = false;
+        return {
+            success: false,
+            mode: mode,
+            recommended_offset_ms: real(probe.recommended_offset_ms ?? 0),
+            draft_offsets: state.session_draft_offsets,
+            message: string(probe.message ?? "Calibration probe failed.")
+        };
+    }
+
+    var base_offsets = state.session_previous_offsets;
+    if (!is_struct(base_offsets)) base_offsets = timing_calibration_get_current_offsets();
+    var rec_ms = real(probe.recommended_offset_ms ?? 0);
+    var draft = timing_calibration_recommend_offsets_for_mode(rec_ms, mode, base_offsets);
+
+    state.calibration_mode = mode;
+    state.status = "draft_ready";
+    state.session_has_draft = true;
+    state.last_recommended_offset_ms = rec_ms;
+    state.session_draft_offsets = draft;
+    state.last_message = "Calibration draft ready (" + mode + ") recommended=" + string_format(rec_ms, 0, 2) + " ms.";
+
+    return {
+        success: true,
+        mode: mode,
+        recommended_offset_ms: rec_ms,
+        draft_offsets: draft,
+        message: state.last_message
+    };
+}
+
+/// @function timing_calibration_accept_session()
+/// @description Apply draft offsets, persist current-device profile, and end session as applied.
+/// @returns Struct apply result offsets
+/// @writes global.timeline_cfg.* offsets, global.timing_calibration.* session state
+function timing_calibration_accept_session() {
+    var state = timing_calibration_ensure_state();
+    var offsets = state.session_has_draft
+        ? state.session_draft_offsets
+        : timing_calibration_get_current_offsets();
+
+    var applied = timing_calibration_apply_offsets(
+        real(offsets.audio_output_offset_ms ?? 0),
+        real(offsets.visual_alignment_offset_ms ?? 0),
+        real(offsets.input_capture_offset_ms ?? 0),
+        real(offsets.scoring_compare_offset_ms ?? 0),
+        "session-accept"
+    );
+
+    timing_calibration_store_current_device_profile(state.calibration_mode);
+    var save_script = asset_get_index("scoring_player_settings_save_for_player");
+    if (script_exists(save_script)) {
+        script_execute(save_script);
+    }
+
+    state.active = false;
+    state.status = "applied";
+    state.completed_at_ms = timing_get_engine_now_ms();
+    state.session_has_draft = false;
+    state.last_message = "Calibration applied and saved for current player/device.";
+    return applied;
+}
+
+/// @function timing_calibration_cancel_session()
+/// @description Cancel calibration session and restore offsets captured at session start.
+/// @returns Struct restored offsets
+/// @writes global.timeline_cfg.* offsets, global.timing_calibration.* session state
+function timing_calibration_cancel_session() {
+    var state = timing_calibration_ensure_state();
+    var previous = is_struct(state.session_previous_offsets)
+        ? state.session_previous_offsets
+        : timing_calibration_get_current_offsets();
+
+    var restored = timing_calibration_apply_offsets(
+        real(previous.audio_output_offset_ms ?? 0),
+        real(previous.visual_alignment_offset_ms ?? 0),
+        real(previous.input_capture_offset_ms ?? 0),
+        real(previous.scoring_compare_offset_ms ?? 0),
+        "session-cancel"
+    );
+
+    state.active = false;
+    state.status = "cancelled";
+    state.session_has_draft = false;
+    state.completed_at_ms = timing_get_engine_now_ms();
+    state.last_message = "Calibration cancelled; previous offsets restored.";
+    return restored;
 }

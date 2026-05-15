@@ -32,6 +32,22 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+### Loop Runtime Precompute Pass (2026-05-12)
+- Added one-time loop runtime cache build in `scr_game_viz` (`gv_build_loop_runtime_cache`) to precompute:
+  - loop iteration anchors (`iter1_start_ms`, `iter2_start_ms`, `loop_cycle_ms`)
+  - pickup-aligned per-measure starts for a single loop cycle
+  - fallback measure duration for score-lane span closure
+- Wired cache creation into timeline bind (`gv_bind_timeline_on_tune_start`) for single-tune loop runtime.
+- Replaced per-frame loop cycle scans in:
+  - current-measure resolver (`gv_get_current_planned_measure`)
+  - score-lane draw playhead normalization (`gv_draw_timeline_canvas_overlay`)
+- In score-lane draw, use precomputed measure starts when loop cache is valid; keep legacy runtime scan as fallback only.
+- Loop reset now clears cached loop runtime data (`scr_button_reset_loop_state`) to avoid stale cross-run timing.
+
+Validation targets:
+- Aros Park loop with internal pickup at loop start: no stretched pickup image and stable playhead wrap.
+- No behavior change to repeat count, blank measure insertion, or jump-to-selection semantics.
+
 
 
 ## ⚡ 1-Minute UI Pre-Run Checklist
@@ -935,6 +951,42 @@ The project is “complete” when a player can:
 • 	Track improvement over time
 • 	Use the tool as a reliable, enjoyable part of their practice routine
 
+## Active Calibration Plan
+
+This is the active plan for the current thread. If work gets interrupted, resume here first.
+
+1) Timing architecture and instrumentation
+- Define canonical timeline ownership.
+- Log timestamp points for schedule, play, render, capture, and score.
+- Compute P50, P95, and jitter per path.
+
+2) Separate calibration domains
+- Keep audio alignment, visual alignment, and input/scoring as separate offsets.
+- Do not re-bundle them into one shared number.
+
+3) Reference-mode calibration UX
+- Offer calibrate-to-click, calibrate-to-visual, or balanced modes.
+- Save per-player profiles and per-device baselines.
+
+4) Audio scheduling upgrade
+- Implement lookahead scheduling for metronome and backing track first.
+- Validate stability under load.
+
+5) Runtime jitter management
+- Detect transient frame/audio jitter.
+- Apply guarded mitigations for visual smoothing, scoring tolerance, and quality warnings.
+
+6) Evaluate audio-stem migration
+- Pilot one tune or set with stem playback.
+- Compare latency stability and CPU load before any wider migration.
+
+Success criteria
+- Players who calibrate to click score correctly when following click.
+- Players who calibrate to visual score correctly when following visual line.
+- Stable P95 timing error at target BPM range.
+- Minimal drift over a full tune or set.
+- Clear diagnostics when environment quality degrades.
+
 📋 Roadmap
 This roadmap is divided into Backlog, In Progress, and Done.
 Move items between sections as development progresses.
@@ -1107,6 +1159,76 @@ Coverage map for requested features
 - Set with authored gap — fallback should NOT fire ✓
 - Set with transition tune — fallback should NOT fire ✓
 - 4/4 March set: metronome/score/music aligned across all tunes ✓
+
+### Implementation Update (2026-05-10, latency model kickoff) - IN PROGRESS
+
+Problem statement:
+- A single offset is currently carrying multiple latency domains (audio output, visual alignment, input capture, and scoring comparison), which makes calibration drift between play-to-click, play-to-visual, and scoring views.
+
+Architecture rule:
+- Keep one canonical timeline for tune events.
+- Apply domain offsets only at domain boundaries.
+
+Offset taxonomy (runtime fields):
+- `audio_output_offset_ms`: shifts scheduled audio target time.
+- `visual_alignment_offset_ms`: shifts visual target time for timeline/notebeam presentation.
+- `input_capture_offset_ms`: aligns player input timestamps into canonical timeline time.
+- `scoring_compare_offset_ms`: analysis-only comparison offset.
+
+Phase 1 changes completed in code:
+- `timing_calibration_ensure_state()` in `scr_tune_scripts.gml` now initializes split offsets and a `jitter_summary` struct.
+- `gv_ensure_timeline_cfg_defaults()` in `scr_game_viz.gml` now provides defaults for all split offsets with legacy `player_time_offset_ms` compatibility.
+- Event history payloads now carry domain timing fields in both paths:
+  - game event path (`tune_scheduler_process_deferred`)
+  - player input path (`MIDI_process_messages`)
+- End-of-tune cleanup now snapshots RT diagnostics into `global.timing_calibration.jitter_summary` via `timing_calibration_capture_jitter_summary()`.
+
+Phase 1 validation targets (next):
+- Confirm no regressions in playback behavior with all offsets at 0.
+- Verify event exports include split offset fields for both `source=game` and `source=player`. ✅ Done (2026-05-10)
+  - Validated on fresh single-tune and set-mode runs via newest exported CSV + summary JSON artifacts.
+  - Confirmed CSV fields: canonical_time_ms, audio_target_time_ms, visual_target_time_ms, input_aligned_time_ms, audio_offset_ms, visual_offset_ms, input_offset_ms, score_offset_ms.
+  - Confirmed summary keys: audio_offset_ms, visual_offset_ms, input_offset_ms, score_offset_ms, timing_sample_game, timing_sample_player, has_timing_sample_game, has_timing_sample_player.
+
+Implementation update (2026-05-10, no-legacy policy):
+- Team decision: remove legacy offset compatibility and run new split-offset model only.
+- Removed `player_time_offset_ms` dependency from runtime calibration/input paths.
+- Added `timing_calibration_apply_offsets(...)` as the single apply entrypoint for split offsets.
+- Player app settings now persist and restore:
+  - `audio_output_offset_ms`
+  - `visual_alignment_offset_ms`
+  - `input_capture_offset_ms`
+  - `scoring_compare_offset_ms`
+
+Implementation update (2026-05-10, calibration bones before UI):
+- Added calibration mode/session APIs in `scr_tune_scripts.gml`:
+  - `timing_calibration_start_session(...)`
+  - `timing_calibration_prepare_draft_from_probe(...)`
+  - `timing_calibration_accept_session()`
+  - `timing_calibration_cancel_session()`
+- Added per-device calibration profile support in state/settings:
+  - `timing_calibration_get_device_key()`
+  - `timing_calibration_store_current_device_profile(...)`
+  - `timing_calibration_apply_profile_for_current_device()`
+  - `timing_calibration_build_settings_payload()` / `timing_calibration_hydrate_from_settings(...)`
+- `scoring_player_settings_build_payload/load_for_player` now saves/loads `settings.timing_calibration` for per-player persistence.
+- Audio scheduling now applies `audio_output_offset_ms` in scheduler due-time computation (timesource + step modes).
+
+Resume checkpoint (next session)
+- Calibration infrastructure status: ready for UI wiring.
+- Offsets are live in runtime but remain 0 until user calibration is run and accepted.
+- Per-player/per-device calibration persistence is in place.
+
+Immediate next tasks (Step 3 UI)
+1. Add Settings window entrypoint button for calibration.
+2. Add mode selector (click / visual / balanced).
+3. Wire actions to APIs:
+  - Start: `timing_calibration_start_session(mode)`
+  - Analyze: `timing_calibration_prepare_draft_from_probe(mode)`
+  - Accept: `timing_calibration_accept_session()`
+  - Cancel: `timing_calibration_cancel_session()`
+4. Show status text from `timing_calibration_get_status_text()` and current draft values.
+5. Verify per-player reload applies saved device profile after restart.
 
 Backlog (Planned but Not Started)
 Tune & Data Pipeline
@@ -1358,3 +1480,34 @@ Observations collected during full-codebase annotation (annotation pass, 2025).
 4. **Dead code block in scr_tune_scripts.gml:** ~~tune_metronome_build_pattern, tune_get_total_ms, and tune_build_events inside a /* */ block comment.~~ **RESOLVED:** Entire unclosed block comment (lines 1615–1743) removed (April 2026). All three were dead — inside an unclosed `/*` with no callers outside the comment.
 
 5. **old_scr_tune_library:** ~~The file holds hardcoded tune data predating the JSON library.~~ **RESOLVED:** `scripts/old_scr_tune_library/` deleted; removed from .yyp and resource_order (April 2026).
+
+### Loop Pickup Timing Update (2026-05-12)
+
+- Fixed single-tune loop template construction in `scr_button_loop_build_playback_events` so pre-bar pickup events attached to selected measures are repeated inside each loop iteration (not only in the one-time prefix).
+- Loop cycle timing is now pickup-aware: iteration window starts at pickup time when present, so the loop naturally includes required spacer time before the next downbeat when needed.
+- Added debug field `pickup_lead_ms` in the loop build log line for quick verification during regression runs.
+- Validation target for next QA pass:
+  - Initial pickup loops: pickup should repeat every iteration with no visual/audio stretch.
+  - Internal pickup loops: if a selected measure has pre-bar pickup content, it should repeat per cycle with stable measure alignment.
+
+### Loop Score-Lane Pickup Alignment (2026-05-12)
+
+- Updated single-tune loop-runtime score-lane timing in `scr_game_viz` so each rendered measure can start at the earliest pre-boundary event tagged to that same measure.
+- This keeps loop visual lead-ins attached to their intended measure image without changing event scheduling, marker generation, or playback callbacks.
+- Scope is intentionally narrow for runtime cost control:
+  - runs only in single-tune loop runtime (`!set_mode && loop_runtime_active`),
+  - uses existing in-memory planned events,
+  - no new globals, caches, file IO, or per-frame allocations outside existing arrays.
+- Validation target for next QA pass:
+  - Loop subset not starting at measure 1 (e.g. Aros Park 9-12): opening lead-in should render as part of loop entry instead of disappearing/stretching.
+  - In-loop pre-bar lead-ins should render with their attached measure image.
+
+---
+
+## Calibration/Latency: Future Consideration (2026-05-13)
+- Current calibration probe measures total round-trip latency (audio output, visual, input capture, human delay).
+- Scheduler compensates for audio output latency using `audio_output_offset_ms` as measured by the probe.
+- If human delay is inconsistent, an independent audio output latency measurement (e.g., by routing audio out to audio in and logging trigger/detect delta) could provide a strong, stable baseline for prescheduling.
+- For now, continue with probe-based approach, but revisit the value of separate audio latency measurement after further user testing.
+- If implemented, set `audio_output_offset_ms` directly from measured value, and use probe to focus on visual/input lag only.
+- Add a project review item: **Reconsider separate audio latency measurement for improved baseline and compensation accuracy.**

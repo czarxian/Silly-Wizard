@@ -44,7 +44,9 @@ if (!variable_global_exists("current_player_id")) {
 ///     event_type, source,
 ///     note_midi, note_letter, velocity, channel,
 ///     tune_name, event_id, is_embellishment, embellishment_name,
-///     timing_quality
+///     timing_quality,
+///     canonical_time_ms, audio_target_time_ms, visual_target_time_ms, input_aligned_time_ms,
+///     audio_offset_ms, visual_offset_ms, input_offset_ms, score_offset_ms
 /// }
 
 function event_history_add(_event_struct) {
@@ -793,6 +795,51 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         scoring_summary = script_execute(scoring_builder_idx, export_info);
     }
 
+    var audio_offset_ms = real(event_history_struct_get(export_info, "audio_output_offset_ms", event_history_struct_get(export_info, "audio_offset_ms", 0)));
+    var visual_offset_ms = real(event_history_struct_get(export_info, "visual_alignment_offset_ms", event_history_struct_get(export_info, "visual_offset_ms", 0)));
+    var input_offset_ms = real(event_history_struct_get(export_info, "input_capture_offset_ms", event_history_struct_get(export_info, "input_offset_ms", 0)));
+    var score_offset_ms = real(event_history_struct_get(export_info, "scoring_compare_offset_ms", event_history_struct_get(export_info, "score_offset_ms", 0)));
+
+    var timing_sample_game = {};
+    var timing_sample_player = {};
+    var has_timing_sample_game = false;
+    var has_timing_sample_player = false;
+    if (variable_global_exists("EVENT_HISTORY") && is_array(global.EVENT_HISTORY)) {
+        for (var i = 0; i < array_length(global.EVENT_HISTORY); i++) {
+            var ev = global.EVENT_HISTORY[i];
+            if (!is_struct(ev)) continue;
+
+            var ev_source = string(event_history_struct_get(ev, "source", ""));
+            if (ev_source == "game" && !has_timing_sample_game) {
+                timing_sample_game = {
+                    canonical_time_ms: real(event_history_struct_get(ev, "canonical_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    audio_target_time_ms: real(event_history_struct_get(ev, "audio_target_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    visual_target_time_ms: real(event_history_struct_get(ev, "visual_target_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    input_aligned_time_ms: real(event_history_struct_get(ev, "input_aligned_time_ms", event_history_struct_get(ev, "actual_time_ms", 0))),
+                    audio_offset_ms: real(event_history_struct_get(ev, "audio_offset_ms", audio_offset_ms)),
+                    visual_offset_ms: real(event_history_struct_get(ev, "visual_offset_ms", visual_offset_ms)),
+                    input_offset_ms: real(event_history_struct_get(ev, "input_offset_ms", input_offset_ms)),
+                    score_offset_ms: real(event_history_struct_get(ev, "score_offset_ms", score_offset_ms))
+                };
+                has_timing_sample_game = true;
+            } else if (ev_source == "player" && !has_timing_sample_player) {
+                timing_sample_player = {
+                    canonical_time_ms: real(event_history_struct_get(ev, "canonical_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    audio_target_time_ms: real(event_history_struct_get(ev, "audio_target_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    visual_target_time_ms: real(event_history_struct_get(ev, "visual_target_time_ms", event_history_struct_get(ev, "expected_time_ms", 0))),
+                    input_aligned_time_ms: real(event_history_struct_get(ev, "input_aligned_time_ms", event_history_struct_get(ev, "actual_time_ms", 0))),
+                    audio_offset_ms: real(event_history_struct_get(ev, "audio_offset_ms", audio_offset_ms)),
+                    visual_offset_ms: real(event_history_struct_get(ev, "visual_offset_ms", visual_offset_ms)),
+                    input_offset_ms: real(event_history_struct_get(ev, "input_offset_ms", input_offset_ms)),
+                    score_offset_ms: real(event_history_struct_get(ev, "score_offset_ms", score_offset_ms))
+                };
+                has_timing_sample_player = true;
+            }
+
+            if (has_timing_sample_game && has_timing_sample_player) break;
+        }
+    }
+
     var payload = {
         schema_version: 1,
         export_type: "performance_summary",
@@ -805,10 +852,18 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         bpm: event_history_struct_get(export_info, "bpm", 0),
         swing: event_history_struct_get(export_info, "swing", ""),
         grace_override_ms: event_history_struct_get(export_info, "grace_override_ms", 0),
+        audio_offset_ms: audio_offset_ms,
+        visual_offset_ms: visual_offset_ms,
+        input_offset_ms: input_offset_ms,
+        score_offset_ms: score_offset_ms,
         player_spans: player_spans
     };
     variable_struct_set(payload, "has_player_spans", has_player_spans);
     variable_struct_set(payload, "debug_structure", event_history_build_structure_debug_snapshot(120, 200));
+    variable_struct_set(payload, "has_timing_sample_game", has_timing_sample_game);
+    variable_struct_set(payload, "has_timing_sample_player", has_timing_sample_player);
+    variable_struct_set(payload, "timing_sample_game", timing_sample_game);
+    variable_struct_set(payload, "timing_sample_player", timing_sample_player);
     if (is_struct(scoring_summary)) {
         variable_struct_set(payload, "scoring", scoring_summary);
     }
@@ -1179,7 +1234,7 @@ function event_history_export_csv(_filename_or_path) {
     }
     
     // Write header
-	file_text_write_string(file, "timestamp_ms,expected_ms,actual_ms,delta_ms,measure,beat,beat_frac,type,source,note_midi,note_letter,velocity,channel,tune,event_id,is_embellishment,embellishment,timing_quality\n");
+    file_text_write_string(file, "timestamp_ms,expected_ms,actual_ms,delta_ms,measure,beat,beat_frac,type,source,note_midi,note_letter,velocity,channel,tune,event_id,is_embellishment,embellishment,timing_quality,canonical_time_ms,audio_target_time_ms,visual_target_time_ms,input_aligned_time_ms,audio_offset_ms,visual_offset_ms,input_offset_ms,score_offset_ms\n");
     // Enrich events before export (derive note_letter, forward-fill measure/beat)
     var export_events = event_history_enrich(global.EVENT_HISTORY);
     var event_count = array_length(export_events);
@@ -1241,6 +1296,14 @@ function event_history_export_csv(_filename_or_path) {
         var is_embellishment = struct_get(ev, "is_embellishment");
         var embellishment_name = struct_get(ev, "embellishment_name");
         var timing_quality = struct_get(ev, "timing_quality");
+        var audio_offset_ms = real(event_history_struct_get(ev, "audio_offset_ms", 0));
+        var visual_offset_ms = real(event_history_struct_get(ev, "visual_offset_ms", 0));
+        var input_offset_ms = real(event_history_struct_get(ev, "input_offset_ms", 0));
+        var score_offset_ms = real(event_history_struct_get(ev, "score_offset_ms", 0));
+        var canonical_time_ms = real(event_history_struct_get(ev, "canonical_time_ms", expected_time_ms));
+        var audio_target_time_ms = real(event_history_struct_get(ev, "audio_target_time_ms", canonical_time_ms + audio_offset_ms));
+        var visual_target_time_ms = real(event_history_struct_get(ev, "visual_target_time_ms", canonical_time_ms + visual_offset_ms));
+        var input_aligned_time_ms = real(event_history_struct_get(ev, "input_aligned_time_ms", actual_time_ms + input_offset_ms));
         
         var line = string(timestamp_ms) + ","
             + string(expected_time_ms) + ","
@@ -1259,7 +1322,15 @@ function event_history_export_csv(_filename_or_path) {
             + string(event_id) + ","
             + string(is_embellishment) + ","
             + string(embellishment_name) + ","
-            + string(timing_quality);
+            + string(timing_quality) + ","
+            + string(canonical_time_ms) + ","
+            + string(audio_target_time_ms) + ","
+            + string(visual_target_time_ms) + ","
+            + string(input_aligned_time_ms) + ","
+            + string(audio_offset_ms) + ","
+            + string(visual_offset_ms) + ","
+            + string(input_offset_ms) + ","
+            + string(score_offset_ms);
         
         file_text_write_string(file, line + "\n");
     }
