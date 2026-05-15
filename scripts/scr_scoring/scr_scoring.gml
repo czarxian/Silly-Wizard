@@ -754,10 +754,13 @@ function scoring_get_measure_visual_style(_measure, _default_color, _default_alp
         && is_array(global.timeline_state.score_by_segment)) {
         var _active_seg = floor(real(global.playback_context[$ "active_segment"] ?? 0));
         var _by_seg = global.timeline_state.score_by_segment;
-        _active_seg = clamp(_active_seg, 0, max(0, array_length(_by_seg) - 1));
-        var _seg_data = _by_seg[_active_seg];
-        if (is_struct(_seg_data) && variable_struct_exists(_seg_data, "score_measure_maps")) {
-            score_maps = _seg_data.score_measure_maps;
+        var _seg_count = array_length(_by_seg);
+        if (_seg_count > 0) {
+            _active_seg = clamp(_active_seg, 0, _seg_count - 1);
+            var _seg_data = _by_seg[_active_seg];
+            if (is_struct(_seg_data) && variable_struct_exists(_seg_data, "score_measure_maps")) {
+                score_maps = _seg_data.score_measure_maps;
+            }
         }
     } else {
         if (variable_struct_exists(global.timeline_state, "score_measure_maps")
@@ -815,26 +818,29 @@ function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap") {
         && is_array(global.timeline_state.score_by_segment)) {
         var _active = floor(real(global.playback_context[$ "active_segment"] ?? 0));
         var _by_seg = global.timeline_state.score_by_segment;
-        _active = clamp(_active, 0, max(0, array_length(_by_seg) - 1));
-        var _seg_data = _by_seg[_active];
-        if (is_struct(_seg_data)) {
-            var arr = [];
-            if (variable_struct_exists(_seg_data, "measure_results_by_judge")
-                && is_struct(_seg_data.measure_results_by_judge)
-                && variable_struct_exists(_seg_data.measure_results_by_judge, judge_id)
-                && is_array(_seg_data.measure_results_by_judge[$ judge_id])) {
-                arr = _seg_data.measure_results_by_judge[$ judge_id];
-            } else if (variable_struct_exists(_seg_data, "measure_scores") && is_array(_seg_data.measure_scores)) {
-                arr = _seg_data.measure_scores;
-            }
+        var _seg_count = array_length(_by_seg);
+        if (_seg_count > 0) {
+            _active = clamp(_active, 0, _seg_count - 1);
+            var _seg_data = _by_seg[_active];
+            if (is_struct(_seg_data)) {
+                var arr = [];
+                if (variable_struct_exists(_seg_data, "measure_results_by_judge")
+                    && is_struct(_seg_data.measure_results_by_judge)
+                    && variable_struct_exists(_seg_data.measure_results_by_judge, judge_id)
+                    && is_array(_seg_data.measure_results_by_judge[$ judge_id])) {
+                    arr = _seg_data.measure_results_by_judge[$ judge_id];
+                } else if (variable_struct_exists(_seg_data, "measure_scores") && is_array(_seg_data.measure_scores)) {
+                    arr = _seg_data.measure_scores;
+                }
 
-            var target = floor(real(_measure_num));
-            for (var i = 0; i < array_length(arr); i++) {
-                var m = arr[i];
-                if (!is_struct(m)) continue;
-                if (floor(real(m.measure ?? -1)) == target) return m;
+                var target = floor(real(_measure_num));
+                for (var i = 0; i < array_length(arr); i++) {
+                    var m = arr[i];
+                    if (!is_struct(m)) continue;
+                    if (floor(real(m.measure ?? -1)) == target) return m;
+                }
+                return undefined;
             }
-            return undefined;
         }
     }
 
@@ -1047,8 +1053,11 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
         && is_array(global.timeline_state.score_by_segment)) {
         var _active = floor(real(global.playback_context[$ "active_segment"] ?? 0));
         var _by_seg = global.timeline_state.score_by_segment;
-        _active = clamp(_active, 0, max(0, array_length(_by_seg) - 1));
-        _seg_data = _by_seg[_active];
+        var _seg_count = array_length(_by_seg);
+        if (_seg_count > 0) {
+            _active = clamp(_active, 0, _seg_count - 1);
+            _seg_data = _by_seg[_active];
+        }
     }
 
     if (!is_struct(summary) && !is_struct(_seg_data)) {
@@ -1163,8 +1172,11 @@ function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
         && is_array(global.timeline_state.score_by_segment)) {
         var _active = floor(real(global.playback_context[$ "active_segment"] ?? 0));
         var _by_seg = global.timeline_state.score_by_segment;
-        _active = clamp(_active, 0, max(0, array_length(_by_seg) - 1));
-        _seg_data = _by_seg[_active];
+        var _seg_count = array_length(_by_seg);
+        if (_seg_count > 0) {
+            _active = clamp(_active, 0, _seg_count - 1);
+            _seg_data = _by_seg[_active];
+        }
     }
 
     if (is_struct(_seg_data)) {
