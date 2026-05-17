@@ -32,6 +32,33 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 â€¢ 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, realâ€‘time playback with no perâ€‘frame computation overhead.
 
+### Calibration Phase 1 Rollback & Stabilization (2026-05-17)
+**Status**: âœ… Complete â€” Game fully playable with multi-tune sets.
+
+**What was removed:**
+- All Phase 1 dual-probe timing calibration logic (click/visual/balanced modes)
+- Calibration workflow UI elements and measurement windows
+- MIDI tap logging for calibration probes
+- Post-playback calibration probes (`timing_calibration_probe_from_current_run()`)
+- Draft offset preparation and session acceptance flows
+
+**What was fixed:**
+- Removed dead code reading `prof.mode` from saved profiles (caused crash on load)
+  - Old profiles still load correctly; `mode` field ignored since calibration disabled
+  - Applied principle: **fix root cause (don't need mode), not fallback masking**
+
+**Current state:**
+- Timing offsets (audio/visual/input/scoring) persist and load correctly
+- Per-device profile storage works (without mode tracking)
+- Baseline stable for single-tune and multi-tune set playback
+- Ready for manual offset UI or redesigned calibration (Phase 2)
+
+**Process lesson learned:**
+- Isolated experimental code was **not** isolated â€” calibration touched core timing paths
+- Need feature-flagging / separate branches for risky rewrites
+- All changes must compile cleanly before commit (avoid "works on my machine" dead code)
+- See "Development Workflow Hardening" section below for future guidelines
+
 ### Loop Runtime Precompute Pass (2026-05-12)
 - Added one-time loop runtime cache build in `scr_game_viz` (`gv_build_loop_runtime_cache`) to precompute:
   - loop iteration anchors (`iter1_start_ms`, `iter2_start_ms`, `loop_cycle_ms`)
@@ -1511,3 +1538,70 @@ Observations collected during full-codebase annotation (annotation pass, 2025).
 - For now, continue with probe-based approach, but revisit the value of separate audio latency measurement after further user testing.
 - If implemented, set `audio_output_offset_ms` directly from measured value, and use probe to focus on visual/input lag only.
 - Add a project review item: **Reconsider separate audio latency measurement for improved baseline and compensation accuracy.**
+
+---
+
+## Development Workflow Hardening (Lesson from Phase 1 Calibration)
+
+**Problem**: Phase 1 calibration refactor touched core timing/offset paths and accumulated dead code that wasn't fully rolled back, causing a crash on fresh save load.
+
+### Guidelines for Future Major Refactors
+
+#### 1. **Feature-flag risky changes, don't merge to main until proven**
+- Use a dedicated \eature/\ branch for experiments that rewire core systems
+- Require explicit feature flag to activate  
+- All code paths must compile cleanly and pass tests
+- Do not commit dead code (commented-out sections, unreachable paths)
+
+#### 2. **Version checkpoints frequently**
+- After every 2–3 working hours on a risky refactor, create a temporary commit and test end-to-end
+- Test: launch game, play a tune, close cleanly
+- Never let uncommitted work pile up
+
+#### 3. **Separate concerns**
+- Timing offsets are **core** — touch only in isolation
+- Calibration logic is **experimental** — keep in separate functions
+- Do not weave calibration into scoring/MIDI/event paths
+- Make calibration-aware behavior optional via parameters, not embedded
+
+#### 4. **Compilation validation before every commit**
+- Run full project compile
+- Zero errors before committing — fix warnings about unreachable code immediately
+- Use documentation tags (\@reads\, \@writes\, \@callers\) to make dependencies explicit
+
+#### 5. **Rollback checkpoints**
+- Tag stable releases: \_stable_precompile\, \_before_calibration_experiment\, etc.
+- If refactor fails (>2 hours rework), revert to the last tag
+- Document the reset in PROJECT_PLAN.md
+
+#### 6. **Per-feature testing checklist**
+Before declaring a refactor done:
+- [ ] Game launches (main menu visible)
+- [ ] Single-tune playback (load, play, stop, review)
+- [ ] Multi-tune set playback
+- [ ] Settings persist across restart
+- [ ] Event export works (CSV/JSON in datafiles/performances/)
+- [ ] No stale profiles break new profiles
+
+#### 7. **Code review before merge**
+- For changes >100 lines touching core systems, require second review
+- Check for dead code, proper documentation, redundancy
+
+---
+
+## Next Steps (Phase 2: Calibration Redesign)
+
+**Current state**: Timing offsets work, profiles persist, baseline stable (2026-05-17).
+
+**Option A: Manual Offset Editing** (faster, lower risk)
+- Add +/- buttons for audio/visual/input offsets in settings
+- User tweaks by ear while playing reference tune
+- Persist immediately
+
+**Option B: Flash/Click Subtraction** (higher complexity, better UX)
+- Visual test: tap when you see flash (V+I+R)
+- Audio test: tap when you hear click (A+I+R)
+- Derive audio offset via subtraction (reaction cancels out)
+- Requires MIDI loopback or external hardware
+
+**Recommendation**: Start with **Option A**, move to **Option B** if needed.

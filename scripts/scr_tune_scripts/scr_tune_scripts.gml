@@ -262,7 +262,6 @@ function timing_calibration_apply_profile_for_current_device() {
     
     var score_ms = real(prof.scoring_compare_offset_ms ?? 0);
     scoring_calibration_debug_log("[APPLY_PROFILE] SUCCESS! Applying score_ms=" + string(score_ms));
-    state.calibration_mode = timing_calibration_normalize_mode(prof.mode ?? state.calibration_mode);
     timing_calibration_apply_offsets(
         real(prof.audio_output_offset_ms ?? 0),
         real(prof.visual_alignment_offset_ms ?? 0),
