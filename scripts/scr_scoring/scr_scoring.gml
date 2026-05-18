@@ -1567,8 +1567,21 @@ function scoring_player_settings_save_for_player(_player_id = undefined) {
     scoring_profile_ensure_player_folder(_player_id);
     var path = scoring_profile_get_app_settings_path(_player_id);
     var payload = scoring_player_settings_build_payload(_player_id);
-    
+
     scoring_calibration_debug_log("[SAVE] path=" + path);
+
+    var json_str = json_stringify(payload);
+    var file_handle = file_text_open_write(path);
+    if (file_handle < 0) {
+        scoring_calibration_debug_log("[SAVE] ERROR: Could not open " + path + " for writing");
+        return false;
+    }
+
+    file_text_write_string(file_handle, json_str);
+    file_text_close(file_handle);
+    
+    return true;
+}
 
 /// @function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_index)
 /// @description Find the current MIDI input device index by matching saved device name; falls back to saved index.
