@@ -481,19 +481,9 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
         }
     }
 
-    var _score_compare_offset_ms = 0;
+    // Scoring compare offset removed from calibration model (must keep feedback honest)
     if (!is_undefined(_score_compare_offset_override_ms)) {
-        _score_compare_offset_ms = real(_score_compare_offset_override_ms);
-    } else {
-        _score_compare_offset_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
-            && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms"))
-            ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0;
-    }
-    
-    scoring_calibration_debug_log("[JUDGE_BUILD] " + string(_judge_id) + " | override=" + string(_score_compare_offset_override_ms) + " | final_offset=" + string(_score_compare_offset_ms));
-    
-    if (_score_compare_offset_ms != 0 && is_array(player_spans) && array_length(player_spans) > 0) {
-        player_spans = scoring_shift_player_spans(player_spans, _score_compare_offset_ms);
+        scoring_calibration_debug_log("[JUDGE_BUILD] " + string(_judge_id) + " | override=" + string(_score_compare_offset_override_ms) + " [IGNORED]");
     }
 
     var _settings = scoring_ms_overlap_get_effective_settings();
@@ -1555,8 +1545,7 @@ function scoring_player_settings_build_payload(_player_id = undefined) {
         notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0,
         audio_output_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) ? real(global.timeline_cfg.audio_output_offset_ms) : 0,
         visual_alignment_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")) ? real(global.timeline_cfg.visual_alignment_offset_ms) : 0,
-        input_capture_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) ? real(global.timeline_cfg.input_capture_offset_ms) : 0,
-        scoring_compare_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")) ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0
+        input_capture_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) ? real(global.timeline_cfg.input_capture_offset_ms) : 0
     };
 
     if (script_exists(asset_get_index("timing_calibration_build_settings_payload"))) {
@@ -1579,11 +1568,7 @@ function scoring_player_settings_save_for_player(_player_id = undefined) {
     var path = scoring_profile_get_app_settings_path(_player_id);
     var payload = scoring_player_settings_build_payload(_player_id);
     
-    var score_offset = (is_struct(payload) && is_struct(payload.settings)) ? (payload.settings.scoring_compare_offset_ms ?? "MISSING") : "NO_PAYLOAD";
-    scoring_calibration_debug_log("[SAVE] path=" + path + " | scoring_compare_offset_ms=" + string(score_offset));
-    
-    return scoring_json_write_struct(path, payload);
-}
+    scoring_calibration_debug_log("[SAVE] path=" + path);
 
 /// @function scoring_player_settings_resolve_midi_input_index(_saved_name, _saved_index)
 /// @description Find the current MIDI input device index by matching saved device name; falls back to saved index.
@@ -1687,10 +1672,7 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
 
     if (script_exists(asset_get_index("timing_calibration_hydrate_from_settings"))) {
         var _hydrate_ok = timing_calibration_hydrate_from_settings(s);
-        var cfg_offset = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg))
-            ? (global.timeline_cfg.scoring_compare_offset_ms ?? 0)
-            : 0;
-        scoring_calibration_debug_log("[STARTUP_RESULT] hydrate returned " + string(_hydrate_ok) + " | timeline_cfg.scoring_compare_offset_ms=" + string(cfg_offset));
+        scoring_calibration_debug_log("[STARTUP_RESULT] hydrate returned " + string(_hydrate_ok));
     }
 
     var picker = instance_find(obj_tune_picker, 0);
@@ -2429,12 +2411,7 @@ function scoring_build_loop_iteration_scores() {
         player_spans = variable_struct_get(global.timeline_state, "player_in");
     }
 
-    var _score_compare_offset_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
-        && variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms"))
-        ? real(global.timeline_cfg.scoring_compare_offset_ms) : 0;
-    if (_score_compare_offset_ms != 0 && is_array(player_spans) && array_length(player_spans) > 0) {
-        player_spans = scoring_shift_player_spans(player_spans, _score_compare_offset_ms);
-    }
+    // Scoring offset removed from calibration model (must keep feedback honest)
 
     var _settings = scoring_ms_overlap_get_effective_settings();
     var _count_rests = bool(_settings.count_rests);

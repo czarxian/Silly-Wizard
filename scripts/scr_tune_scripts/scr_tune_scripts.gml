@@ -1061,7 +1061,6 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
                 var audio_offset_ms = 0;
                 var visual_offset_ms = 0;
                 var input_offset_ms = 0;
-                var scoring_offset_ms = 0;
                 if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
                     audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
                         ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
@@ -1071,9 +1070,6 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
                         : 0;
                     input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
                         ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
-                        : 0;
-                    scoring_offset_ms = variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "scoring_compare_offset_ms"))
                         : 0;
                 }
 
@@ -1102,7 +1098,6 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
                     audio_output_offset_ms: audio_offset_ms,
                     visual_alignment_offset_ms: visual_offset_ms,
                     input_capture_offset_ms: input_offset_ms,
-                    scoring_compare_offset_ms: scoring_offset_ms,
                     loop_iteration: struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : 0
                 });
             }
