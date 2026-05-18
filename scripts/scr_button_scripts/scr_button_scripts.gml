@@ -49,12 +49,12 @@
 			case 28: scr_player_clear_guest_history(); break;
 			case 29: scr_toggle_loop_score_overview(ctx); break;
 			case 30: scr_settings_logs_toggle(ctx); break;
-			case 31: scr_calibration_mode_change(ctx); break;
+			case 31: scr_script_not_set(ctx); break;
 			case 32: scr_calibration_offset_change(ctx); break;
-			case 33: scr_calibration_start_run(ctx); break;
-			case 34: scr_calibration_prepare_probe_draft(ctx); break;
-			case 35: scr_calibration_accept(ctx); break;
-			case 36: scr_calibration_cancel(ctx); break;
+			case 33: scr_script_not_set(ctx); break;
+			case 34: scr_script_not_set(ctx); break;
+			case 35: scr_script_not_set(ctx); break;
+			case 36: scr_script_not_set(ctx); break;
 			case 37: scr_calibration_apply_profile(ctx); break;
 			default: show_debug_message("Unknown button script index: " + string(button_ID)); scr_script_not_set(ctx); break;
 		}
@@ -150,179 +150,75 @@
 		return noone;
 	}
 
-	/// @function scr_button_calibration_mode_options()
-	/// @description Canonical timing calibration mode labels used by settings UI.
-	/// @returns {array} Ordered mode keys
-	function scr_button_calibration_mode_options() {
-		return ["click", "visual", "balanced"];
-	}
-
-	/// @function scr_button_calibration_mode_index(_mode)
-	/// @description Convert calibration mode string to settings field index.
-	/// @param _mode Calibration mode string
-	/// @returns {real} Index into scr_button_calibration_mode_options
-	function scr_button_calibration_mode_index(_mode) {
-		var mode = string_lower(string(_mode));
-		var options = scr_button_calibration_mode_options();
-		for (var i = 0; i < array_length(options); i++) {
-			if (mode == options[i]) return i;
-		}
-		return 2;
-	}
-
-	/// @function scr_button_calibration_mode_label(_mode)
-	/// @description Human-readable label for a calibration mode key.
-	/// @param _mode Calibration mode string
-	/// @returns {string} Label for UI field contents
-	function scr_button_calibration_mode_label(_mode) {
-		var mode = string_lower(string(_mode));
-		if (mode == "click") return "Click";
-		if (mode == "visual") return "Visual";
-		return "Balanced";
-	}
-
 	/// @function scr_button_calibration_refresh_ui()
-	/// @description Refresh timing calibration settings fields (mode, offsets, status).
-	/// @reads global.timeline_cfg, global.timing_calibration
+	/// @description Refresh timing calibration offset fields when those UI fields exist.
+	/// @reads global.timeline_cfg
 	/// @writes obj_field_base.field_min_value/field_max_value/field_value/field_contents
 	/// @objects obj_field_base
-	/// @callers scr_open_window, scr_calibration_mode_change, scr_calibration_offset_change, scr_calibration_prepare_probe_draft, scr_calibration_accept, scr_calibration_cancel, scr_calibration_apply_profile
+	/// @callers scr_open_window, scr_calibration_offset_change, scr_calibration_apply_profile
 	function scr_button_calibration_refresh_ui() {
-		if (!script_exists(asset_get_index("timing_calibration_ensure_state"))) return;
+		if (!script_exists(asset_get_index("timing_calibration_get_current_offsets"))) return;
 
-		var state = timing_calibration_ensure_state();
-		var mode = timing_calibration_normalize_mode(state.calibration_mode);
-		var mode_options = scr_button_calibration_mode_options();
-		var mode_index = scr_button_calibration_mode_index(mode);
+		var offsets = timing_calibration_get_current_offsets();
+		var offset_min = -300;
+		var offset_max = 300;
+		var specs = [
+			{ ui_name: "setting_field_cal_audio", key: "audio_output_offset_ms" },
+			{ ui_name: "setting_field_cal_visual", key: "visual_alignment_offset_ms" }
+		];
 
-		var mode_field = scr_button_find_field_by_ui_name("setting_field_cal_mode");
-		if (instance_exists(mode_field)) {
-			scr_button_field_set(mode_field, "field_min_value", 0);
-			scr_button_field_set(mode_field, "field_max_value", array_length(mode_options) - 1);
-			scr_button_field_set(mode_field, "field_value", mode_index);
-			scr_button_field_set(mode_field, "field_contents", scr_button_calibration_mode_label(mode));
-		}
+		for (var i = 0; i < array_length(specs); i++) {
+			var spec = specs[i];
+			var field_inst = scr_button_find_field_by_ui_name(spec.ui_name);
+			if (!instance_exists(field_inst)) continue;
 
-
-		       var offsets = timing_calibration_get_current_offsets();
-		       if (bool(state.session_has_draft ?? false) && is_struct(state.session_draft_offsets)) {
-			       offsets = state.session_draft_offsets;
-		       }
-
-		       var offset_min = -300;
-		       var offset_max = 300;
-
-		       var score_field = scr_button_find_field_by_ui_name("setting_field_cal_score");
-		       if (instance_exists(score_field)) {
-			       var score_ms = real(offsets.scoring_compare_offset_ms ?? 0);
-			       scr_button_field_set(score_field, "field_min_value", offset_min);
-			       scr_button_field_set(score_field, "field_max_value", offset_max);
-			       scr_button_field_set(score_field, "field_value", score_ms);
-			       scr_button_field_set(score_field, "field_contents", string_format(score_ms, 0, 1) + " ms");
-		       }
-
-		var status_field = scr_button_find_field_by_ui_name("setting_field_cal_status");
-		if (instance_exists(status_field)) {
-			var status_text = timing_calibration_get_status_text();
-			scr_button_field_set(status_field, "field_min_value", 0);
-			scr_button_field_set(status_field, "field_max_value", 0);
-			scr_button_field_set(status_field, "field_value", 0);
-			scr_button_field_set(status_field, "field_contents", status_text);
+			var current_ms = variable_struct_exists(offsets, spec.key)
+				? real(variable_struct_get(offsets, spec.key))
+				: 0;
+			scr_button_field_set(field_inst, "field_min_value", offset_min);
+			scr_button_field_set(field_inst, "field_max_value", offset_max);
+			scr_button_field_set(field_inst, "field_value", current_ms);
+			scr_button_field_set(field_inst, "field_contents", string_format(current_ms, 0, 1) + " ms");
 		}
 	}
 
 	/// @function scr_button_calibration_apply_offset_delta(_field_ui_name, _delta_ms)
-	/// @description Apply a manual ms delta to one calibration offset domain.
+	/// @description Apply a manual ms delta to audio or visual calibration offset domain.
 	/// @param _field_ui_name Calibration field ui_name
 	/// @param _delta_ms Signed milliseconds to apply
 	/// @returns {bool} True when a known offset field was updated
-	/// @reads global.timing_calibration, global.timeline_cfg
-	/// @writes global.timeline_cfg.* offsets, global.timing_calibration.session_draft_offsets/status/last_message
+	/// @reads global.timeline_cfg
+	/// @writes global.timeline_cfg.* offsets, global.timing_calibration.last_message
 	/// @callers scr_calibration_offset_change
 	function scr_button_calibration_apply_offset_delta(_field_ui_name, _delta_ms) {
 		if (!script_exists(asset_get_index("timing_calibration_get_current_offsets"))) return false;
+		if (!script_exists(asset_get_index("timing_calibration_apply_offsets"))) return false;
 
 		var ui_name = string(_field_ui_name);
 		var delta = real(_delta_ms);
 		if (delta == 0) return false;
 
-		       var offsets = timing_calibration_get_current_offsets();
-		       var score_ms = real(offsets.scoring_compare_offset_ms ?? 0);
+		var offsets = timing_calibration_get_current_offsets();
+		var audio_ms = real(offsets.audio_output_offset_ms ?? 0);
+		var visual_ms = real(offsets.visual_alignment_offset_ms ?? 0);
 
-		       if (ui_name == "setting_field_cal_score") {
-			       score_ms += delta;
-		       } else {
-			       return false;
-		       }
-
-		       var applied = timing_calibration_apply_offsets(undefined, undefined, undefined, score_ms, "settings-manual");
-		       var state = timing_calibration_ensure_state();
-		       if (bool(state.active ?? false)) {
-			       state.session_has_draft = true;
-			       state.session_draft_offsets = applied;
-			       state.status = "draft_ready";
-		       }
-		       state.last_message = "Manual calibration nudge applied.";
-		       return true;
-	}
-
-	/// @function scr_button_calibration_start_run_with_selected_mode(_mode)
-	/// @description Start calibration session, load calibration tune, and launch Room_play with auto-start.
-	/// @param _mode Calibration mode string
-	/// @returns {bool} True when calibration tune was loaded and playback launch was triggered
-	/// @reads global.timing_calibration.tune_filename
-	/// @writes global.pending_auto_start_play, global.current_tune_filename, global.current_set, global.current_set_item_index, global.timing_calibration.*
-	/// @callers scr_calibration_start_run
-	function scr_button_calibration_start_run_with_selected_mode(_mode) {
-		if (!script_exists(asset_get_index("timing_calibration_start_session"))) return false;
-
-		var state = timing_calibration_start_session(_mode);
-		var tune_filename = string(state.tune_filename ?? "Calibration/Calibration.json");
-		if (string_length(string_trim(tune_filename)) <= 0) tune_filename = "Calibration/Calibration.json";
-
-		var tune_base = tune_filename;
-		for (var slash_i = 1; slash_i <= string_length(tune_base); slash_i++) {
-			var slash_char = string_copy(tune_base, slash_i, 1);
-			if (slash_char == "/" || slash_char == "\\") {
-				tune_base = string_copy(tune_base, slash_i + 1, string_length(tune_base) - slash_i);
-				slash_i = 0;
-			}
-		}
-
-		var candidates = [tune_filename];
-		array_push(candidates, "tunes/" + tune_filename);
-		array_push(candidates, "datafiles/tunes/" + tune_filename);
-		array_push(candidates, "C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/" + tune_filename);
-		if (tune_base != tune_filename) array_push(candidates, tune_base);
-		if (tune_base != "") {
-			array_push(candidates, "tunes/" + tune_base);
-			array_push(candidates, "datafiles/tunes/" + tune_base);
-		}
-
-		var tune_entry = { filename: tune_filename, title: "Calibration" };
-		var loaded = false;
-		for (var i = 0; i < array_length(candidates) && !loaded; i++) {
-			loaded = scr_button_try_load_tune_candidate(candidates[i], tune_entry, "settings_window_layer", false);
-		}
-
-		if (!loaded) {
-			state.active = false;
-			state.status = "load_failed";
-			state.last_message = "Calibration tune missing: " + candidates[0];
-			scr_button_calibration_refresh_ui();
-			var tried = "";
-			for (var ci = 0; ci < array_length(candidates); ci++) {
-				if (ci > 0) tried += ", ";
-				tried += string(candidates[ci]);
-			}
-			show_debug_message("[CALIBRATION] Could not load calibration tune. Tried: " + tried);
+		if (ui_name == "setting_field_cal_audio") {
+			audio_ms += delta;
+		} else if (ui_name == "setting_field_cal_visual") {
+			visual_ms += delta;
+		} else {
 			return false;
 		}
 
-		state.status = "running";
-		state.last_message = "Calibration run started.";
-		global.pending_auto_start_play = true;
-		scr_goto_playroom();
+		timing_calibration_apply_offsets(audio_ms, visual_ms, "settings-manual");
+		var state = timing_calibration_ensure_state();
+		state.last_message = "Manual calibration nudge applied.";
+		if (script_exists(asset_get_index("timing_calibration_store_current_device_profile"))) {
+			timing_calibration_store_current_device_profile();
+		}
+		if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+			scoring_player_settings_save_for_player();
+		}
 		return true;
 	}
 
@@ -1753,35 +1649,7 @@
 		show_debug_message("[SETTINGS] Logs " + (logs_enabled ? "ON" : "OFF"));
 	}
 
-	//CASE 31 - Calibration mode selector (Click/Visual/Balanced)
-	/// @function scr_calibration_mode_change(_ctx)
-	/// @description Cycle calibration mode in settings and keep timing_calibration state in sync.
-	/// @reads global.timing_calibration
-	/// @writes global.timing_calibration.calibration_mode
-	/// @callers scr_handle_button_click (button 31)
-	function scr_calibration_mode_change(_ctx = noone) {
-		var ctx = scr_button_get_ctx(_ctx);
-		if (ctx == noone) return;
-
-		var state = timing_calibration_ensure_state();
-		var field = scr_button_inst_get(ctx, "field_ref", noone);
-		if (!instance_exists(field)) {
-			scr_button_calibration_refresh_ui();
-			return;
-		}
-
-		var options = scr_button_calibration_mode_options();
-		var idx = real(scr_button_field_get(field, "field_value", scr_button_calibration_mode_index(state.calibration_mode)));
-		var delta = real(scr_button_inst_get(ctx, "button_click_value", 0));
-		if (delta == 0) delta = 1;
-		idx = (idx + delta + array_length(options)) mod array_length(options);
-
-		state.calibration_mode = options[idx];
-		state.last_message = "Calibration mode set to " + scr_button_calibration_mode_label(state.calibration_mode) + ".";
-		scr_button_calibration_refresh_ui();
-	}
-
-	//CASE 32 - Manual calibration offset nudge (+/- 5ms)
+	//CASE 32 - Manual calibration offset nudge (+/- 5ms) for audio/visual/input/score fields
 	/// @function scr_calibration_offset_change(_ctx)
 	/// @description Adjust one calibration offset domain by fixed-step milliseconds.
 	/// @callers scr_handle_button_click (button 32)
@@ -1797,70 +1665,6 @@
 		if (scr_button_calibration_apply_offset_delta(ui_name, delta)) {
 			scr_button_calibration_refresh_ui();
 		}
-	}
-
-	//CASE 33 - Start calibration run
-	/// @function scr_calibration_start_run(_ctx)
-	/// @description Start a calibration session and launch the calibration tune playback.
-	/// @callers scr_handle_button_click (button 33)
-	function scr_calibration_start_run(_ctx = noone) {
-		var state = timing_calibration_ensure_state();
-		var selected_mode = timing_calibration_normalize_mode(state.calibration_mode);
-
-		var ctx = scr_button_get_ctx(_ctx);
-		if (ctx != noone) {
-			var mode_field = scr_button_inst_get(ctx, "field_ref", noone);
-			if (instance_exists(mode_field)) {
-				var options = scr_button_calibration_mode_options();
-				var idx = clamp(real(scr_button_field_get(mode_field, "field_value", scr_button_calibration_mode_index(selected_mode))), 0, array_length(options) - 1);
-				selected_mode = options[idx];
-			}
-		}
-
-		scr_button_calibration_start_run_with_selected_mode(selected_mode);
-	}
-
-	//CASE 34 - Probe current run and build draft offsets
-	/// @function scr_calibration_prepare_probe_draft(_ctx)
-	/// @description Analyze latest run timing and prepare draft split offsets for the selected mode.
-	/// @callers scr_handle_button_click (button 34)
-	function scr_calibration_prepare_probe_draft(_ctx = noone) {
-		var ctx = scr_button_get_ctx(_ctx);
-		var state = timing_calibration_ensure_state();
-		var mode = timing_calibration_normalize_mode(state.calibration_mode);
-
-		if (ctx != noone) {
-			var mode_field = scr_button_inst_get(ctx, "field_ref", noone);
-			if (instance_exists(mode_field)) {
-				var options = scr_button_calibration_mode_options();
-				var idx = clamp(real(scr_button_field_get(mode_field, "field_value", scr_button_calibration_mode_index(mode))), 0, array_length(options) - 1);
-				mode = options[idx];
-			}
-		}
-
-		var result = timing_calibration_prepare_draft_from_probe(mode);
-		if (!bool(result.success ?? false)) {
-			state.last_message = string(result.message ?? "Calibration probe failed.");
-		}
-		scr_button_calibration_refresh_ui();
-	}
-
-	//CASE 35 - Accept draft/session offsets
-	/// @function scr_calibration_accept(_ctx)
-	/// @description Apply calibration draft offsets, persist to player/device profile, and end session.
-	/// @callers scr_handle_button_click (button 35)
-	function scr_calibration_accept(_ctx = noone) {
-		timing_calibration_accept_session();
-		scr_button_calibration_refresh_ui();
-	}
-
-	//CASE 36 - Cancel calibration session
-	/// @function scr_calibration_cancel(_ctx)
-	/// @description Cancel calibration session and restore pre-session offsets.
-	/// @callers scr_handle_button_click (button 36)
-	function scr_calibration_cancel(_ctx = noone) {
-		timing_calibration_cancel_session();
-		scr_button_calibration_refresh_ui();
 	}
 
 	//CASE 37 - Apply saved profile for current MIDI device pairing

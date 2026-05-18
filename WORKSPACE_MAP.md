@@ -189,11 +189,12 @@ This describes how a tune is triggered and how events flow through the system:
 - CSV/export analysis is designed to compare expected/game/player timing as player-input logging expands
 
 ### Calibration Handoff (Current)
-- Split timing domains are active in runtime config: `audio_output_offset_ms`, `visual_alignment_offset_ms`, `input_capture_offset_ms`, `scoring_compare_offset_ms`.
-- Non-UI calibration APIs are implemented in `scr_tune_scripts.gml` (session start/probe draft/accept/cancel, per-device profile hydrate/store).
+- Split timing domains (two active): `audio_output_offset_ms`, `visual_alignment_offset_ms` (reserved for future: `input_capture_offset_ms`).
+- Scoring offset removed to keep player feedback honest.
+- Calibration APIs in `scr_tune_scripts.gml` (per-device profile hydrate/store and offset apply).
 - Player settings persist `settings.timing_calibration` via `scr_scoring.gml` save/load.
-- Scheduler timing now applies `audio_output_offset_ms` in both timesource and step scheduler paths.
-- Settings v1 calibration controls are wired in `settings_window_layer` and dispatched via `scr_button_scripts` cases 31-37 (mode, manual nudge, run, probe draft, accept, cancel, apply profile).
+- Scheduler timing applies `audio_output_offset_ms` in both timesource and step scheduler paths.
+- Script dispatcher keeps calibration hooks at cases `32` (manual nudge audio/visual) and `37` (apply saved profile); cases `31/33/34/35/36` are intentionally inactive.
 
 ---
 
@@ -394,7 +395,7 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.EVENT_HISTORY_ENABLED` | bool | Master on/off for event logging | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.EVENT_HISTORY_AUTO_EXPORT` | bool | Auto-export CSV after playback ends | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.scoring_last_run` | struct\|undefined | Result of most recent scoring run; undefined until first run | `scr_scoring` (lazy init) | `scr_scoring`, UI display |
-| `global.timing_calibration` | struct | Calibration/session state: `{active, status, calibration_mode, active_device_key, device_profiles, session_previous_offsets, session_draft_offsets, session_has_draft, audio_offset_ms, visual_offset_ms, input_offset_ms, scoring_offset_ms, jitter_summary, ...}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions |
+| `global.timing_calibration` | struct | Two-offset calibration state: `{active, status, active_device_key, device_profiles, audio_offset_ms, visual_offset_ms, input_offset_ms (reserved), last_message, jitter_summary}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions |
 | `global.metronome_mode` | real | 0=None 1=Click 2=Drums | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts`, `scr_scoring` |
 | `global.metronome_pattern_selection` | real | Index into `global.metronome_pattern_options` | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
 | `global.metronome_volume` | real | MIDI velocity 0–127 | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |

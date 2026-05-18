@@ -1554,19 +1554,19 @@ Observations collected during full-codebase annotation (annotation pass, 2025).
 - Do not commit dead code (commented-out sections, unreachable paths)
 
 #### 2. **Version checkpoints frequently**
-- After every 2–3 working hours on a risky refactor, create a temporary commit and test end-to-end
+- After every 2ï¿½3 working hours on a risky refactor, create a temporary commit and test end-to-end
 - Test: launch game, play a tune, close cleanly
 - Never let uncommitted work pile up
 
 #### 3. **Separate concerns**
-- Timing offsets are **core** — touch only in isolation
-- Calibration logic is **experimental** — keep in separate functions
+- Timing offsets are **core** ï¿½ touch only in isolation
+- Calibration logic is **experimental** ï¿½ keep in separate functions
 - Do not weave calibration into scoring/MIDI/event paths
 - Make calibration-aware behavior optional via parameters, not embedded
 
 #### 4. **Compilation validation before every commit**
 - Run full project compile
-- Zero errors before committing — fix warnings about unreachable code immediately
+- Zero errors before committing ï¿½ fix warnings about unreachable code immediately
 - Use documentation tags (\@reads\, \@writes\, \@callers\) to make dependencies explicit
 
 #### 5. **Rollback checkpoints**

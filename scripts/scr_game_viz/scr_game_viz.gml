@@ -641,15 +641,7 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) {
         variable_struct_set(global.timeline_cfg, "input_capture_offset_ms", 0);
     }
-    if (!variable_struct_exists(global.timeline_cfg, "scoring_compare_offset_ms")) {
-        variable_struct_set(global.timeline_cfg, "scoring_compare_offset_ms", 0);
-    }
-    if (!variable_struct_exists(global.timeline_cfg, "timing_calibration_match_window_ms")) {
-        variable_struct_set(global.timeline_cfg, "timing_calibration_match_window_ms", 350);
-    }
-    if (!variable_struct_exists(global.timeline_cfg, "timing_calibration_min_matches")) {
-        variable_struct_set(global.timeline_cfg, "timing_calibration_min_matches", 8);
-    }
+    // Scoring offset is no longer supported (player feedback must be honest)
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_beat_box_even_color")) {
         variable_struct_set(global.timeline_cfg, "notebeam_beat_box_even_color", make_color_rgb(245, 245, 245));
     }
@@ -2891,11 +2883,6 @@ function gv_on_tune_playback_finished(_final_time_ms = -1) {
             }
             _rcs[$ "review_match_state"] = _rcstate;
         }
-    }
-
-    // Show diagnostic timing offset for this run
-    if (is_undefined(timing_calibration_probe_from_current_run) == false) {
-        timing_calibration_probe_from_current_run();
     }
 }
 
