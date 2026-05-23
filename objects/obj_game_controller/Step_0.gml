@@ -138,3 +138,29 @@ if (keyboard_check_pressed(ord("D"))) {
 	scr_set_init_global();
 	show_debug_message("D: set cleared, scr_set_is_active() = " + string(scr_set_is_active()));
 }
+
+// ── DEV: L = run MIDI loopback calibration ──────────────────────────
+if (keyboard_check_pressed(ord("L"))) {
+	// Only allow in main menu or settings (no tune/gameplay active)
+	var _main_layer_id = layer_get_id("main_menu_layer");
+	var _settings_layer_id = layer_get_id("settings_window_layer");
+	var _main_visible = (_main_layer_id != -1) && layer_get_visible(_main_layer_id);
+	var _settings_visible = (_settings_layer_id != -1) && layer_get_visible(_settings_layer_id);
+	if (_main_visible || _settings_visible) {
+		var _ok = timing_calibration_dev_run_midi_loopback(20);
+		show_debug_message("L: MIDI loopback calibration triggered, ok=" + string(_ok));
+	}
+}
+
+// ── DEV: O = run external audio loopback pulse stage ─────────────────
+if (keyboard_check_pressed(ord("O"))) {
+	// Only allow in main menu or settings (no tune/gameplay active)
+	var _main_layer_id_o = layer_get_id("main_menu_layer");
+	var _settings_layer_id_o = layer_get_id("settings_window_layer");
+	var _main_visible_o = (_main_layer_id_o != -1) && layer_get_visible(_main_layer_id_o);
+	var _settings_visible_o = (_settings_layer_id_o != -1) && layer_get_visible(_settings_layer_id_o);
+	if (_main_visible_o || _settings_visible_o) {
+		var _ok_o = timing_calibration_dev_run_external_audio_loopback(20);
+		show_debug_message("O: external audio loopback pulse stage triggered, ok=" + string(_ok_o));
+	}
+}

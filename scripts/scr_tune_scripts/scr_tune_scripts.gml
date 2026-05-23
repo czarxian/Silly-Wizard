@@ -40,6 +40,22 @@ function timing_calibration_ensure_state() {
             visual_offset_ms: 0,
             input_offset_ms: 0,  // RESERVED: future use if true MIDI device timestamps become available
             last_message: "Timing offsets loaded.",
+            calibration_logs: [],
+            calibration_result: {
+                audio_output_offset_ms: 0,
+                midi_internal_offset_ms: 0,
+                jitter_audio_ms: 0,
+                jitter_midi_ms: 0,
+                timestamp: 0
+            },
+            midi_loopback: {
+                active: false,
+                status: "idle"
+            },
+            external_audio_loopback: {
+                active: false,
+                status: "idle"
+            },
             jitter_summary: {
                 scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
                 controller_step_interval_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
@@ -55,6 +71,22 @@ function timing_calibration_ensure_state() {
     if (!variable_struct_exists(state, "audio_offset_ms")) state.audio_offset_ms = 0;
     if (!variable_struct_exists(state, "visual_offset_ms")) state.visual_offset_ms = 0;
     if (!variable_struct_exists(state, "input_offset_ms")) state.input_offset_ms = 0;  // RESERVED
+    if (!variable_struct_exists(state, "calibration_logs") || !is_array(state.calibration_logs)) state.calibration_logs = [];
+    if (!variable_struct_exists(state, "calibration_result") || !is_struct(state.calibration_result)) {
+        state.calibration_result = {
+            audio_output_offset_ms: 0,
+            midi_internal_offset_ms: 0,
+            jitter_audio_ms: 0,
+            jitter_midi_ms: 0,
+            timestamp: 0
+        };
+    }
+    if (!variable_struct_exists(state, "midi_loopback") || !is_struct(state.midi_loopback)) {
+        state.midi_loopback = { active: false, status: "idle" };
+    }
+    if (!variable_struct_exists(state, "external_audio_loopback") || !is_struct(state.external_audio_loopback)) {
+        state.external_audio_loopback = { active: false, status: "idle" };
+    }
     if (!variable_struct_exists(state, "jitter_summary") || !is_struct(state.jitter_summary)) {
         state.jitter_summary = {
             scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
@@ -176,7 +208,8 @@ function timing_calibration_build_settings_payload() {
     var state = timing_calibration_ensure_state();
     return {
         active_device_key: string(state.active_device_key ?? ""),
-        device_profiles: state.device_profiles
+        device_profiles: state.device_profiles,
+        calibration_result: state.calibration_result
     };
 }
 
@@ -206,10 +239,937 @@ function timing_calibration_hydrate_from_settings(_settings) {
         var dp_keys = struct_get_names(tc[$ "device_profiles"]);
         scoring_calibration_debug_log("[HYDRATE] Loaded device_profiles with " + string(array_length(dp_keys)) + " keys");
     }
+    if (variable_struct_exists(tc, "calibration_result") && is_struct(tc[$ "calibration_result"])) {
+        state.calibration_result = tc[$ "calibration_result"];
+    }
 
     var result = timing_calibration_apply_profile_for_current_device();
     scoring_calibration_debug_log("[HYDRATE] apply_profile_for_current_device returned: " + string(result));
     return result;
+}
+
+/// @function timing_calibration_log_add(_event_type, _value)
+/// @description Append a calibration log entry using shared format: {timestamp_ms, event_type, value}.
+/// @param _event_type One of send/receive/info/error
+/// @param _value Event-specific payload (struct or primitive)
+/// @returns Struct log entry
+/// @writes global.timing_calibration.calibration_logs
+function timing_calibration_log_add(_event_type, _value) {
+    var state = timing_calibration_ensure_state();
+    var ev = {
+        timestamp_ms: timing_get_engine_now_ms(),
+        event_type: string_lower(string(_event_type)),
+        value: _value
+    };
+    array_push(state.calibration_logs, ev);
+    return ev;
+}
+
+/// @function timing_calibration_logs_reset()
+/// @description Clear in-memory calibration logs.
+/// @writes global.timing_calibration.calibration_logs
+function timing_calibration_logs_reset() {
+    var state = timing_calibration_ensure_state();
+    state.calibration_logs = [];
+}
+
+/// @function timing_calibration_export_logs(_path)
+/// @description Export calibration logs to CSV with columns: timestamp_ms,event_type,value.
+/// @param _path Optional output path
+/// @returns Export path on success, "" on failure
+function timing_calibration_export_logs(_path = "") {
+    var state = timing_calibration_ensure_state();
+    var path = string(_path);
+    if (path == "") {
+        var stamp = string(floor(timing_get_engine_now_ms()));
+        path = "calibration_logs_" + stamp + ".csv";
+    }
+
+    var fh = file_text_open_write(path);
+    if (fh < 0) {
+        timing_calibration_log_add("error", "Failed to open export path: " + path);
+        return "";
+    }
+
+    file_text_write_string(fh, "timestamp_ms,event_type,value\n");
+    var logs = state.calibration_logs;
+    for (var i = 0; i < array_length(logs); i++) {
+        var row = logs[i];
+        if (!is_struct(row)) continue;
+        var ts = string(real(row.timestamp_ms ?? 0));
+        var et = string(row.event_type ?? "info");
+        var vv = row.value;
+        var value_text = is_struct(vv) || is_array(vv) ? json_stringify(vv) : string(vv);
+        value_text = string_replace_all(value_text, "\"", "'");
+        value_text = string_replace_all(value_text, ",", ";");
+        file_text_write_string(fh, ts + "," + et + "," + value_text + "\n");
+    }
+
+    file_text_close(fh);
+    timing_calibration_log_add("info", "Exported calibration logs: " + path);
+    return path;
+}
+
+/// @function timing_calibration_import_result_json(_path)
+/// @description Import calibration result JSON from disk and apply to current calibration state.
+/// @param _path File path
+/// @returns True when imported
+/// @writes global.timing_calibration.calibration_result
+function timing_calibration_import_result_json(_path) {
+    var path = string(_path);
+    if (path == "" || !file_exists(path)) {
+        timing_calibration_log_add("error", "Import result path not found: " + path);
+        return false;
+    }
+
+    var fh = file_text_open_read(path);
+    if (fh < 0) {
+        timing_calibration_log_add("error", "Failed to open import path: " + path);
+        return false;
+    }
+
+    var raw = "";
+    while (!file_text_eof(fh)) {
+        raw += file_text_read_string(fh);
+        file_text_readln(fh);
+    }
+    file_text_close(fh);
+
+    var parsed = undefined;
+    try {
+        parsed = json_parse(raw);
+    } catch (ex) {
+        timing_calibration_log_add("error", "Invalid calibration result JSON");
+        return false;
+    }
+    if (!is_struct(parsed)) {
+        timing_calibration_log_add("error", "Imported calibration result is not an object");
+        return false;
+    }
+
+    var state = timing_calibration_ensure_state();
+    state.calibration_result = {
+        audio_output_offset_ms: variable_struct_exists(parsed, "audio_output_offset_ms") ? real(variable_struct_get(parsed, "audio_output_offset_ms")) : 0,
+        midi_internal_offset_ms: variable_struct_exists(parsed, "midi_internal_offset_ms") ? real(variable_struct_get(parsed, "midi_internal_offset_ms")) : 0,
+        jitter_audio_ms: variable_struct_exists(parsed, "jitter_audio_ms") ? real(variable_struct_get(parsed, "jitter_audio_ms")) : 0,
+        jitter_midi_ms: variable_struct_exists(parsed, "jitter_midi_ms") ? real(variable_struct_get(parsed, "jitter_midi_ms")) : 0,
+        timestamp: variable_struct_exists(parsed, "timestamp") ? real(variable_struct_get(parsed, "timestamp")) : timing_get_engine_now_ms()
+    };
+    timing_calibration_log_add("info", "Imported calibration result from " + path);
+    return true;
+}
+
+/// @function timing_calibration_find_loopmidi_devices()
+/// @description Find loopMIDI input/output ports by name; if not found, falls back to active globals and reports whether loopMIDI was found.
+/// @returns Struct {input_index, output_index, input_name, output_name}
+function timing_calibration_find_loopmidi_devices() {
+    var in_idx = variable_global_exists("midi_input_device") ? floor(real(global.midi_input_device)) : 0;
+    var out_idx = variable_global_exists("midi_output_device") ? floor(real(global.midi_output_device)) : 0;
+    var in_count = midi_input_device_count();
+    var out_count = midi_output_device_count();
+    var in_valid = (in_count > 0 && in_idx >= 0 && in_idx < in_count);
+    var out_valid = (out_count > 0 && out_idx >= 0 && out_idx < out_count);
+    var in_name = in_valid ? midi_input_device_name(in_idx) : "";
+    var out_name = out_valid ? midi_output_device_name(out_idx) : "";
+
+    // For internal loopback calibration, always prefer explicit loopMIDI ports when present.
+    var found_loop_input = false;
+    var found_loop_output = false;
+    for (var i = 0; i < in_count; i++) {
+        var nm_in = string_lower(string(midi_input_device_name(i)));
+        if (string_pos("loopmidi", nm_in) > 0 || string_pos("loop midi", nm_in) > 0) {
+            in_idx = i;
+            in_name = midi_input_device_name(i);
+            in_valid = true;
+            found_loop_input = true;
+            break;
+        }
+    }
+
+    for (var j = 0; j < out_count; j++) {
+        var nm_out = string_lower(string(midi_output_device_name(j)));
+        if (string_pos("loopmidi", nm_out) > 0 || string_pos("loop midi", nm_out) > 0) {
+            out_idx = j;
+            out_name = midi_output_device_name(j);
+            out_valid = true;
+            found_loop_output = true;
+            break;
+        }
+    }
+
+    // Final clamp fallback if no valid selection found.
+    if (!in_valid && in_count > 0) {
+        in_idx = 0;
+        in_name = midi_input_device_name(0);
+    }
+    if (!out_valid && out_count > 0) {
+        out_idx = 0;
+        out_name = midi_output_device_name(0);
+    }
+
+    return {
+        input_index: in_idx,
+        output_index: out_idx,
+        input_name: in_name,
+        output_name: out_name,
+        found_loop_input: found_loop_input,
+        found_loop_output: found_loop_output
+    };
+}
+
+/// @function timing_calibration_should_suppress_midi_thru()
+/// @description Return true while MIDI loopback calibration is active to prevent MIDI thru feedback loops.
+/// @returns Bool
+function timing_calibration_should_suppress_midi_thru() {
+    var state = timing_calibration_ensure_state();
+    return is_struct(state.midi_loopback) && bool(state.midi_loopback.active ?? false);
+}
+
+/// @function timing_calibration_start_midi_loopback(_trials)
+/// @description Start internal MIDI loopback calibration test (loopMIDI roundtrip) and capture per-trial latency.
+/// @param _trials Number of loopback trials
+/// @returns Bool started
+/// @writes global.timing_calibration.midi_loopback, global.timing_calibration.calibration_logs
+function timing_calibration_start_midi_loopback(_trials = 20) {
+    var state = timing_calibration_ensure_state();
+    var trials = max(1, floor(real(_trials)));
+    var ports = timing_calibration_find_loopmidi_devices();
+
+    if (!bool(ports.found_loop_input ?? false) || !bool(ports.found_loop_output ?? false)) {
+        show_debug_message("[CAL_LOOPBACK] warning: loopMIDI port(s) not found; using currently selected devices."
+            + " | found_in=" + string(bool(ports.found_loop_input ?? false))
+            + " | found_out=" + string(bool(ports.found_loop_output ?? false))
+            + " | selected_in='" + string(ports.input_name) + "'"
+            + " | selected_out='" + string(ports.output_name) + "'");
+        timing_calibration_log_add("warning", {
+            mode: "midi_loopback",
+            reason: "missing_loopmidi_ports",
+            found_loop_input: bool(ports.found_loop_input ?? false),
+            found_loop_output: bool(ports.found_loop_output ?? false),
+            selected_input_name: string(ports.input_name),
+            selected_output_name: string(ports.output_name)
+        });
+    }
+
+    timing_calibration_logs_reset();
+    timing_calibration_log_add("info", {
+        mode: "midi_loopback",
+        trials: trials,
+        input_name: ports.input_name,
+        output_name: ports.output_name
+    });
+
+    state.midi_loopback = {
+        active: true,
+        status: "running",
+        total_trials: trials,
+        completed_trials: 0,
+        awaiting_receive: false,
+        note: 65,
+        velocity: 110,
+        channel: 0,
+        cycle_interval_ms: 1000,
+        pulse_duration_ms: 500,
+        next_send_ms: timing_get_engine_now_ms(),
+        note_off_due_ms: 0,
+        pulse_note_off_sent: true,
+        last_send_ms: 0,
+        timeout_ms: 1000,
+        send_times: [],
+        latency_pairs_ms: [],
+        rx_note_on_total: 0,
+        rx_note_on_match_total: 0,
+        rx_note_on_mismatch_total: 0,
+        manual_poll_enabled_by_loopback: true,
+        prev_input_device: variable_global_exists("midi_input_device") ? floor(real(global.midi_input_device)) : 0,
+        prev_output_device: variable_global_exists("midi_output_device") ? floor(real(global.midi_output_device)) : 0,
+        prev_input_name: variable_global_exists("midi_input_device_name") ? string(global.midi_input_device_name) : "",
+        prev_output_name: variable_global_exists("midi_output_device_name") ? string(global.midi_output_device_name) : "",
+        loop_input_device: floor(real(ports.input_index)),
+        loop_output_device: floor(real(ports.output_index))
+    };
+
+    global.midi_input_device = state.midi_loopback.loop_input_device;
+    global.midi_output_device = state.midi_loopback.loop_output_device;
+    midi_input_device_open(global.midi_input_device);
+    midi_output_device_open(global.midi_output_device);
+    midi_input_message_manual_checking(1);
+    midi_error_manual_checking(1);
+    if (midi_input_device_count() > 0 && global.midi_input_device >= 0 && global.midi_input_device < midi_input_device_count()) {
+        global.midi_input_device_name = midi_input_device_name(global.midi_input_device);
+    }
+    if (midi_output_device_count() > 0 && global.midi_output_device >= 0 && global.midi_output_device < midi_output_device_count()) {
+        global.midi_output_device_name = midi_output_device_name(global.midi_output_device);
+    }
+
+    state.last_message = "MIDI loopback calibration started (" + string(trials) + " trials).";
+    show_debug_message("[CAL_LOOPBACK] start in=" + string(state.midi_loopback.loop_input_device)
+        + " '" + string(global.midi_input_device_name) + "'"
+        + " | out=" + string(state.midi_loopback.loop_output_device)
+        + " '" + string(global.midi_output_device_name) + "'"
+        + " | pulse_ms=" + string(state.midi_loopback.pulse_duration_ms)
+        + " | cycle_ms=" + string(state.midi_loopback.cycle_interval_ms)
+        + " | trials=" + string(trials));
+    if (string_lower(string(global.midi_input_device_name)) == string_lower(string(global.midi_output_device_name))) {
+        show_debug_message("[CAL_LOOPBACK] warning: input/output resolved to the same device; two-port roundtrip may not work.");
+    }
+    return true;
+}
+
+/// @function timing_calibration_finish_midi_loopback(_ok)
+/// @description Finalize MIDI loopback test, compute latency/jitter, restore previous MIDI devices, and persist result.
+/// @param _ok Whether run completed successfully
+/// @returns Struct calibration result
+function timing_calibration_finish_midi_loopback(_ok) {
+    var state = timing_calibration_ensure_state();
+    var ml = state.midi_loopback;
+    var vals = is_struct(ml) && is_array(ml.latency_pairs_ms) ? ml.latency_pairs_ms : [];
+
+    var n = array_length(vals);
+    var run_ok = bool(_ok) && (n > 0);
+    var latency_mean = 0;
+    if (n > 0) {
+        for (var i = 0; i < n; i++) latency_mean += real(vals[i]);
+        latency_mean /= n;
+    }
+
+    var variance = 0;
+    if (n > 0) {
+        for (var j = 0; j < n; j++) {
+            var d = real(vals[j]) - latency_mean;
+            variance += d * d;
+        }
+        variance /= n;
+    }
+    var jitter = sqrt(max(0, variance));
+
+    if (run_ok) {
+        state.calibration_result.midi_internal_offset_ms = latency_mean;
+        state.calibration_result.jitter_midi_ms = jitter;
+        state.calibration_result.timestamp = timing_get_engine_now_ms();
+    }
+
+    if (is_struct(ml)) {
+        if (bool(ml.note_on_pending ?? false)) {
+            var status_off = 128 + floor(real(ml.channel ?? 0));
+            var note = floor(real(ml.note ?? 65));
+            midi_output_message_send_short(global.midi_output_device, status_off, note, 0);
+            ml.note_on_pending = false;
+            ml.pulse_note_off_sent = true;
+        }
+        global.midi_input_device = floor(real(ml.prev_input_device ?? global.midi_input_device));
+        global.midi_output_device = floor(real(ml.prev_output_device ?? global.midi_output_device));
+        global.midi_input_device_name = string(ml.prev_input_name ?? global.midi_input_device_name);
+        global.midi_output_device_name = string(ml.prev_output_name ?? global.midi_output_device_name);
+        if (bool(ml.manual_poll_enabled_by_loopback ?? false)) {
+            midi_input_message_manual_checking(0);
+            midi_error_manual_checking(0);
+        }
+    }
+
+    state.midi_loopback = { active: false, status: run_ok ? "done" : "error" };
+    state.last_message = run_ok
+        ? "MIDI loopback complete: latency=" + string_format(latency_mean, 0, 2) + " ms, jitter=" + string_format(jitter, 0, 2) + " ms"
+        : "MIDI loopback failed: no valid receive samples.";
+    var _send_count = is_struct(ml) && is_array(ml.send_times) ? array_length(ml.send_times) : 0;
+    var _rx_total = is_struct(ml) ? floor(real(ml.rx_note_on_total ?? 0)) : 0;
+    var _rx_match_total = is_struct(ml) ? floor(real(ml.rx_note_on_match_total ?? 0)) : 0;
+    var _rx_mismatch_total = is_struct(ml) ? floor(real(ml.rx_note_on_mismatch_total ?? 0)) : 0;
+    var _loopback_summary = "[CAL_LOOPBACK] " + string(state.last_message)
+        + " | trials=" + string(n)
+        + " | sends=" + string(_send_count)
+        + " | rx_note_on_total=" + string(_rx_total)
+        + " | rx_note_on_match_total=" + string(_rx_match_total)
+        + " | rx_note_on_mismatch_total=" + string(_rx_mismatch_total)
+        + " | offset_ms=" + string_format(latency_mean, 0, 2)
+        + " | jitter_ms=" + string_format(jitter, 0, 2);
+    show_debug_message(_loopback_summary);
+
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")
+        && bool(global.timeline_cfg.score_lane_debug_file_log)) {
+        var _log_path = variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_path")
+            ? string(variable_struct_get(global.timeline_cfg, "score_lane_debug_file_path"))
+            : "score_lane_debug.log";
+        if (_log_path == "") _log_path = "score_lane_debug.log";
+        var _f = file_text_open_append(_log_path);
+        if (_f != -1) {
+            file_text_write_string(_f, _loopback_summary);
+            file_text_writeln(_f);
+            file_text_close(_f);
+        }
+    }
+    timing_calibration_log_add(run_ok ? "info" : "error", {
+        completed_trials: n,
+        midi_internal_offset_ms: latency_mean,
+        jitter_midi_ms: jitter
+    });
+
+    if (run_ok && script_exists(asset_get_index("scoring_player_settings_save_for_player")) && variable_global_exists("current_player_id")) {
+        scoring_player_settings_save_for_player(global.current_player_id);
+    }
+
+    return state.calibration_result;
+}
+
+/// @function timing_calibration_step_midi_loopback()
+/// @description Update MIDI loopback calibration runner. Call once per step.
+/// @returns Bool active
+function timing_calibration_step_midi_loopback() {
+    var state = timing_calibration_ensure_state();
+    var ml = state.midi_loopback;
+    if (!is_struct(ml) || !bool(ml.active ?? false)) return false;
+
+    var now = timing_get_engine_now_ms();
+    var _pulse_note_off_sent = variable_struct_exists(ml, "pulse_note_off_sent")
+        ? bool(variable_struct_get(ml, "pulse_note_off_sent"))
+        : true;
+    var _last_send_ms = variable_struct_exists(ml, "last_send_ms")
+        ? real(variable_struct_get(ml, "last_send_ms"))
+        : 0;
+    var _pulse_duration_ms = variable_struct_exists(ml, "pulse_duration_ms")
+        ? real(variable_struct_get(ml, "pulse_duration_ms"))
+        : 500;
+    if (!_pulse_note_off_sent && _last_send_ms > 0 && now - _last_send_ms >= _pulse_duration_ms) {
+        var status_off_pulse = 128 + floor(real(ml.channel ?? 0));
+        var note_pulse = floor(real(ml.note ?? 65));
+        midi_output_message_send_short(global.midi_output_device, status_off_pulse, note_pulse, 0);
+        ml.note_on_pending = false;
+        ml.pulse_note_off_sent = true;
+    }
+
+    if (bool(ml.awaiting_receive ?? false)) {
+        if (now - real(ml.last_send_ms ?? 0) > real(ml.timeout_ms ?? 500)) {
+            if (bool(ml.note_on_pending ?? false)) {
+                var status_off = 128 + floor(real(ml.channel ?? 0));
+                var note = floor(real(ml.note ?? 65));
+                midi_output_message_send_short(global.midi_output_device, status_off, note, 0);
+                ml.note_on_pending = false;
+                ml.pulse_note_off_sent = true;
+            }
+            timing_calibration_log_add("error", {
+                event: "timeout",
+                trial: floor(real(ml.completed_trials ?? 0)) + 1
+            });
+            // Advance trial index on timeout so runs can terminate even without loopback receive.
+            ml.completed_trials = floor(real(ml.completed_trials ?? 0)) + 1;
+            ml.awaiting_receive = false;
+            ml.next_send_ms = max(now, real(ml.last_send_ms ?? now) + real(ml.cycle_interval_ms ?? 1000));
+        }
+        state.midi_loopback = ml;
+        return true;
+    }
+
+    if (floor(real(ml.completed_trials ?? 0)) >= floor(real(ml.total_trials ?? 0))) {
+        timing_calibration_finish_midi_loopback(true);
+        return false;
+    }
+
+    if (now < real(ml.next_send_ms ?? 0)) {
+        state.midi_loopback = ml;
+        return true;
+    }
+
+    var status_on = 144 + floor(real(ml.channel ?? 0));
+    var note = floor(real(ml.note ?? 65));
+    var vel = floor(real(ml.velocity ?? 110));
+
+    midi_output_message_send_short(global.midi_output_device, status_on, note, vel);
+
+    ml.last_send_ms = now;
+    ml.note_off_due_ms = now + real(ml.pulse_duration_ms ?? 500);
+    ml.awaiting_receive = true;
+    ml.note_on_pending = true;
+    ml.pulse_note_off_sent = false;
+    array_push(ml.send_times, now);
+    timing_calibration_log_add("send", {
+        trial: floor(real(ml.completed_trials ?? 0)) + 1,
+        note: note,
+        channel: floor(real(ml.channel ?? 0))
+    });
+
+    state.midi_loopback = ml;
+    return true;
+}
+
+/// @function timing_calibration_on_midi_message(_status_type, _note_midi, _velocity, _channel)
+/// @description Calibration receive hook called from MIDI_process_messages for each MIDI message.
+/// @param _status_type MIDI status high nibble (128/144)
+/// @param _note_midi MIDI note number
+/// @param _velocity MIDI velocity
+/// @param _channel MIDI channel
+function timing_calibration_on_midi_message(_status_type, _note_midi, _velocity, _channel) {
+    var state = timing_calibration_ensure_state();
+    var ml = state.midi_loopback;
+    if (!is_struct(ml) || !bool(ml.active ?? false)) return;
+
+    var status_type = floor(real(_status_type));
+    var note = floor(real(_note_midi));
+    var vel = floor(real(_velocity));
+    var chan = floor(real(_channel));
+    if (!(status_type == 144 && vel > 0)) return;
+
+    ml.rx_note_on_total = floor(real(ml.rx_note_on_total ?? 0)) + 1;
+    var expected_note = floor(real(ml.note ?? 65));
+    var expected_chan = floor(real(ml.channel ?? 0));
+    if (note != expected_note || chan != expected_chan) {
+        ml.rx_note_on_mismatch_total = floor(real(ml.rx_note_on_mismatch_total ?? 0)) + 1;
+        state.midi_loopback = ml;
+        return;
+    }
+
+    ml.rx_note_on_match_total = floor(real(ml.rx_note_on_match_total ?? 0)) + 1;
+    if (!bool(ml.awaiting_receive ?? false)) {
+        state.midi_loopback = ml;
+        return;
+    }
+
+    var now = timing_get_engine_now_ms();
+    var send_ms = real(ml.last_send_ms ?? now);
+    var latency_ms = max(0, now - send_ms);
+
+    array_push(ml.latency_pairs_ms, latency_ms);
+    ml.awaiting_receive = false;
+    ml.completed_trials = floor(real(ml.completed_trials ?? 0)) + 1;
+    ml.next_send_ms = max(now, send_ms + real(ml.cycle_interval_ms ?? 1000));
+
+    timing_calibration_log_add("receive", {
+        trial: ml.completed_trials,
+        note: note,
+        channel: chan,
+        latency_ms: latency_ms
+    });
+
+    state.midi_loopback = ml;
+}
+
+/// @function apply_calibration_offset(_subsystem, _raw_timestamp_ms)
+/// @description Apply loaded calibration offset for the requested subsystem.
+/// @param _subsystem audio|midi_in|midi_out
+/// @param _raw_timestamp_ms Raw timestamp
+/// @returns Adjusted timestamp in ms
+function apply_calibration_offset(_subsystem, _raw_timestamp_ms) {
+    var sub = string_lower(string(_subsystem));
+    var t = real(_raw_timestamp_ms);
+    var offset_ms = 0;
+
+    if (sub == "audio") {
+        if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
+            offset_ms = real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"));
+        }
+    } else if (sub == "midi_in" || sub == "midi_out") {
+        var state = timing_calibration_ensure_state();
+        if (is_struct(state.calibration_result)) {
+            offset_ms = real(state.calibration_result.midi_internal_offset_ms ?? 0);
+        }
+    }
+
+    return t + offset_ms;
+}
+
+/// @function timing_calibration_dev_run_midi_loopback(_trials)
+/// @description Developer helper to run MIDI loopback calibration.
+/// @returns Bool started
+function timing_calibration_dev_run_midi_loopback(_trials = 20) {
+    return timing_calibration_start_midi_loopback(_trials);
+}
+
+/// @function timing_calibration_start_external_audio_loopback(_trials)
+/// @description Start external audio loopback pulse runner (MIDI note pulses out, auto-detects onset from line-in audio).
+/// @param _trials Number of pulse trials
+/// @returns Bool started
+/// @writes global.timing_calibration.external_audio_loopback, global.timing_calibration.calibration_logs
+function timing_calibration_start_external_audio_loopback(_trials = 20) {
+    var state = timing_calibration_ensure_state();
+    var trials = max(1, floor(real(_trials)));
+
+    // Start audio recording from input device (typically line-in from loopback cable)
+    var audio_rec_index = -1;
+    if (audio_get_recorder_count() > 0) {
+        audio_rec_index = audio_start_recording(0);
+    }
+
+    state.external_audio_loopback = {
+        active: true,
+        status: "running",
+        detection_mode: "real_audio_onset",
+        total_trials: trials,
+        completed_trials: 0,
+        note: 69,
+        velocity: 127,
+        channel: 0,
+        cycle_interval_ms: 1000,
+        pulse_duration_ms: 180,
+        next_send_ms: timing_get_engine_now_ms(),
+        last_send_ms: 0,
+        note_on_pending: false,
+        pulse_note_off_sent: true,
+        awaiting_audio: false,
+        send_times: [],
+        latency_pairs_ms: [],
+        registered_samples: 0,
+        recorder_channel_index: audio_rec_index,
+        recording_start_ms: timing_get_engine_now_ms(),
+        audio_frames_processed: 0,
+        async_packet_count: 0,
+        async_channel_mismatch_count: 0,
+        last_async_ms: 0,
+        detection_threshold: 0.002,
+        detection_ratio: 4.0,
+        detect_min_latency_ms: 3,
+        detect_max_latency_ms: 600,
+        warmup_end_ms: timing_get_engine_now_ms() + 300,
+        noise_floor_ema: 0,
+        noise_floor_ready: false,
+        prev_audio_level: 0,
+        max_audio_level_seen: 0,
+        max_window_level_seen: 0,
+        sample_rate: 48000
+    };
+
+    timing_calibration_log_add("info", {
+        mode: "external_audio_loopback",
+        trials: trials,
+        midi_out_name: variable_global_exists("midi_output_device_name") ? string(global.midi_output_device_name) : "",
+        audio_recorder_index: audio_rec_index,
+        detection_mode: "real_audio_onset"
+    });
+
+    state.last_message = "External audio loopback started (" + string(trials) + " pulses; real audio onset detection).";
+    show_debug_message("[CAL_EXT_AUDIO] start out='" + string(variable_global_exists("midi_output_device_name") ? global.midi_output_device_name : "")
+        + "' | pulse_ms=" + string(state.external_audio_loopback.pulse_duration_ms)
+        + " | cycle_ms=" + string(state.external_audio_loopback.cycle_interval_ms)
+        + " | trials=" + string(trials)
+        + " | audio_recorder=" + string(audio_rec_index)
+        + " | detect_mode=" + string(state.external_audio_loopback.detection_mode));
+    return true;
+}
+
+/// @function timing_calibration_on_audio_recording_async(_async_map)
+/// @description Process Audio Recording async chunks and register onset timings for external loopback.
+/// @param _async_map async_load ds_map from Audio Recording event
+/// @returns Bool handled
+function timing_calibration_on_audio_recording_async(_async_map) {
+    var state = timing_calibration_ensure_state();
+    var ext = state.external_audio_loopback;
+    if (!is_struct(ext) || !bool(ext.active ?? false)) return false;
+    if (!is_struct(_async_map) && !is_real(_async_map)) {
+        // async_load is a DS map id, so just proceed with accessors below.
+    }
+
+    var ch_idx = floor(real(_async_map[? "channel_index"]));
+    var expected_ch = floor(real(ext.recorder_channel_index ?? -1));
+    if (expected_ch < 0 || ch_idx != expected_ch) {
+        ext.async_channel_mismatch_count = floor(real(ext.async_channel_mismatch_count ?? 0)) + 1;
+        state.external_audio_loopback = ext;
+        return false;
+    }
+
+    var tmp_buf = floor(real(_async_map[? "buffer_id"]));
+    var data_len = floor(real(_async_map[? "data_len"]));
+    if (tmp_buf < 0 || data_len <= 0) return false;
+
+    ext.async_packet_count = floor(real(ext.async_packet_count ?? 0)) + 1;
+    ext.last_async_ms = timing_get_engine_now_ms();
+
+    var channels = 2;
+    var bytes_per_sample = 4;
+    var sample_rate = max(1, real(ext.sample_rate ?? 48000));
+    var bytes_per_frame = max(1, channels * bytes_per_sample);
+    var frames = floor(data_len / bytes_per_frame);
+    if (frames <= 0) return false;
+
+    var now_ms = timing_get_engine_now_ms();
+    var frame_cursor = floor(real(ext.audio_frames_processed ?? 0));
+    var threshold = real(ext.detection_threshold ?? 0.05);
+    var min_lat_ms = real(ext.detect_min_latency_ms ?? 3);
+    var max_lat_ms = real(ext.detect_max_latency_ms ?? 250);
+    var prev_level = real(ext.prev_audio_level ?? 0);
+
+    buffer_seek(tmp_buf, buffer_seek_start, 0);
+    var packet_peak = 0;
+
+    for (var i = 0; i < frames; i++) {
+        var l = buffer_read(tmp_buf, buffer_f32);
+        var r = buffer_read(tmp_buf, buffer_f32);
+        var level = max(abs(real(l)), abs(real(r)));
+        if (level > packet_peak) packet_peak = level;
+
+        prev_level = level;
+    }
+
+    ext.audio_frames_processed = frame_cursor + frames;
+    ext.prev_audio_level = prev_level;
+    ext.max_audio_level_seen = max(real(ext.max_audio_level_seen ?? 0), packet_peak);
+
+    // Track ambient level while idle so threshold adapts to the real input noise floor.
+    var now_floor_ms = timing_get_engine_now_ms();
+    var floor_alpha = 0.08;
+    if (!bool(ext.awaiting_audio ?? false)) {
+        var floor_prev = real(ext.noise_floor_ema ?? 0);
+        if (!bool(ext.noise_floor_ready ?? false)) {
+            ext.noise_floor_ema = packet_peak;
+            ext.noise_floor_ready = true;
+        } else {
+            ext.noise_floor_ema = floor_prev + (packet_peak - floor_prev) * floor_alpha;
+        }
+    }
+
+    if (now_floor_ms < real(ext.warmup_end_ms ?? 0)) {
+        state.external_audio_loopback = ext;
+        return true;
+    }
+
+    if (ext.awaiting_audio) {
+        ext.max_window_level_seen = max(real(ext.max_window_level_seen ?? 0), packet_peak);
+        var send_ms = real(ext.last_send_ms ?? now_ms);
+        var dt_now = now_ms - send_ms;
+        var floor_now = real(ext.noise_floor_ema ?? 0);
+        var rel_thresh = max(threshold, floor_now * real(ext.detection_ratio ?? 4.0), floor_now + 0.001);
+        if (dt_now >= min_lat_ms && dt_now <= max_lat_ms && packet_peak >= rel_thresh) {
+            var latency_ms = max(0, dt_now);
+            timing_calibration_external_audio_register_sample(latency_ms);
+            ext.awaiting_audio = false;
+            ext.completed_trials = floor(real(ext.completed_trials ?? 0)) + 1;
+
+            timing_calibration_log_add("audio_detect", {
+                mode: "external_audio_loopback",
+                trial: ext.completed_trials,
+                latency_ms: latency_ms,
+                threshold: rel_thresh,
+                noise_floor: floor_now,
+                packet_peak: packet_peak
+            });
+        }
+    }
+
+    state.external_audio_loopback = ext;
+    return true;
+}
+
+/// @function timing_calibration_external_audio_register_sample(_latency_ms)
+/// @description Register one measured external-audio latency sample in ms.
+/// @param _latency_ms Measured latency in ms for a trial
+/// @returns Bool true when accepted
+/// @writes global.timing_calibration.external_audio_loopback
+function timing_calibration_external_audio_register_sample(_latency_ms) {
+    var state = timing_calibration_ensure_state();
+    var ext = state.external_audio_loopback;
+    if (!is_struct(ext) || !bool(ext.active ?? false)) return false;
+
+    var sample_ms = max(0, real(_latency_ms));
+    array_push(ext.latency_pairs_ms, sample_ms);
+    ext.registered_samples = floor(real(ext.registered_samples ?? 0)) + 1;
+
+    timing_calibration_log_add("receive", {
+        mode: "external_audio_loopback",
+        sample_index: ext.registered_samples,
+        latency_ms: sample_ms
+    });
+
+    state.external_audio_loopback = ext;
+    return true;
+}
+
+/// @function timing_calibration_finish_external_audio_loopback(_ok)
+/// @description Finalize external audio loopback, compute audio offset/jitter from registered samples, and apply audio offset.
+/// @param _ok Whether run completed successfully
+/// @returns Struct calibration result
+function timing_calibration_finish_external_audio_loopback(_ok) {
+    var state = timing_calibration_ensure_state();
+    var ext = state.external_audio_loopback;
+    var vals = is_struct(ext) && is_array(ext.latency_pairs_ms) ? ext.latency_pairs_ms : [];
+    var detection_mode = is_struct(ext) ? string(ext.detection_mode ?? "") : "";
+    var is_real_mode = (detection_mode == "real_audio_onset");
+
+    var n = array_length(vals);
+    var run_ok = bool(_ok) && is_real_mode && (n > 0);
+    var latency_mean = 0;
+    if (n > 0) {
+        for (var i = 0; i < n; i++) latency_mean += real(vals[i]);
+        latency_mean /= n;
+    }
+
+    var variance = 0;
+    if (n > 0) {
+        for (var j = 0; j < n; j++) {
+            var d = real(vals[j]) - latency_mean;
+            variance += d * d;
+        }
+        variance /= n;
+    }
+    var jitter = sqrt(max(0, variance));
+
+    if (run_ok) {
+        state.calibration_result.audio_output_offset_ms = latency_mean;
+        state.calibration_result.jitter_audio_ms = jitter;
+        state.calibration_result.timestamp = timing_get_engine_now_ms();
+        var cur_offsets = timing_calibration_get_current_offsets();
+        timing_calibration_apply_offsets(latency_mean, real(cur_offsets.visual_alignment_offset_ms ?? 0), "external-audio-loopback");
+    }
+
+    if (is_struct(ext) && bool(ext.note_on_pending ?? false)) {
+        var status_off = 128 + floor(real(ext.channel ?? 0));
+        var note = floor(real(ext.note ?? 65));
+        midi_output_message_send_short(global.midi_output_device, status_off, note, 0);
+    }
+
+    // Stop audio recording if active
+    if (is_struct(ext) && floor(real(ext.recorder_channel_index ?? -1)) >= 0) {
+        audio_stop_recording(floor(real(ext.recorder_channel_index)));
+    }
+
+    state.external_audio_loopback = { active: false, status: run_ok ? "done" : "error" };
+    state.last_message = run_ok
+        ? "External audio loopback complete: latency=" + string_format(latency_mean, 0, 2) + " ms, jitter=" + string_format(jitter, 0, 2) + " ms"
+        : "External audio loopback failed: no registered audio samples.";
+
+    var _send_count = is_struct(ext) && is_array(ext.send_times) ? array_length(ext.send_times) : 0;
+    var _sample_count = is_struct(ext) ? floor(real(ext.registered_samples ?? 0)) : 0;
+    var _packet_count = is_struct(ext) ? floor(real(ext.async_packet_count ?? 0)) : 0;
+    var _channel_mismatch_count = is_struct(ext) ? floor(real(ext.async_channel_mismatch_count ?? 0)) : 0;
+    var _max_audio_level = is_struct(ext) ? real(ext.max_audio_level_seen ?? 0) : 0;
+    var _max_window_level = is_struct(ext) ? real(ext.max_window_level_seen ?? 0) : 0;
+    var _noise_floor = is_struct(ext) ? real(ext.noise_floor_ema ?? 0) : 0;
+    var _summary = "[CAL_EXT_AUDIO] " + string(state.last_message)
+        + " | trials=" + string(n)
+        + " | sends=" + string(_send_count)
+        + " | samples=" + string(_sample_count)
+        + " | async_packets=" + string(_packet_count)
+        + " | async_ch_mismatch=" + string(_channel_mismatch_count)
+        + " | peak=" + string_format(_max_audio_level, 0, 4)
+        + " | peak_window=" + string_format(_max_window_level, 0, 4)
+        + " | noise_floor=" + string_format(_noise_floor, 0, 4)
+        + " | offset_ms=" + string_format(latency_mean, 0, 2)
+        + " | jitter_ms=" + string_format(jitter, 0, 2);
+    show_debug_message(_summary);
+
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")
+        && bool(global.timeline_cfg.score_lane_debug_file_log)) {
+        var _log_path = variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_path")
+            ? string(variable_struct_get(global.timeline_cfg, "score_lane_debug_file_path"))
+            : "score_lane_debug.log";
+        if (_log_path == "") _log_path = "score_lane_debug.log";
+        var _f = file_text_open_append(_log_path);
+        if (_f != -1) {
+            file_text_write_string(_f, _summary);
+            file_text_writeln(_f);
+            file_text_close(_f);
+        }
+    }
+
+    timing_calibration_log_add(run_ok ? "info" : "error", {
+        mode: "external_audio_loopback",
+        completed_trials: n,
+        audio_output_offset_ms: latency_mean,
+        jitter_audio_ms: jitter
+    });
+
+    if (run_ok && script_exists(asset_get_index("scoring_player_settings_save_for_player")) && variable_global_exists("current_player_id")) {
+        scoring_player_settings_save_for_player(global.current_player_id);
+    }
+
+    return state.calibration_result;
+}
+
+/// @function timing_calibration_step_external_audio_loopback()
+/// @description Update external audio loopback pulse runner. Emits pulse trials and waits for async audio onset detection.
+/// @returns Bool active
+function timing_calibration_step_external_audio_loopback() {
+    var state = timing_calibration_ensure_state();
+    var ext = state.external_audio_loopback;
+    if (!is_struct(ext) || !bool(ext.active ?? false)) return false;
+
+    var now = timing_get_engine_now_ms();
+    var pulse_sent = bool(ext.pulse_note_off_sent ?? true);
+    var last_send_ms = real(ext.last_send_ms ?? 0);
+    var pulse_duration_ms = real(ext.pulse_duration_ms ?? 30);
+    
+    // Send note-off after pulse duration
+    if (!pulse_sent && last_send_ms > 0 && now - last_send_ms >= pulse_duration_ms) {
+        var status_off_pulse = 128 + floor(real(ext.channel ?? 0));
+        var note_pulse = floor(real(ext.note ?? 65));
+        midi_output_message_send_short(global.midi_output_device, status_off_pulse, note_pulse, 0);
+        ext.note_on_pending = false;
+        ext.pulse_note_off_sent = true;
+    }
+
+    // Timeout if async audio detection did not find onset in time.
+    if (ext.awaiting_audio && now - last_send_ms > real(ext.detect_max_latency_ms ?? 250)) {
+        // Timeout: no audio detected
+        ext.awaiting_audio = false;
+        ext.completed_trials = floor(real(ext.completed_trials ?? 0)) + 1;
+        
+        timing_calibration_log_add("audio_timeout", {
+            mode: "external_audio_loopback",
+            trial: ext.completed_trials,
+            peak_window: real(ext.max_window_level_seen ?? 0),
+            threshold: real(ext.detection_threshold ?? 0)
+        });
+        ext.max_window_level_seen = 0;
+    }
+
+    if (floor(real(ext.completed_trials ?? 0)) >= floor(real(ext.total_trials ?? 0))) {
+        timing_calibration_finish_external_audio_loopback(true);
+        return false;
+    }
+
+    if (now < real(ext.next_send_ms ?? 0)) {
+        state.external_audio_loopback = ext;
+        return true;
+    }
+
+    var status_on = 144 + floor(real(ext.channel ?? 0));
+    var note = floor(real(ext.note ?? 65));
+    var vel = floor(real(ext.velocity ?? 110));
+    midi_output_message_send_short(global.midi_output_device, status_on, note, vel);
+
+    ext.last_send_ms = now;
+    ext.note_on_pending = true;
+    ext.pulse_note_off_sent = false;
+    ext.awaiting_audio = true;
+    ext.next_send_ms = now + real(ext.cycle_interval_ms ?? 1000);
+    array_push(ext.send_times, now);
+
+    timing_calibration_log_add("send", {
+        mode: "external_audio_loopback",
+        trial: floor(real(ext.completed_trials ?? 0)) + 1,
+        note: note,
+        channel: floor(real(ext.channel ?? 0))
+    });
+
+    state.external_audio_loopback = ext;
+    return true;
+}
+
+/// @function timing_calibration_dev_run_external_audio_loopback(_trials)
+/// @description Developer helper to run external audio loopback pulse stage.
+/// @returns Bool started
+function timing_calibration_dev_run_external_audio_loopback(_trials = 20) {
+    return timing_calibration_start_external_audio_loopback(_trials);
+}
+
+/// @function timing_calibration_dev_export_logs(_path)
+/// @description Developer helper to export current calibration logs.
+/// @returns Export path string or empty string on failure
+function timing_calibration_dev_export_logs(_path = "") {
+    return timing_calibration_export_logs(_path);
+}
+
+/// @function timing_calibration_dev_import_results(_path)
+/// @description Developer helper to import a calibration result JSON file.
+/// @returns Bool success
+function timing_calibration_dev_import_results(_path) {
+    return timing_calibration_import_result_json(_path);
+}
+
+/// @function timing_calibration_dev_view_current()
+/// @description Developer helper to inspect current calibration result object.
+/// @returns Calibration result struct
+function timing_calibration_dev_view_current() {
+    var state = timing_calibration_ensure_state();
+    return state.calibration_result;
 }
 
 /// @function timing_calibration_summarize_ring_buffer(_buf, _count)

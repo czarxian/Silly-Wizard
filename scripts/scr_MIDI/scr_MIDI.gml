@@ -193,6 +193,44 @@ function MIDI_process_messages()
 		byte3=0;
 		byte2note=0;
 		messages = midi_input_message_count(global.midi_input_device);
+
+		var _cal_is_active = false;
+		var _cal_is_active_idx = asset_get_index("timing_calibration_is_active");
+		if (script_exists(_cal_is_active_idx)) {
+			_cal_is_active = bool(script_execute(_cal_is_active_idx));
+		}
+		if (_cal_is_active) {
+			static _cal_rx_scan_last_ms = -1000;
+			var _scan_now_ms = timing_get_engine_now_ms();
+			var _cal_rebind_candidate = -1;
+			if ((_scan_now_ms - _cal_rx_scan_last_ms) >= 250) {
+				var _scan = "";
+				var _in_count = midi_input_device_count();
+				var _selected_in = floor(real(global.midi_input_device));
+				for (var _di = 0; _di < _in_count; _di++) {
+					var _msg_count = (_di == _selected_in) ? messages : midi_input_message_count(_di);
+					if (_di != _selected_in && _msg_count > 0 && _cal_rebind_candidate < 0) {
+						_cal_rebind_candidate = _di;
+					}
+					if (_msg_count > 0 || _di == _selected_in) {
+						if (_scan != "") _scan += " | ";
+						_scan += "in[" + string(_di) + "]=" + string(_msg_count)
+							+ " '" + string(midi_input_device_name(_di)) + "'";
+					}
+				}
+				show_debug_message("[CAL_LOOPBACK_RX_SCAN] " + _scan);
+				_cal_rx_scan_last_ms = _scan_now_ms;
+				if (_cal_rebind_candidate >= 0) {
+					global.midi_input_device = _cal_rebind_candidate;
+					if (_cal_rebind_candidate < midi_input_device_count()) {
+						global.midi_input_device_name = midi_input_device_name(_cal_rebind_candidate);
+					}
+					messages = midi_input_message_count(global.midi_input_device);
+					show_debug_message("[CAL_LOOPBACK_RX_SCAN] rebound input to index "
+						+ string(global.midi_input_device) + " '" + string(global.midi_input_device_name) + "'");
+				}
+			}
+		}
 		_last_MIDI_on_event = 0;
 		_MIDI_input_device = global.midi_input_device;
 		_MIDI_output_device = global.midi_output_device;
@@ -296,6 +334,17 @@ function MIDI_process_messages()
 			}
 		}
 
+		var _cal_rx_idx = asset_get_index("timing_calibration_on_midi_message");
+		if (script_exists(_cal_rx_idx)) {
+			// Use raw MIDI note for loopback calibration matching; chanter normalization is gameplay-only.
+			script_execute(_cal_rx_idx, status_type, raw_note_midi, byte3, log_channel);
+		}
+
+		var _apply_idx = asset_get_index("apply_calibration_offset");
+		if (script_exists(_apply_idx)) {
+			normalized_time = script_execute(_apply_idx, "midi_in", normalized_time);
+		}
+
 		if (status_type == 144 && byte3 > 0) {
 			gv_on_player_note_on(normalized_note_midi, log_channel, normalized_time, byte3, canonical_note);
 		} else if (status_type == 128 || (status_type == 144 && byte3 <= 0)) {
@@ -375,7 +424,13 @@ function MIDI_process_messages()
 		if (is_note_message) {
 			out_data1 = normalized_note_midi;
 		}
-		midi_output_message_send_short(_MIDI_output_device, out_status, out_data1, byte3);  //Sends the MIDI Message to the MIDI Output Device
+		var _suppress_idx = asset_get_index("timing_calibration_should_suppress_midi_thru");
+		var suppress_midi_thru = script_exists(_suppress_idx)
+			? bool(script_execute(_suppress_idx))
+			: false;
+		if (!suppress_midi_thru) {
+			midi_output_message_send_short(_MIDI_output_device, out_status, out_data1, byte3);  //Sends the MIDI Message to the MIDI Output Device
+		}
 //```
 //			show_debug_message("Send to" + string(_MIDI_output_device) + "Note: " + string(byte2note) );
 //			show_debug_message(string(time) + "  " + string(byte1) + "  " + string(byte2) + "  " + string(byte3));

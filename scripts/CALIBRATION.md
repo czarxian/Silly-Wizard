@@ -112,16 +112,31 @@ No longer used:
 
 ## 10. Current Assessment
 Stable retained baseline:
-- Startup hydration and profile apply
-- Offset persistence (audio/visual only)
-- Normal single-tune and set gameplay
-- Manual audio/visual offset nudging
 
 Open follow-up work:
-- Implement feedback dial / real-time visual impact interface for calibration
-- Modular calibration flow: settings window → play room → dial interface
-- Verify visual offset affects all intended visual paths consistently
-- Future: investigate true MIDI device timestamps for input_offset_ms (if available)
+
+## 12. Staged Calibration Workflow (In Progress)
+
+Calibration now moves toward a 3-stage workflow:
+
+1) Internal MIDI loopback (implemented)
+- Goal: measure internal MIDI path timing.
+- Trigger: `L` key (dev path) from main menu/settings.
+- Output: `midi_internal_offset_ms`, `jitter_midi_ms`.
+
+2) External audio loopback (scaffold implemented)
+- Goal: measure external audio chain timing (interface/driver/render/output path).
+- Trigger: `O` key (dev path) from main menu/settings.
+- Current behavior:
+	- emits timed pulse trials via MIDI output
+	- records send timing
+	- exposes sample registration hook `timing_calibration_external_audio_register_sample(_latency_ms)`
+	- computes/stores `audio_output_offset_ms` and `jitter_audio_ms` once samples are registered
+- Note: automatic audio-input capture hook is the next integration step.
+
+3) User perceptual dial (planned)
+- Goal: final ear-based trim after measured offsets are applied.
+- Status: not implemented yet.
 
 ## 11. Change Log
 2026-05-17 (phase 2)
