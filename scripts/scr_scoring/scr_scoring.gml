@@ -21,6 +21,34 @@ function scoring_get_player_id() {
     return player_key;
 }
 
+/// @function scoring_get_selected_tune_channel()
+/// @description Return the currently selected tune MIDI channel, or -1 when no part-specific selection is active.
+/// @returns {real} Selected tune channel, or -1 when unavailable.
+/// @reads   global.timeline_cfg.tune_channel, global.selected_player_tune_channel
+function scoring_get_selected_tune_channel() {
+    var channel = -1;
+
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "tune_channel")) {
+        channel = floor(real(global.timeline_cfg.tune_channel));
+    } else if (variable_global_exists("selected_player_tune_channel")) {
+        channel = floor(real(global.selected_player_tune_channel));
+    }
+
+    if (channel < 0) return -1;
+    if (channel < 2 || channel > 5) return -1;
+    return channel;
+}
+
+/// @function scoring_get_selected_part_key()
+/// @description Return the scoring part key for the currently selected tune channel.
+/// @returns {string} Part key string, or "all" when no part-specific selection is active.
+function scoring_get_selected_part_key() {
+    var channel = scoring_get_selected_tune_channel();
+    if (channel < 0) return "all";
+    return "channel_" + string(channel);
+}
+
 /// @function scoring_calibration_debug_log(_line)
 /// @description Write calibration diagnostic to calibration_debug.log file in datafiles/debug.
 /// @param {string} _line Text line to log
@@ -888,6 +916,8 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
     var judge_name = scoring_judge_display_name(judge_id);
+    var part_key = scoring_get_selected_part_key();
+    var selected_tune_channel = scoring_get_selected_tune_channel();
 
     var _uncal_target_shift_ms = 0;
     var _uncal_audio_ms = 0;
@@ -918,6 +948,19 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             + " | audio_ms=" + string(_uncal_audio_ms)
             + " | input_ms=" + string(_uncal_input_ms)
             + " | visual_ms=" + string(_uncal_visual_ms));
+    }
+
+    if (selected_tune_channel >= 0 && is_array(planned_spans_for_score)) {
+        var filtered_planned_spans = [];
+        var planned_n = array_length(planned_spans_for_score);
+        for (var spi = 0; spi < planned_n; spi++) {
+            var span = planned_spans_for_score[spi];
+            if (!is_struct(span)) continue;
+            var span_channel = floor(real(span.channel ?? -1));
+            if (span_channel != selected_tune_channel) continue;
+            array_push(filtered_planned_spans, span);
+        }
+        planned_spans_for_score = filtered_planned_spans;
     }
 
     var _emb_groups_for_score = _use_emb_window_judge
@@ -1120,8 +1163,8 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
         tune_id: tune_id,
         bpm: bpm,
         swing: swing,
-        part_key: "all",
-        context_key: scoring_get_context_key(tune_id, player_key, bpm, swing, "all"),
+        part_key: part_key,
+        context_key: scoring_get_context_key(tune_id, player_key, bpm, swing, part_key),
         selected_judge_id: judge_id,
         overall_score: overall_score,
         measure_scores: measures_out,
