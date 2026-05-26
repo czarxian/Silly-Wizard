@@ -22,6 +22,11 @@ Const PART_TABLE_HEAD_COL  As Long = 11  ' Column K (Head Add)
 Const PART_TABLE_FIRST_ROW As Long = 2   ' Row 2 is the metadata row
 Const PART_TABLE_MAX_ROW   As Long = 25  ' Scan up to this row for parts
 
+Const EMBELLISH_LIBRARY_FIRST_ROW As Long = 2
+Const EMBELLISH_LIBRARY_ID_COL As Long = 1
+Const EMBELLISH_LIBRARY_PATTERN_COL As Long = 3
+Const EMBELLISH_LIBRARY_TARGET_COL As Long = 4
+
 Const HEADER_ROW As Long = 50
 Const FIRST_DATA_ROW As Long = 51
 
@@ -83,6 +88,9 @@ Private ActiveVoice As String   ' Voice label written to COL_VOICE for the curre
 ' Enables split-bar merging for tunes whose pickup/volta structure creates complementary partial bars.
 Private MergeSplitBarsForScore As Boolean
 
+' Aggregated missing-embellishment tracking (per parse/validation run).
+Private MissingEmbellishmentsMap As Object
+
 Const EPSILON As Double = 0.000001
 Const ROUND_DECIMALS As Long = 9
 
@@ -108,6 +116,8 @@ Const ROUND_DECIMALS As Long = 9
 Public Sub ParseAllParts()
     Dim ws As Worksheet
     Set ws = ActiveSheet  ' Operates on whichever sheet is active — no longer locked to "Tune"
+
+    ResetMissingEmbellishmentTracking
 
     ' ---- Locate and parse metadata row ----
     Dim metadataABC As String
@@ -203,6 +213,8 @@ NextPartRow:
            "Units/beat: " & Round(UnitsPerBeat, 4) & vbCrLf & _
            "Pickup units: " & Round(PickupOffsetUnits, 4), _
            vbInformation, "Parse Complete"
+
+    ShowMissingEmbellishmentsSummary
 End Sub
 
 Private Function ParsePartSegment(ws As Worksheet, ByVal partType As String, ByVal voiceTag As String, ByVal abcText As String, ByRef partSummary As String) As Long
@@ -567,6 +579,10 @@ Public Function ValidateABCParts(ws As Worksheet) As Boolean
     errCount = 0
     Dim warnCount As Long
     warnCount = 0
+    Dim hasFatalUnknownEmbellishment As Boolean
+    hasFatalUnknownEmbellishment = False
+
+    ResetMissingEmbellishmentTracking
 
     ' ---- 1. Metadata / header checks ----
     Dim metadataABC As String
@@ -632,11 +648,15 @@ Public Function ValidateABCParts(ws As Worksheet) As Boolean
                 partCount = partCount + 1
                 segResult = CheckABCText(NormalizeStandaloneTransitionABC(tailText), canCheckMeasures, errCount, warnCount)
                 If segResult <> "" Then report = report & "Part [transition_tail]:" & vbCrLf & segResult
+                segResult = CheckUnknownEmbellishments(NormalizeStandaloneTransitionABC(tailText), ws.Parent, warnCount, hasFatalUnknownEmbellishment)
+                If segResult <> "" Then report = report & "Part [transition_tail]:" & vbCrLf & segResult
             End If
 
             If abcText <> "" Then
                 partCount = partCount + 1
                 segResult = CheckABCText(NormalizeStandaloneTransitionABC(abcText), canCheckMeasures, errCount, warnCount)
+                If segResult <> "" Then report = report & "Part [bridge]:" & vbCrLf & segResult
+                segResult = CheckUnknownEmbellishments(NormalizeStandaloneTransitionABC(abcText), ws.Parent, warnCount, hasFatalUnknownEmbellishment)
                 If segResult <> "" Then report = report & "Part [bridge]:" & vbCrLf & segResult
             End If
 
@@ -645,12 +665,18 @@ Public Function ValidateABCParts(ws As Worksheet) As Boolean
                 partCount = partCount + 1
                 segResult = CheckABCText(NormalizeStandaloneTransitionABC(headText), canCheckMeasures, errCount, warnCount)
                 If segResult <> "" Then report = report & "Part [transition_head]:" & vbCrLf & segResult
+                segResult = CheckUnknownEmbellishments(NormalizeStandaloneTransitionABC(headText), ws.Parent, warnCount, hasFatalUnknownEmbellishment)
+                If segResult <> "" Then report = report & "Part [transition_head]:" & vbCrLf & segResult
             End If
         Else
             If abcText = "" Then GoTo NextValidPart
             partCount = partCount + 1
             Dim partResult As String
             partResult = CheckABCText(abcText, canCheckMeasures, errCount, warnCount)
+            If partResult <> "" Then
+                report = report & "Part [" & partType & "]:" & vbCrLf & partResult
+            End If
+            partResult = CheckUnknownEmbellishments(abcText, ws.Parent, warnCount, hasFatalUnknownEmbellishment)
             If partResult <> "" Then
                 report = report & "Part [" & partType & "]:" & vbCrLf & partResult
             End If
@@ -709,6 +735,236 @@ NextValidPart:
                         vbCritical + vbYesNo, "ABC Validation — Errors Found")
         ValidateABCParts = (choice = vbYes)
     End If
+End Function
+
+Private Function CheckUnknownEmbellishments(ByVal abcText As String, _
+                                            ByVal wb As Workbook, _
+                                            ByRef warnCount As Long, _
+                                            ByRef hasFatalUnknownEmbellishment As Boolean) As String
+    Dim result As String
+    result = ""
+
+    Dim prepared As String
+    prepared = PrepareABCForVoice(abcText, "")
+    If Trim$(prepared) = "" Then
+        CheckUnknownEmbellishments = ""
+        Exit Function
+    End If
+
+    Dim tokens As Collection
+    Set tokens = TokenizeABC(prepared)
+    Dim flat As Collection
+    Set flat = ExpandRepeats(tokens)
+
+    Dim hasAnyEmbellishments As Boolean
+    hasAnyEmbellishments = False
+
+    Dim i As Long
+    For i = 1 To flat.Count
+        If CStr(flat(i)(1)) = "embellishment" Then
+            hasAnyEmbellishments = True
+            Exit For
+        End If
+    Next i
+
+    If Not hasAnyEmbellishments Then
+        CheckUnknownEmbellishments = ""
+        Exit Function
+    End If
+
+    Dim libWs As Worksheet
+    Set libWs = ResolveEmbellishmentsSheet(wb)
+
+    If libWs Is Nothing Then
+        result = result & "  [ERROR] Could not find an embellishment library sheet (expected name: Embellishments)." & vbCrLf
+        warnCount = warnCount + 1
+        hasFatalUnknownEmbellishment = True
+        CheckUnknownEmbellishments = result
+        Exit Function
+    End If
+
+    Dim missing As Object
+    Set missing = CreateObject("Scripting.Dictionary")
+
+    For i = 1 To flat.Count
+        Dim t As Variant
+        t = flat(i)
+
+        If CStr(t(1)) = "embellishment" Then
+            Dim pattern As String
+            pattern = NormalizeEmbellishmentPattern(CStr(t(2)))
+
+            Dim target As String
+            target = FindNextTargetNoteFromTokens(flat, i + 1)
+
+            If Not EmbellishmentExistsInLibrary(libWs, pattern, target) Then
+                Dim key As String
+                key = pattern & "|" & target
+
+                If missing.Exists(key) Then
+                    missing(key) = CLng(missing(key)) + 1
+                Else
+                    missing.Add key, 1
+                End If
+            End If
+        End If
+    Next i
+
+    If missing.Count > 0 Then
+        Dim k As Variant
+        For Each k In missing.Keys
+            Dim sepPos As Long
+            sepPos = InStr(1, CStr(k), "|", vbBinaryCompare)
+
+            Dim kPattern As String
+            Dim kTarget As String
+            If sepPos > 0 Then
+                kPattern = Left$(CStr(k), sepPos - 1)
+                kTarget = Mid$(CStr(k), sepPos + 1)
+            Else
+                kPattern = CStr(k)
+                kTarget = ""
+            End If
+
+            result = result & "  [ERROR] Unknown embellishment pattern='" & kPattern & "'"
+            If kTarget <> "" Then
+                result = result & " target='" & kTarget & "'"
+            Else
+                result = result & " target='(none)'"
+            End If
+            result = result & " occurrences=" & CStr(missing(k)) & ". Add this to the Embellishments sheet." & vbCrLf
+
+            warnCount = warnCount + 1
+            TrackMissingEmbellishment kPattern, kTarget, CLng(missing(k))
+        Next k
+
+        hasFatalUnknownEmbellishment = True
+    End If
+
+    CheckUnknownEmbellishments = result
+End Function
+
+Private Sub ResetMissingEmbellishmentTracking()
+    Set MissingEmbellishmentsMap = CreateObject("Scripting.Dictionary")
+End Sub
+
+Private Sub TrackMissingEmbellishment(ByVal pattern As String, ByVal target As String, ByVal occurrences As Long)
+    If MissingEmbellishmentsMap Is Nothing Then
+        ResetMissingEmbellishmentTracking
+    End If
+
+    Dim key As String
+    key = pattern & "|" & target
+
+    If MissingEmbellishmentsMap.Exists(key) Then
+        MissingEmbellishmentsMap(key) = CLng(MissingEmbellishmentsMap(key)) + occurrences
+    Else
+        MissingEmbellishmentsMap.Add key, occurrences
+    End If
+End Sub
+
+Private Sub ShowMissingEmbellishmentsSummary()
+    If MissingEmbellishmentsMap Is Nothing Then Exit Sub
+    If MissingEmbellishmentsMap.Count <= 0 Then Exit Sub
+
+    Dim msg As String
+    msg = "Missing embellishments found:" & vbCrLf & vbCrLf
+
+    Dim k As Variant
+    For Each k In MissingEmbellishmentsMap.Keys
+        Dim pairText As String
+        pairText = CStr(k)
+
+        Dim sepPos As Long
+        sepPos = InStr(1, pairText, "|", vbBinaryCompare)
+
+        Dim pat As String
+        Dim tgt As String
+        If sepPos > 0 Then
+            pat = Left$(pairText, sepPos - 1)
+            tgt = Mid$(pairText, sepPos + 1)
+        Else
+            pat = pairText
+            tgt = ""
+        End If
+
+        msg = msg & "- pattern='" & pat & "'"
+        If tgt <> "" Then
+            msg = msg & " target='" & tgt & "'"
+        Else
+            msg = msg & " target='(none)'"
+        End If
+        msg = msg & " occurrences=" & CStr(MissingEmbellishmentsMap(k)) & vbCrLf
+    Next k
+
+    msg = msg & vbCrLf & "Parsing continued. Add these entries to the Embellishments sheet."
+
+    MsgBox msg, vbExclamation, "Missing Embellishments"
+End Sub
+
+Private Function ResolveEmbellishmentsSheet(ByVal wb As Workbook) As Worksheet
+    On Error Resume Next
+    Set ResolveEmbellishmentsSheet = wb.Worksheets("Embellishments")
+    On Error GoTo 0
+End Function
+
+Private Function NormalizeEmbellishmentPattern(ByVal rawPattern As String) As String
+    Dim s As String
+    s = Trim$(rawPattern)
+    s = Replace(s, "{", "")
+    s = Replace(s, "}", "")
+    s = Replace(s, " ", "")
+    NormalizeEmbellishmentPattern = s
+End Function
+
+Private Function FindNextTargetNoteFromTokens(ByVal flat As Collection, ByVal startIndex As Long) As String
+    Dim i As Long
+    For i = startIndex To flat.Count
+        Dim t As Variant
+        t = flat(i)
+
+        If CStr(t(1)) = "note" Then
+            Dim letter As String
+            letter = GetNoteLetterOnly(CStr(t(2)))
+            If LCase$(letter) <> "z" And letter <> "" Then
+                FindNextTargetNoteFromTokens = letter
+                Exit Function
+            End If
+        End If
+    Next i
+
+    FindNextTargetNoteFromTokens = ""
+End Function
+
+Private Function EmbellishmentExistsInLibrary(ByVal libWs As Worksheet, _
+                                              ByVal pattern As String, _
+                                              ByVal target As String) As Boolean
+    If Trim$(pattern) = "" Then
+        EmbellishmentExistsInLibrary = False
+        Exit Function
+    End If
+
+    Dim r As Long
+    r = EMBELLISH_LIBRARY_FIRST_ROW
+
+    Do While Trim$(CStr(libWs.Cells(r, EMBELLISH_LIBRARY_ID_COL).Value)) <> ""
+        Dim libPattern As String
+        libPattern = NormalizeEmbellishmentPattern(CStr(libWs.Cells(r, EMBELLISH_LIBRARY_PATTERN_COL).Value))
+
+        If libPattern = pattern Then
+            Dim libTarget As String
+            libTarget = Trim$(CStr(libWs.Cells(r, EMBELLISH_LIBRARY_TARGET_COL).Value))
+
+            If libTarget = "" Or libTarget = target Then
+                EmbellishmentExistsInLibrary = True
+                Exit Function
+            End If
+        End If
+
+        r = r + 1
+    Loop
+
+    EmbellishmentExistsInLibrary = False
 End Function
 
 Private Function ParseNonNegativeMetadataNumber(ByVal rawValue As Variant) As Double
@@ -799,7 +1055,12 @@ Private Function CheckABCText(ByVal abcText As String, ByVal checkMeasures As Bo
         errCount = errCount + 1
     End If
 
-    ' ---- c. Measure beat counts ----
+    ' ---- c. Tie integrity ----
+    Dim tieResult As String
+    tieResult = CheckTieIntegrity(prepared, errCount, warnCount)
+    If tieResult <> "" Then result = result & tieResult
+
+    ' ---- d. Measure beat counts ----
     If checkMeasures And Trim$(prepared) <> "" Then
         Dim measureResult As String
         measureResult = CheckMeasureLengths(prepared, errCount, warnCount)
@@ -807,6 +1068,82 @@ Private Function CheckABCText(ByVal abcText As String, ByVal checkMeasures As Bo
     End If
 
     CheckABCText = result
+End Function
+
+' Validates tie usage for v1 parser support:
+' - Tie marker must be attached to a note token (e.g., c- or c1/2-)
+' - Tied note must be followed by another note
+' - Tie target must be the same note letter
+' - Ties on rests are not supported
+Private Function CheckTieIntegrity(ByVal prepared As String, _
+                                   ByRef errCount As Long, _
+                                   ByRef warnCount As Long) As String
+    Dim result As String
+    result = ""
+
+    Dim tokens As Collection
+    Set tokens = TokenizeABC(prepared)
+    Dim flat As Collection
+    Set flat = ExpandRepeats(tokens)
+
+    Dim i As Long
+    For i = 1 To flat.Count
+        Dim t As Variant
+        t = flat(i)
+
+        If CStr(t(1)) = "note" Then
+            Dim rawNote As String
+            rawNote = CStr(t(2))
+
+            If HasTieForward(rawNote) Then
+                Dim srcClean As String
+                srcClean = StripTieMarker(rawNote)
+
+                Dim srcLetter As String
+                srcLetter = GetNoteLetterOnly(srcClean)
+
+                If srcLetter = "" Or LCase$(srcLetter) = "z" Then
+                    result = result & "  [ERROR] Tie marker '-' cannot be applied to a rest token ('" & rawNote & "')." & vbCrLf
+                    errCount = errCount + 1
+                    GoTo NextTieToken
+                End If
+
+                If i >= flat.Count Then
+                    result = result & "  [ERROR] Dangling tie at end of part after note '" & srcClean & "-'." & vbCrLf
+                    errCount = errCount + 1
+                    GoTo NextTieToken
+                End If
+
+                Dim n As Variant
+                n = flat(i + 1)
+                If CStr(n(1)) <> "note" Then
+                    result = result & "  [ERROR] Tie after note '" & srcClean & "-' must be followed by another note." & vbCrLf
+                    errCount = errCount + 1
+                    GoTo NextTieToken
+                End If
+
+                Dim dstClean As String
+                dstClean = StripTieMarker(CStr(n(2)))
+                Dim dstLetter As String
+                dstLetter = GetNoteLetterOnly(dstClean)
+
+                If dstLetter = "" Or LCase$(dstLetter) = "z" Then
+                    result = result & "  [ERROR] Tie target after note '" & srcClean & "-' cannot be a rest." & vbCrLf
+                    errCount = errCount + 1
+                    GoTo NextTieToken
+                End If
+
+                If dstLetter <> srcLetter Then
+                    result = result & "  [ERROR] Tie mismatch: '" & srcClean & "-' cannot tie to '" & dstClean & "'." & vbCrLf
+                    errCount = errCount + 1
+                    GoTo NextTieToken
+                End If
+            End If
+        End If
+NextTieToken:
+    Next i
+
+    CheckTieIntegrity = result
 End Function
 
 ' Tokenizes and expands the prepared ABC, then checks each measure's note-unit sum.
@@ -1195,7 +1532,7 @@ Private Function TokenizeABC(ByVal abc As String) As Collection
             i = i + 1
             Do While i <= Len(abc)
                 ch = Mid$(abc, i, 1)
-                If (ch >= "0" And ch <= "9") Or ch = "/" Or ch = ">" Or ch = "<" Then
+                If (ch >= "0" And ch <= "9") Or ch = "/" Or ch = ">" Or ch = "<" Or ch = "-" Then
                     i = i + 1
                 Else
                     Exit Do
@@ -1395,6 +1732,27 @@ Private Function GetNoteLetterOnly(ByVal tokenText As String) As String
     GetNoteLetterOnly = Left$(tokenText, 1)
 End Function
 
+Private Function HasTieForward(ByVal tokenText As String) As Boolean
+    Dim s As String
+    s = Trim$(tokenText)
+    If Len(s) = 0 Then
+        HasTieForward = False
+    Else
+        HasTieForward = (Right$(s, 1) = "-")
+    End If
+End Function
+
+Private Function StripTieMarker(ByVal tokenText As String) As String
+    Dim s As String
+    s = Trim$(tokenText)
+
+    Do While Len(s) > 0 And Right$(s, 1) = "-"
+        s = Left$(s, Len(s) - 1)
+    Loop
+
+    StripTieMarker = s
+End Function
+
 Private Function HasBrokenGreater(ByVal tokenText As String) As Boolean
     HasBrokenGreater = (InStr(1, tokenText, ">", vbBinaryCompare) > 0)
 End Function
@@ -1478,8 +1836,11 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                 Dim noteText As String
                 noteText = t(2)
 
+                Dim cleanNoteText As String
+                cleanNoteText = StripTieMarker(noteText)
+
                 Dim baseDur As Double
-                baseDur = GetNoteDurationUnits(noteText)
+                baseDur = GetNoteDurationUnits(cleanNoteText)
                 
                 ' Apply tuplet ratio if we're in a tuplet
                 If inTuplet Then
@@ -1491,14 +1852,61 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                     End If
                 End If
 
+                If HasTieForward(noteText) Then
+                    Dim tieLetter As String
+                    tieLetter = GetNoteLetterOnly(cleanNoteText)
+
+                    Dim mergedDur As Double
+                    mergedDur = baseDur
+
+                    Dim tieContinues As Boolean
+                    tieContinues = HasTieForward(noteText)
+
+                    Do While tieContinues
+                        If i >= tokens.Count Then Exit Do
+
+                        Dim tieNext As Variant
+                        tieNext = tokens(i + 1)
+                        If CStr(tieNext(1)) <> "note" Then Exit Do
+
+                        Dim tieNextRaw As String
+                        tieNextRaw = CStr(tieNext(2))
+                        Dim tieNextClean As String
+                        tieNextClean = StripTieMarker(tieNextRaw)
+
+                        If GetNoteLetterOnly(tieNextClean) <> tieLetter Then Exit Do
+
+                        Dim tieNextDur As Double
+                        tieNextDur = GetNoteDurationUnits(tieNextClean)
+
+                        If inTuplet Then
+                            tieNextDur = tieNextDur * tupletRatio
+                            tupletNotesRemaining = tupletNotesRemaining - 1
+                            If tupletNotesRemaining <= 0 Then
+                                inTuplet = False
+                                tupletRatio = 1#
+                            End If
+                        End If
+
+                        mergedDur = mergedDur + tieNextDur
+                        i = i + 1
+                        tieContinues = HasTieForward(tieNextRaw)
+                    Loop
+
+                    WriteNoteRow ws, currentRow, currentPart, totalUnits, cleanNoteText, mergedDur, , voiceLabel
+                    totalUnits = totalUnits + mergedDur
+                    currentRow = currentRow + 1
+                    GoTo NextToken
+                End If
+
                 Dim dur1 As Double, dur2 As Double
 
-                If HasBrokenGreater(noteText) Or HasBrokenLess(noteText) Then
+                If HasBrokenGreater(cleanNoteText) Or HasBrokenLess(cleanNoteText) Then
                     Dim nextT As Variant
                     If i < tokens.Count Then nextT = tokens(i + 1)
 
                     If i < tokens.Count And nextT(1) = "note" Then
-                        If HasBrokenGreater(noteText) Then
+                        If HasBrokenGreater(cleanNoteText) Then
                             dur1 = baseDur * 1.5
                             dur2 = baseDur * 0.5
                         Else
@@ -1507,10 +1915,10 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                         End If
 
                         Dim clean1 As String
-                        clean1 = Replace(Replace(noteText, ">", ""), "<", "")
+                        clean1 = Replace(Replace(cleanNoteText, ">", ""), "<", "")
 
                         Dim brokenDir As String
-                        If HasBrokenGreater(noteText) Then
+                        If HasBrokenGreater(cleanNoteText) Then
                             brokenDir = "dotcut"
                         Else
                             brokenDir = "cutdot"
@@ -1521,11 +1929,11 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                         currentRow = currentRow + 1
 
                         Dim clean2 As String
-                        clean2 = Replace(Replace(nextT(2), ">", ""), "<", "")
+                        clean2 = StripTieMarker(Replace(Replace(nextT(2), ">", ""), "<", ""))
                         
                         ' Second note of broken rhythm also counts toward tuplet
                         Dim dur2Base As Double
-                        dur2Base = GetNoteDurationUnits(nextT(2))
+                        dur2Base = GetNoteDurationUnits(clean2)
                         If inTuplet Then
                             dur2Base = dur2Base * tupletRatio
                             tupletNotesRemaining = tupletNotesRemaining - 1
@@ -1535,7 +1943,7 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
                             End If
                         End If
                         ' Recalculate dur2 with broken rhythm applied to potentially-tuplet-adjusted base
-                        If HasBrokenGreater(noteText) Then
+                        If HasBrokenGreater(cleanNoteText) Then
                             dur2 = dur2Base * 0.5
                         Else
                             dur2 = dur2Base * 1.5
@@ -1547,15 +1955,17 @@ Private Sub WriteEventsFromTokens(ws As Worksheet, ByVal tokens As Collection)
 
                         i = i + 1
                     Else
-                        WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur, , voiceLabel
+                        WriteNoteRow ws, currentRow, currentPart, totalUnits, cleanNoteText, baseDur, , voiceLabel
                         totalUnits = totalUnits + baseDur
                         currentRow = currentRow + 1
                     End If
                 Else
-                    WriteNoteRow ws, currentRow, currentPart, totalUnits, noteText, baseDur, , voiceLabel
+                    WriteNoteRow ws, currentRow, currentPart, totalUnits, cleanNoteText, baseDur, , voiceLabel
                     totalUnits = totalUnits + baseDur
                     currentRow = currentRow + 1
                 End If
+
+NextToken:
 
         End Select
     Next i

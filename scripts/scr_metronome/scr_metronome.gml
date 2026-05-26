@@ -424,6 +424,21 @@ function metronome_generate_events(_tune, _settings) {
         show_debug_message("WARNING: Could not find pattern for " + mode + " / " + time_sig);
         return [];
     }
+
+    var click_emphasis_note = undefined;
+    if (mode == "Click") {
+        for (var cpi = 0; cpi < array_length(pattern); cpi++) {
+            var cp_def = pattern[cpi];
+            if (!bool(cp_def.emphasis ?? false)) continue;
+            if (!is_array(cp_def.drum_notes) || array_length(cp_def.drum_notes) <= 0) continue;
+            var cp_note_key = cp_def.drum_notes[0];
+            click_emphasis_note = cp_note_key;
+            if (is_string(cp_note_key) && variable_struct_exists(config.drums, cp_note_key)) {
+                click_emphasis_note = config.drums[$ cp_note_key];
+            }
+            break;
+        }
+    }
     
     var preprocessed = _tune.events;  // These have the calculated .time field
 
@@ -533,6 +548,7 @@ function metronome_generate_events(_tune, _settings) {
 
             for (var bdi = 0; bdi < array_length(beat_defs); bdi++) {
                 var use_def = beat_defs[bdi];
+                var use_emphasis = bool(use_def.emphasis ?? false);
                 for (var sound_idx = 0; sound_idx < array_length(use_def.drum_notes); sound_idx++) {
                     var note_key = use_def.drum_notes[sound_idx];
                     var note = note_key;
@@ -543,8 +559,15 @@ function metronome_generate_events(_tune, _settings) {
                             continue;
                         }
                     }
+
+                    if (mode == "Click" && !use_emphasis && !is_undefined(click_emphasis_note)) {
+                        note = click_emphasis_note;
+                    }
+
                     var is_light = (variable_struct_exists(use_def, "light") && use_def.light);
-                    var velocity = use_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
+                    var velocity = use_emphasis
+                        ? config.velocity_emphasis
+                        : ((mode == "Click") ? floor(config.velocity_emphasis * 0.5) : (is_light ? config.velocity_light : config.velocity_normal));
 
                     array_push(metro_events, {
                         time: beat_time_ms,
@@ -593,6 +616,7 @@ function metronome_generate_events(_tune, _settings) {
             for (var beat_idx = 0; beat_idx < array_length(pattern); beat_idx++) {
                 var beat_def = pattern[beat_idx];
                 var beat_time_ms = current_time_ms + (beat_def.beat_position * beat_unit_ms);
+                var beat_emphasis = bool(beat_def.emphasis ?? false);
 
                 var beat_number = floor(beat_def.beat_position) + 1;
                 var beat_fraction = beat_def.beat_position - floor(beat_def.beat_position);
@@ -616,8 +640,15 @@ function metronome_generate_events(_tune, _settings) {
                             continue;
                         }
                     }
+
+                    if (mode == "Click" && !beat_emphasis && !is_undefined(click_emphasis_note)) {
+                        note = click_emphasis_note;
+                    }
+
                     var is_light = (variable_struct_exists(beat_def, "light") && beat_def.light);
-                    var velocity = beat_def.emphasis ? config.velocity_emphasis : (is_light ? config.velocity_light : config.velocity_normal);
+                    var velocity = beat_emphasis
+                        ? config.velocity_emphasis
+                        : ((mode == "Click") ? floor(config.velocity_emphasis * 0.5) : (is_light ? config.velocity_light : config.velocity_normal));
 
                     array_push(metro_events, {
                         time: beat_time_ms,

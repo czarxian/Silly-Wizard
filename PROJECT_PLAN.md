@@ -1241,21 +1241,28 @@ Implementation update (2026-05-10, calibration bones before UI):
 - `scoring_player_settings_build_payload/load_for_player` now saves/loads `settings.timing_calibration` for per-player persistence.
 - Audio scheduling now applies `audio_output_offset_ms` in scheduler due-time computation (timesource + step modes).
 
-Resume checkpoint (next session)
-- Calibration infrastructure status: ready for UI wiring.
-- Offsets are live in runtime but remain 0 until user calibration is run and accepted.
-- Per-player/per-device calibration persistence is in place.
+Resume checkpoint (2026-05-23, calibration UI prototype wired)
+- Settings window now includes a calibration entrypoint button (`obj_settings_calibration_button`) opening `calibration_window_layer`.
+- `calibration_window_layer` is present in `RoomUI.yy` with mode/audio/visual rows and summary/status fields:
+  - `calibration_mode_field`
+  - `setting_field_cal_audio`
+  - `setting_field_cal_visual`
+  - `calibration_summary_field`
+  - `calibration_status_field`
+- Calibration dispatcher cases are now active in `scr_button_scripts.gml` for IDs 31/33/34/35/36, and calibration field refresh runs when the calibration layer opens.
 
-Immediate next tasks (Step 3 UI)
-1. Add Settings window entrypoint button for calibration.
-2. Add mode selector (click / visual / balanced).
-3. Wire actions to APIs:
-  - Start: `timing_calibration_start_session(mode)`
-  - Analyze: `timing_calibration_prepare_draft_from_probe(mode)`
-  - Accept: `timing_calibration_accept_session()`
-  - Cancel: `timing_calibration_cancel_session()`
-4. Show status text from `timing_calibration_get_status_text()` and current draft values.
-5. Verify per-player reload applies saved device profile after restart.
+Immediate next tasks (Step 3 UI completion + validation)
+1. Add and wire remaining calibration action buttons in the calibration window UI:
+  - Test preview (`case 33`)
+  - Reset defaults (`case 34`)
+  - Save profile (`case 35`)
+  - Toggle advanced (`case 36`)
+  - Apply current-device profile (`case 37`)
+2. Do first manual runtime validation pass in Room_play:
+  - Open/close calibration window from settings.
+  - Verify mode cycling updates text.
+  - Verify audio/visual +/- rows update offsets and persist.
+3. Verify per-player reload applies saved device profile after restart.
 
 Backlog (Planned but Not Started)
 Tune & Data Pipeline

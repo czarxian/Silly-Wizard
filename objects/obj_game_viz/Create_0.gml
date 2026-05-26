@@ -79,6 +79,8 @@ global.timeline_cfg = {
     tune_structure_current_border_alpha: 1.00,
     tune_structure_part_separator_color: make_color_rgb(200, 202, 220),
     tune_structure_part_separator_alpha: 0.50,
+    tune_structure_follow_mode: "paged",
+    tune_structure_page_rows: 8,
     tune_structure_auto_follow_interval_ms: 90,
     tune_structure_auto_follow_max_rows_per_step: 1,
     notebeam_enabled: true,

@@ -867,6 +867,32 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
     if (is_struct(scoring_summary)) {
         variable_struct_set(payload, "scoring", scoring_summary);
     }
+
+    var scoring_judges = {
+        selected_judge: "",
+        overall_by_judge: {},
+        raw_by_judge: {},
+        measure_map_by_judge: {}
+    };
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        if (variable_struct_exists(global.timeline_state, "score_selected_judge")) {
+            scoring_judges.selected_judge = string(variable_struct_get(global.timeline_state, "score_selected_judge"));
+        }
+        if (variable_struct_exists(global.timeline_state, "score_overall_by_judge")
+            && is_struct(variable_struct_get(global.timeline_state, "score_overall_by_judge"))) {
+            scoring_judges.overall_by_judge = variable_struct_get(global.timeline_state, "score_overall_by_judge");
+        }
+        if (variable_struct_exists(global.timeline_state, "score_raw_by_judge")
+            && is_struct(variable_struct_get(global.timeline_state, "score_raw_by_judge"))) {
+            scoring_judges.raw_by_judge = variable_struct_get(global.timeline_state, "score_raw_by_judge");
+        }
+        if (variable_struct_exists(global.timeline_state, "score_measure_maps")
+            && is_struct(variable_struct_get(global.timeline_state, "score_measure_maps"))) {
+            scoring_judges.measure_map_by_judge = variable_struct_get(global.timeline_state, "score_measure_maps");
+        }
+    }
+    variable_struct_set(payload, "scoring_judges", scoring_judges);
+
     variable_struct_set(payload, "player_span_count", array_length(event_history_struct_get(payload, "player_spans", [])));
 
     var file = file_text_open_write(filepath);

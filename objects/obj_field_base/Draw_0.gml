@@ -121,7 +121,12 @@ if (ui_name_value == "tunestructure_canvas_anchor") {
 	var _playing_state_now = _playing_active && !_playing_complete;
 	if (!_structure_needs_redraw) {
 		if (_playing_state_now) {
-			_structure_needs_redraw = (_cached_play_state != true) || (_current_scroll != _cached_scroll) || (_current_seg != _cached_seg);
+			// Active-play tune-structure follow is computed inside gv_draw_tune_structure_panel.
+			// Without periodic redraw here, follow logic never re-evaluates and page turns stall.
+			_structure_needs_redraw = (_cached_play_state != true)
+				|| (_current_scroll != _cached_scroll)
+				|| (_current_seg != _cached_seg)
+				|| ((_now_ms - _cache_last_ms) >= _structure_refresh_ms);
 		} else {
 			_structure_needs_redraw = (_cached_play_state != _playing_state_now)
 				|| (_current_seg != _cached_seg)
@@ -329,6 +334,16 @@ if (ui_name_value == "loop_score_matrix_canvas") {
 	var _loop_draw_idx = asset_get_index("scoring_loop_overview_draw_canvas");
 	if (script_exists(_loop_draw_idx)) {
 		script_execute(_loop_draw_idx, bbox_left, bbox_top, bbox_right, bbox_bottom);
+	}
+	exit;
+}
+
+if (ui_name_value == "calibration_summary_field") {
+	var _cal_layer_id = layer_get_id("calibration_window_layer");
+	if (_cal_layer_id == -1 || !layer_get_visible(_cal_layer_id)) exit;
+	var _cal_draw_idx = asset_get_index("timing_calibration_draw_preview_canvas");
+	if (script_exists(_cal_draw_idx)) {
+		script_execute(_cal_draw_idx, bbox_left, bbox_top, bbox_right, bbox_bottom);
 	}
 	exit;
 }

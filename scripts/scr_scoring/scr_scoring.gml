@@ -170,6 +170,394 @@ function scoring_lane_key_at_time(_spans, _t_ms) {
     return key;
 }
 
+/// @function scoring_judge_display_name(_judge_id)
+/// @description Return the display name for a scoring judge id.
+/// @param {string} _judge_id Judge id
+/// @returns {string} Human-readable judge name
+function scoring_judge_display_name(_judge_id) {
+    var jid = string(_judge_id);
+    switch (jid) {
+        case "ms_overlap_uncal": return "Matching ms uncal";
+        case "ms_overlap_emb_window": return "Matching ms emb";
+    }
+    return "Matching ms calibrated";
+}
+
+/// @function scoring_judge_profile_get(_judge_id)
+/// @description Return judge profile metadata used by detail popups (name, description, variable list, and compact row-order settings).
+/// @param {string} _judge_id Judge id
+/// @returns {struct} Judge profile struct
+function scoring_judge_profile_get(_judge_id) {
+    var jid = string(_judge_id);
+    if (jid == "") jid = "ms_overlap";
+
+    var base_vars = [{
+        key: "score",
+        label: "Score",
+        format: "percent"
+    }, {
+        key: "matching_ms",
+        label: "Matching ms",
+        format: "ms"
+    }, {
+        key: "mismatch_ms",
+        label: "Mismatch ms",
+        format: "ms"
+    }, {
+        key: "expected_active_ms",
+        label: "Expected active",
+        format: "ms"
+    }, {
+        key: "player_active_ms",
+        label: "Player active",
+        format: "ms"
+    }, {
+        key: "total_ms",
+        label: "Total ms",
+        format: "ms"
+    }, {
+        key: "match_ratio",
+        label: "Match ratio",
+        format: "ratio"
+    }, {
+        key: "denominator_mode",
+        label: "Denominator",
+        format: "text"
+    }];
+
+    var profile = {
+        id: jid,
+        name: scoring_judge_display_name(jid),
+        description: "Baseline score. Measures matching milliseconds using calibrated runtime timing.",
+        variables: base_vars,
+        compact_limit: 7,
+        compact_order: ["score", "matching_ms", "mismatch_ms", "expected_active_ms", "player_active_ms", "total_ms", "denominator_mode"]
+    };
+
+    if (jid == "ms_overlap_uncal") {
+        profile.description = "Diagnostic score. Uses the same overlap logic with calibration influence removed from target timing.";
+        profile.compact_order = ["score", "matching_ms", "mismatch_ms", "target_shift_ms", "audio_output_offset_ms", "input_capture_offset_ms", "expected_active_ms"];
+        array_push(profile.variables, {
+            key: "target_shift_ms",
+            label: "Target shift",
+            format: "ms"
+        });
+        array_push(profile.variables, {
+            key: "audio_output_offset_ms",
+            label: "Audio offset",
+            format: "ms"
+        });
+        array_push(profile.variables, {
+            key: "input_capture_offset_ms",
+            label: "Input offset",
+            format: "ms"
+        });
+        array_push(profile.variables, {
+            key: "visual_alignment_offset_ms",
+            label: "Visual offset",
+            format: "ms"
+        });
+    } else if (jid == "ms_overlap_emb_window") {
+        profile.description = "Hybrid score. Non-embellishment notes use strict calibrated overlap; embellishments use ordered in-window matching.";
+        profile.compact_order = ["score", "matching_ms", "mismatch_ms", "emb_group_count", "emb_valid_interval_count", "expected_active_ms", "total_ms"];
+        array_push(profile.variables, {
+            key: "emb_group_count",
+            label: "Emb groups",
+            format: "int"
+        });
+        array_push(profile.variables, {
+            key: "emb_valid_interval_count",
+            label: "Emb valid intervals",
+            format: "int"
+        });
+        array_push(profile.variables, {
+            key: "emb_mode",
+            label: "Emb mode",
+            format: "text"
+        });
+    }
+
+    return profile;
+}
+
+/// @function scoring_detail_metric_format(_label, _value, _format)
+/// @description Format a detail metric value into a printable popup row.
+/// @param {string} _label Label text
+/// @param {*} _value Metric value
+/// @param {string} _format Formatting hint: percent, ms, ratio, int, text
+/// @returns {string} Formatted row text
+function scoring_detail_metric_format(_label, _value, _format = "text") {
+    var fmt = string(_format);
+    var out = "";
+    switch (fmt) {
+        case "percent":
+            out = string(round(clamp(real(_value), 0, 100))) + "%";
+            break;
+        case "ms":
+            out = string(round(real(_value))) + " ms";
+            break;
+        case "ratio":
+            out = string_format(clamp(real(_value), 0, 1), 0, 3);
+            break;
+        case "int":
+            out = string(max(0, floor(real(_value))));
+            break;
+        default:
+            out = string(_value);
+            break;
+    }
+    return string(_label) + ": " + out;
+}
+
+/// @function scoring_note_canonical_from_span(_span)
+/// @description Resolve canonical note name from a span, deriving from MIDI when needed.
+/// @param {struct} _span Span struct
+/// @returns {string} Canonical note or ""
+function scoring_note_canonical_from_span(_span) {
+    if (!is_struct(_span)) return "";
+    var canon = variable_struct_exists(_span, "note_canonical") ? string(variable_struct_get(_span, "note_canonical")) : "";
+    if (canon != "" && canon != "?") return canon;
+    var midi_note = variable_struct_exists(_span, "note_midi") ? real(variable_struct_get(_span, "note_midi")) : -1;
+    var midi_chan = variable_struct_exists(_span, "channel") ? real(variable_struct_get(_span, "channel")) : 0;
+    canon = chanter_midi_to_canonical(midi_note, global.MIDI_chanter ?? "default", midi_chan);
+    if (canon == "?") canon = "";
+    return canon;
+}
+
+/// @function scoring_build_emb_groups_for_scoring(_planned_spans)
+/// @description Build embellishment groups from planned spans, reusing gv_build_emb_groups when available.
+/// @param {array} _planned_spans Planned span array
+/// @returns {array} Embellishment group structs
+function scoring_build_emb_groups_for_scoring(_planned_spans) {
+    if (!is_array(_planned_spans) || array_length(_planned_spans) <= 0) return [];
+    var gv_idx = asset_get_index("gv_build_emb_groups");
+    if (script_exists(gv_idx)) {
+        return gv_build_emb_groups(_planned_spans);
+    }
+    return [];
+}
+
+/// @function scoring_build_emb_valid_intervals(_emb_groups, _player_spans)
+/// @description Build matched player intervals inside embellishment windows using ordered expected-note matching with recovery.
+/// @param {array} _emb_groups Embellishment groups from scoring_build_emb_groups_for_scoring
+/// @param {array} _player_spans Player spans
+/// @returns {array} Array of matched interval structs {start_ms, end_ms, group_index, expected_index, canonical}
+function scoring_build_emb_valid_intervals(_emb_groups, _player_spans) {
+    var out = [];
+    if (!is_array(_emb_groups) || !is_array(_player_spans)) return out;
+
+    for (var gi = 0; gi < array_length(_emb_groups); gi++) {
+        var grp = _emb_groups[gi];
+        if (!is_struct(grp)) continue;
+        var wstart = real(grp.window_start_ms ?? 0);
+        var wend = real(grp.window_end_ms ?? wstart);
+        if (wend <= wstart) continue;
+        var expected = variable_struct_exists(grp, "expected_notes") && is_array(variable_struct_get(grp, "expected_notes"))
+            ? variable_struct_get(grp, "expected_notes")
+            : [];
+        if (array_length(expected) <= 0) continue;
+
+        var candidates = [];
+        for (var p_i = 0; p_i < array_length(_player_spans); p_i++) {
+            var ps = _player_spans[p_i];
+            if (!is_struct(ps)) continue;
+
+            var ps1 = min(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
+            var ps2 = max(real(ps.start_ms ?? 0), real(ps.end_ms ?? 0));
+            if (ps2 <= wstart || ps1 >= wend) continue;
+
+            var canon = scoring_note_canonical_from_span(ps);
+            if (canon == "") continue;
+
+            var ov1 = max(ps1, wstart);
+            var ov2 = min(ps2, wend);
+            if (ov2 <= ov1) continue;
+
+            array_push(candidates, {
+                start_ms: ps1,
+                end_ms: ps2,
+                overlap_start_ms: ov1,
+                overlap_end_ms: ov2,
+                canonical: canon,
+                contained: (ps1 >= wstart && ps2 <= wend)
+            });
+        }
+
+        if (array_length(candidates) > 1) {
+            array_sort(candidates, function(_a, _b) {
+                var da = real(_a.start_ms ?? 0) - real(_b.start_ms ?? 0);
+                if (abs(da) > 0.0001) return da;
+                return real(_a.end_ms ?? 0) - real(_b.end_ms ?? 0);
+            });
+        }
+
+        var exp_idx = 0;
+        var n_exp = array_length(expected);
+        for (var ci = 0; ci < array_length(candidates); ci++) {
+            if (exp_idx >= n_exp) break;
+            var cand = candidates[ci];
+
+            var want = string(expected[exp_idx]);
+            var got = string(cand.canonical ?? "");
+            if (got == want) {
+                array_push(out, {
+                    start_ms: real(cand.overlap_start_ms ?? cand.start_ms ?? 0),
+                    end_ms: real(cand.overlap_end_ms ?? cand.end_ms ?? 0),
+                    group_index: gi,
+                    expected_index: exp_idx,
+                    canonical: got
+                });
+                exp_idx += 1;
+            }
+        }
+    }
+
+    return out;
+}
+
+/// @function scoring_interval_active_at_time(_intervals, _t_ms)
+/// @description Return true when any interval contains _t_ms.
+/// @param {array} _intervals Array of {start_ms,end_ms}
+/// @param {real} _t_ms Time sample
+/// @returns {bool}
+function scoring_interval_active_at_time(_intervals, _t_ms) {
+    if (!is_array(_intervals)) return false;
+    for (var i = 0; i < array_length(_intervals); i++) {
+        var it = _intervals[i];
+        if (!is_struct(it)) continue;
+        var a1 = min(real(it.start_ms ?? 0), real(it.end_ms ?? 0));
+        var a2 = max(real(it.start_ms ?? 0), real(it.end_ms ?? 0));
+        if (_t_ms >= a1 && _t_ms < a2) return true;
+    }
+    return false;
+}
+
+/// @function scoring_emb_group_active_at_time(_emb_groups, _t_ms)
+/// @description Return true when _t_ms lies in any embellishment window.
+/// @param {array} _emb_groups Embellishment group array
+/// @param {real} _t_ms Time sample
+/// @returns {bool}
+function scoring_emb_group_active_at_time(_emb_groups, _t_ms) {
+    if (!is_array(_emb_groups)) return false;
+    for (var i = 0; i < array_length(_emb_groups); i++) {
+        var grp = _emb_groups[i];
+        if (!is_struct(grp)) continue;
+        var g1 = real(grp.window_start_ms ?? 0);
+        var g2 = real(grp.window_end_ms ?? g1);
+        if (_t_ms >= g1 && _t_ms < g2) return true;
+    }
+    return false;
+}
+
+/// @function scoring_score_measure_ms_overlap_emb_window(_measure_entry, _planned_spans, _player_spans, _emb_groups, _emb_valid_intervals, _settings)
+/// @description Score a measure using strict ms-overlap outside embellishment windows and ordered-window matching inside windows.
+/// @param {struct} _measure_entry Measure entry {measure,start_ms,end_ms,part}
+/// @param {array} _planned_spans Planned spans
+/// @param {array} _player_spans Player spans
+/// @param {array} _emb_groups Embellishment groups built from planned spans
+/// @param {array} _emb_valid_intervals Matched in-window player intervals from scoring_build_emb_valid_intervals
+/// @param {struct} [_settings] Scoring settings
+/// @returns {struct} Scoring result {measure,start_ms,end_ms,total_ms,matching_ms,mismatch_ms,expected_active_ms,player_active_ms,score}
+function scoring_score_measure_ms_overlap_emb_window(_measure_entry, _planned_spans, _player_spans, _emb_groups, _emb_valid_intervals, _settings = undefined) {
+    var measure_num = floor(real(_measure_entry.measure ?? -1));
+    var start_ms = real(_measure_entry.start_ms ?? 0);
+    var end_ms = max(start_ms, real(_measure_entry.end_ms ?? start_ms));
+    var total_ms = max(0, end_ms - start_ms);
+
+    var result = {
+        measure: measure_num,
+        part: floor(real(_measure_entry.part ?? 1)),
+        start_ms: start_ms,
+        end_ms: end_ms,
+        total_ms: total_ms,
+        matching_ms: 0,
+        mismatch_ms: total_ms,
+        expected_active_ms: 0,
+        player_active_ms: 0,
+        score: 0
+    };
+    if (total_ms <= 0.001) return result;
+
+    var planned = scoring_filter_spans_in_window(_planned_spans, start_ms, end_ms);
+    var player = scoring_filter_spans_in_window(_player_spans, start_ms, end_ms);
+    var boundaries = [start_ms, end_ms];
+
+    for (var i = 0; i < array_length(planned); i++) {
+        var ps = planned[i];
+        boundaries = scoring_boundaries_add_unique(boundaries, clamp(real(ps.start_ms ?? start_ms), start_ms, end_ms));
+        boundaries = scoring_boundaries_add_unique(boundaries, clamp(real(ps.end_ms ?? end_ms), start_ms, end_ms));
+    }
+    for (var j = 0; j < array_length(player); j++) {
+        var us = player[j];
+        boundaries = scoring_boundaries_add_unique(boundaries, clamp(real(us.start_ms ?? start_ms), start_ms, end_ms));
+        boundaries = scoring_boundaries_add_unique(boundaries, clamp(real(us.end_ms ?? end_ms), start_ms, end_ms));
+    }
+    if (is_array(_emb_groups)) {
+        for (var gi = 0; gi < array_length(_emb_groups); gi++) {
+            var grp = _emb_groups[gi];
+            if (!is_struct(grp)) continue;
+            var w1 = clamp(real(grp.window_start_ms ?? start_ms), start_ms, end_ms);
+            var w2 = clamp(real(grp.window_end_ms ?? w1), start_ms, end_ms);
+            boundaries = scoring_boundaries_add_unique(boundaries, w1);
+            boundaries = scoring_boundaries_add_unique(boundaries, w2);
+        }
+    }
+
+    if (array_length(boundaries) > 1) {
+        array_sort(boundaries, function(_a, _b) { return real(_a) - real(_b); });
+    }
+
+    var matching_ms = 0;
+    var expected_active_ms = 0;
+    var player_active_ms = 0;
+    var _count_rests  = is_struct(_settings) && variable_struct_exists(_settings, "count_rests")
+        ? bool(_settings[$ "count_rests"]) : false;
+
+    for (var bi = 0; bi < array_length(boundaries) - 1; bi++) {
+        var seg_a = real(boundaries[bi]);
+        var seg_b = real(boundaries[bi + 1]);
+        var seg_ms = max(0, seg_b - seg_a);
+        if (seg_ms <= 0.0001) continue;
+
+        var sample_t = seg_a + (seg_ms * 0.5);
+        var planned_key = scoring_lane_key_at_time(planned, sample_t);
+        var player_key  = scoring_lane_key_at_time(player, sample_t);
+        var in_emb = scoring_emb_group_active_at_time(_emb_groups, sample_t);
+        var valid_emb_player = scoring_interval_active_at_time(_emb_valid_intervals, sample_t);
+
+        if (_count_rests) {
+            if (planned_key == "") {
+                if (player_key == "") matching_ms += seg_ms;
+            } else {
+                if (in_emb) {
+                    if (valid_emb_player) matching_ms += seg_ms;
+                } else {
+                    if (planned_key == player_key) matching_ms += seg_ms;
+                }
+                expected_active_ms += seg_ms;
+            }
+        } else {
+            if (planned_key != "") {
+                if (in_emb) {
+                    if (valid_emb_player) matching_ms += seg_ms;
+                } else {
+                    if (planned_key == player_key) matching_ms += seg_ms;
+                }
+                expected_active_ms += seg_ms;
+            }
+        }
+        if (player_key != "") player_active_ms += seg_ms;
+    }
+
+    var _denom = _count_rests ? total_ms : max(1, expected_active_ms);
+    result.matching_ms = matching_ms;
+    result.mismatch_ms = max(0, _denom - matching_ms);
+    result.expected_active_ms = expected_active_ms;
+    result.player_active_ms = player_active_ms;
+    result.score = clamp((matching_ms / _denom) * 100, 0, 100);
+    return result;
+}
+
 /// @function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _player_spans, _settings)
 /// @description Score a single measure by comparing planned and player lane activity in the measure's time window. Returns a struct with matching_ms, mismatch_ms, expected_active_ms, player_active_ms, and score (0–100).
 /// @param {struct} _measure_entry  {measure, start_ms, end_ms, part}
@@ -419,12 +807,12 @@ function scoring_apply_run_to_runtime(_run_summary, _promote_selected = true) {
     }
 }
 
-/// @function scoring_shift_player_spans(_spans, _offset_ms)
-/// @description Return a copy of a player span array with all timestamps shifted by _offset_ms. Used to apply scoring_compare_offset_ms before comparison.
+/// @function scoring_shift_spans(_spans, _offset_ms)
+/// @description Return a copy of a span array with all timestamps shifted by _offset_ms.
 /// @param {array} _spans      Source span array {start_ms, end_ms, lane_idx, ...}
 /// @param {real}  _offset_ms  Millisecond shift (positive = shift later, negative = shift earlier)
 /// @returns {array}  New shifted span array (shallow field copy + adjusted timestamps)
-function scoring_shift_player_spans(_spans, _offset_ms) {
+function scoring_shift_spans(_spans, _offset_ms) {
     var out = [];
     if (!is_array(_spans)) return out;
     var n = array_length(_spans);
@@ -441,6 +829,15 @@ function scoring_shift_player_spans(_spans, _offset_ms) {
         array_push(out, copy);
     }
     return out;
+}
+
+/// @function scoring_shift_player_spans(_spans, _offset_ms)
+/// @description Backward-compatible alias for scoring_shift_spans for player traces.
+/// @param {array} _spans      Source span array {start_ms, end_ms, lane_idx, ...}
+/// @param {real}  _offset_ms  Millisecond shift (positive = shift later, negative = shift earlier)
+/// @returns {array}  New shifted span array
+function scoring_shift_player_spans(_spans, _offset_ms) {
+    return scoring_shift_spans(_spans, _offset_ms);
 }
 
 /// @function scoring_build_ms_overlap_summary(_export_info, _judge_id, _score_compare_offset_override_ms, _apply_to_runtime)
@@ -490,7 +887,45 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
     var _count_rests = bool(_settings.count_rests);
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
-    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
+    var judge_name = scoring_judge_display_name(judge_id);
+
+    var _uncal_target_shift_ms = 0;
+    var _uncal_audio_ms = 0;
+    var _uncal_visual_ms = 0;
+    var _uncal_input_ms = 0;
+
+    var planned_spans_for_score = planned_spans;
+    var _use_emb_window_judge = (judge_id == "ms_overlap_emb_window");
+    if (judge_id == "ms_overlap_uncal") {
+        if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+            if (variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
+                _uncal_audio_ms = real(global.timeline_cfg.audio_output_offset_ms);
+            }
+            if (variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")) {
+                _uncal_visual_ms = real(global.timeline_cfg.visual_alignment_offset_ms);
+            }
+            if (variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) {
+                _uncal_input_ms = real(global.timeline_cfg.input_capture_offset_ms);
+            }
+        }
+
+        // Uncalibrated view: compare against where targets would be if active offsets were zero.
+        // We keep player spans raw and move the target timeline instead.
+        _uncal_target_shift_ms = -(_uncal_audio_ms + _uncal_input_ms);
+        planned_spans_for_score = scoring_shift_spans(planned_spans, _uncal_target_shift_ms);
+        scoring_calibration_debug_log("[JUDGE_BUILD] " + judge_id
+            + " | target_shift_ms=" + string(_uncal_target_shift_ms)
+            + " | audio_ms=" + string(_uncal_audio_ms)
+            + " | input_ms=" + string(_uncal_input_ms)
+            + " | visual_ms=" + string(_uncal_visual_ms));
+    }
+
+    var _emb_groups_for_score = _use_emb_window_judge
+        ? scoring_build_emb_groups_for_scoring(planned_spans_for_score)
+        : [];
+    var _emb_valid_intervals_for_score = _use_emb_window_judge
+        ? scoring_build_emb_valid_intervals(_emb_groups_for_score, player_spans)
+        : [];
 
     // Overall accumulators (aggregated across all scored measures)
     var measures_out = [];
@@ -563,7 +998,7 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             }
 
             // Clip spans to this segment's time window.
-            var _seg_planned = scoring_filter_spans_in_window(planned_spans, _seg_start_ms, _seg_end_ms);
+            var _seg_planned = scoring_filter_spans_in_window(planned_spans_for_score, _seg_start_ms, _seg_end_ms);
             var _seg_player  = scoring_filter_spans_in_window(player_spans,  _seg_start_ms, _seg_end_ms);
 
             var _seg_measures = [];
@@ -572,7 +1007,9 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
                 var e = _nav.entries[_mi];
                 if (!is_struct(e)) continue;
                 if (floor(real(e.measure ?? -1)) < 1) continue;
-                var scored = scoring_score_measure_ms_overlap(e, _seg_planned, _seg_player, _settings);
+                var scored = _use_emb_window_judge
+                    ? scoring_score_measure_ms_overlap_emb_window(e, _seg_planned, _seg_player, _emb_groups_for_score, _emb_valid_intervals_for_score, _settings)
+                    : scoring_score_measure_ms_overlap(e, _seg_planned, _seg_player, _settings);
                 if (real(scored.expected_active_ms ?? 0) < 1) continue;
                 array_push(_seg_measures, scored);
                 array_push(measures_out, scored);
@@ -597,7 +1034,13 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
                 total_ms: _seg_tot_ms, matching_ms: _seg_match_ms,
                 mismatch_ms: max(0, _seg_denom - _seg_match_ms),
                 expected_active_ms: _seg_exp_ms, player_active_ms: _seg_play_ms,
-                match_ratio: (_seg_denom > 0) ? (_seg_match_ms / _seg_denom) : 0
+                match_ratio: (_seg_denom > 0) ? (_seg_match_ms / _seg_denom) : 0,
+                target_shift_ms: _uncal_target_shift_ms,
+                audio_output_offset_ms: _uncal_audio_ms,
+                visual_alignment_offset_ms: _uncal_visual_ms,
+                input_capture_offset_ms: _uncal_input_ms,
+                emb_group_count: array_length(_emb_groups_for_score),
+                emb_valid_interval_count: array_length(_emb_valid_intervals_for_score)
             };
             // Store per-segment score map keyed by judge_id.
             var _seg_map  = scoring_measure_results_to_map(_seg_measures);
@@ -639,7 +1082,9 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             var e = measure_entries[i];
             if (!is_struct(e)) continue;
             if (floor(real(e.measure ?? -1)) < 1) continue;
-            var scored = scoring_score_measure_ms_overlap(e, planned_spans, player_spans, _settings);
+            var scored = _use_emb_window_judge
+                ? scoring_score_measure_ms_overlap_emb_window(e, planned_spans_for_score, player_spans, _emb_groups_for_score, _emb_valid_intervals_for_score, _settings)
+                : scoring_score_measure_ms_overlap(e, planned_spans_for_score, player_spans, _settings);
             if (real(scored.expected_active_ms ?? 0) < 1) continue;
             array_push(measures_out, scored);
             total_ms           += real(scored.total_ms ?? 0);
@@ -657,7 +1102,13 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
         mismatch_ms: max(0, _overall_denom - matching_ms),
         expected_active_ms: expected_active_ms,
         player_active_ms: player_active_ms,
-        match_ratio: (_overall_denom > 0) ? (matching_ms / _overall_denom) : 0
+        match_ratio: (_overall_denom > 0) ? (matching_ms / _overall_denom) : 0,
+        target_shift_ms: _uncal_target_shift_ms,
+        audio_output_offset_ms: _uncal_audio_ms,
+        visual_alignment_offset_ms: _uncal_visual_ms,
+        input_capture_offset_ms: _uncal_input_ms,
+        emb_group_count: array_length(_emb_groups_for_score),
+        emb_valid_interval_count: array_length(_emb_valid_intervals_for_score)
     };
 
     var summary = {
@@ -870,12 +1321,18 @@ function scoring_get_ui_overview_rows() {
     var match_ratio = variable_struct_exists(raw, "match_ratio") ? (real(variable_struct_get(raw, "match_ratio")) * 100) : 0;
     var matching_ms = variable_struct_exists(raw, "matching_ms") ? real(variable_struct_get(raw, "matching_ms")) : 0;
     var total_ms = variable_struct_exists(raw, "total_ms") ? real(variable_struct_get(raw, "total_ms")) : 0;
+    var target_shift_ms = variable_struct_exists(raw, "target_shift_ms") ? real(variable_struct_get(raw, "target_shift_ms")) : 0;
     var grade = scoring_score_to_grade(overall_value);
+    var judge_id = variable_struct_exists(summary, "judge_id") ? string(variable_struct_get(summary, "judge_id")) : "ms_overlap";
+    var judge_name = scoring_judge_display_name(judge_id);
 
-    array_push(rows, "Judge: MS Overlap");
+    array_push(rows, "Judge: " + judge_name);
     array_push(rows, "Score: " + string_format(overall_value, 0, 2) + "% (" + grade + ")");
     array_push(rows, "Matched: " + string(round(matching_ms)) + " / " + string(round(total_ms)) + " ms");
     array_push(rows, "Ratio: " + string_format(match_ratio, 0, 2) + "%");
+    if (judge_id == "ms_overlap_uncal") {
+        array_push(rows, "Target shift (uncal): " + string(round(target_shift_ms)) + " ms");
+    }
     return rows;
 }
 
@@ -1001,7 +1458,7 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
             }
         }
 
-        var run_score_text = string(floor(clamp(display_score, 0, 100))) + "%";
+        var run_score_text = string(round(clamp(display_score, 0, 100))) + "%";
         var grade = scoring_score_to_grade(display_score);
 
         array_push(rows, {
@@ -1019,7 +1476,7 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
 }
 
 /// @function scoring_get_detail_popup_rows(_measure_num, _judge_id)
-/// @description Build string rows for the per-measure (or overall) scoring detail popup.
+/// @description Build string rows for the per-measure (or overall) scoring detail popup using judge profile metadata.
 /// @param {real}   [_measure_num]  Measure to report on (-1 = overall)
 /// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
 /// @returns {array}  String rows for display
@@ -1028,7 +1485,9 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var rows = [];
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
-    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
+    var judge_profile = scoring_judge_profile_get(judge_id);
+    var judge_name = string(variable_struct_exists(judge_profile, "name") ? variable_struct_get(judge_profile, "name") : scoring_judge_display_name(judge_id));
+    var judge_desc = string(variable_struct_exists(judge_profile, "description") ? variable_struct_get(judge_profile, "description") : "");
 
     var summary = scoring_get_last_run_summary();
 
@@ -1095,6 +1554,12 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var total_ms = max(1, real(variable_struct_exists(raw, "total_ms") ? variable_struct_get(raw, "total_ms") : 0));
     var expected_active_ms = real(variable_struct_exists(raw, "expected_active_ms") ? variable_struct_get(raw, "expected_active_ms") : total_ms);
     var player_active_ms = real(variable_struct_exists(raw, "player_active_ms") ? variable_struct_get(raw, "player_active_ms") : matching_ms);
+    var target_shift_ms = real(variable_struct_exists(raw, "target_shift_ms") ? variable_struct_get(raw, "target_shift_ms") : 0);
+    var audio_output_offset_ms = real(variable_struct_exists(raw, "audio_output_offset_ms") ? variable_struct_get(raw, "audio_output_offset_ms") : 0);
+    var visual_alignment_offset_ms = real(variable_struct_exists(raw, "visual_alignment_offset_ms") ? variable_struct_get(raw, "visual_alignment_offset_ms") : 0);
+    var input_capture_offset_ms = real(variable_struct_exists(raw, "input_capture_offset_ms") ? variable_struct_get(raw, "input_capture_offset_ms") : 0);
+    var emb_group_count = real(variable_struct_exists(raw, "emb_group_count") ? variable_struct_get(raw, "emb_group_count") : 0);
+    var emb_valid_interval_count = real(variable_struct_exists(raw, "emb_valid_interval_count") ? variable_struct_get(raw, "emb_valid_interval_count") : 0);
 
     var measure_num = floor(real(_measure_num));
     var detail_scope = "overall";
@@ -1112,15 +1577,86 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     }
 
     var mismatch_ms = max(0, total_ms - matching_ms);
+    var settings = scoring_ms_overlap_get_effective_settings();
+    var count_rests = variable_struct_exists(settings, "count_rests") ? bool(variable_struct_get(settings, "count_rests")) : false;
+    var denominator_mode = count_rests ? "total_ms" : "expected_active_ms";
+    var match_ratio = (total_ms > 0) ? clamp(matching_ms / total_ms, 0, 1) : 0;
+    var emb_mode = (judge_id == "ms_overlap_emb_window") ? "ordered in-window" : "";
+
+    var metrics = {
+        score: score_value,
+        matching_ms: matching_ms,
+        mismatch_ms: mismatch_ms,
+        expected_active_ms: expected_active_ms,
+        player_active_ms: player_active_ms,
+        total_ms: total_ms,
+        match_ratio: match_ratio,
+        denominator_mode: denominator_mode,
+        target_shift_ms: target_shift_ms,
+        audio_output_offset_ms: audio_output_offset_ms,
+        visual_alignment_offset_ms: visual_alignment_offset_ms,
+        input_capture_offset_ms: input_capture_offset_ms,
+        emb_group_count: emb_group_count,
+        emb_valid_interval_count: emb_valid_interval_count,
+        emb_mode: emb_mode
+    };
 
     array_push(rows, "Judge: " + judge_name);
+    if (judge_desc != "") array_push(rows, "About: " + judge_desc);
     array_push(rows, "Scope: " + detail_scope);
-    array_push(rows, "Score: " + string(round(clamp(score_value, 0, 100))) + "%");
-    array_push(rows, "Matching ms: " + string(round(matching_ms)));
-    array_push(rows, "Total ms: " + string(round(total_ms)));
-    array_push(rows, "Mismatch ms: " + string(round(mismatch_ms)));
-    array_push(rows, "Expected active: " + string(round(expected_active_ms)) + " ms");
-    array_push(rows, "Player active: " + string(round(player_active_ms)) + " ms");
+
+    var vars = variable_struct_exists(judge_profile, "variables") && is_array(variable_struct_get(judge_profile, "variables"))
+        ? variable_struct_get(judge_profile, "variables")
+        : [];
+
+    var compact_order = variable_struct_exists(judge_profile, "compact_order") && is_array(variable_struct_get(judge_profile, "compact_order"))
+        ? variable_struct_get(judge_profile, "compact_order")
+        : [];
+    var compact_limit = variable_struct_exists(judge_profile, "compact_limit")
+        ? max(1, floor(real(variable_struct_get(judge_profile, "compact_limit"))))
+        : 7;
+
+    var vars_by_key = {};
+    for (var vi = 0; vi < array_length(vars); vi++) {
+        var cfg = vars[vi];
+        if (!is_struct(cfg)) continue;
+        var k = string(variable_struct_exists(cfg, "key") ? variable_struct_get(cfg, "key") : "");
+        if (k == "") continue;
+        vars_by_key[$ k] = cfg;
+    }
+
+    var emitted = {};
+    var emitted_count = 0;
+
+    // Emit compact priority rows first so short popup layouts show judge-specific essentials.
+    for (var oi = 0; oi < array_length(compact_order); oi++) {
+        if (emitted_count >= compact_limit) break;
+        var ok = string(compact_order[oi]);
+        if (ok == "" || !variable_struct_exists(vars_by_key, ok)) continue;
+        if (!variable_struct_exists(metrics, ok)) continue;
+        var ocfg = vars_by_key[$ ok];
+        var oval = variable_struct_get(metrics, ok);
+        var ofmt = string(variable_struct_exists(ocfg, "format") ? variable_struct_get(ocfg, "format") : "text");
+        if (ofmt == "text" && string(oval) == "") continue;
+        var olbl = string(variable_struct_exists(ocfg, "label") ? variable_struct_get(ocfg, "label") : ok);
+        array_push(rows, scoring_detail_metric_format(olbl, oval, ofmt));
+        emitted[$ ok] = true;
+        emitted_count += 1;
+    }
+
+    // Emit remaining configured rows after priority rows.
+    for (var vi2 = 0; vi2 < array_length(vars); vi2++) {
+        var cfg2 = vars[vi2];
+        if (!is_struct(cfg2)) continue;
+        var key = string(variable_struct_exists(cfg2, "key") ? variable_struct_get(cfg2, "key") : "");
+        if (key == "" || !variable_struct_exists(metrics, key)) continue;
+        if (variable_struct_exists(emitted, key)) continue;
+        var val = variable_struct_get(metrics, key);
+        var fmt = string(variable_struct_exists(cfg2, "format") ? variable_struct_get(cfg2, "format") : "text");
+        if (fmt == "text" && string(val) == "") continue;
+        var label = string(variable_struct_exists(cfg2, "label") ? variable_struct_get(cfg2, "label") : key);
+        array_push(rows, scoring_detail_metric_format(label, val, fmt));
+    }
 
     return rows;
 }
@@ -1146,7 +1682,7 @@ function scoring_get_measure_popup_rows(_measure_num) {
 function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
     var summary = scoring_get_last_run_summary();
     var judge_id = is_string(_judge_id) && string_length(_judge_id) > 0 ? string(_judge_id) : "ms_overlap";
-    var judge_name = (judge_id == "ms_overlap_uncal") ? "Matching time (Uncalibrated)" : "Matching time (Calibrated)";
+    var judge_name = scoring_judge_display_name(judge_id);
     var score_value = 0;
     var subtitle = "overall";
 
@@ -1350,6 +1886,7 @@ function scoring_judge_settings_get_registry() {
     var store = scoring_judge_settings_get_store();
     var enabled = true;
     var enabled_uncal = true;
+    var enabled_emb_window = true;
     var settings_obj = {
         count_rests:     false,
         grade_a:         90,
@@ -1379,17 +1916,29 @@ function scoring_judge_settings_get_registry() {
             enabled_uncal = bool(variable_struct_get(entry_uncal, "enabled"));
         }
     }
+    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap_emb_window")) {
+        var entry_emb_window = store.judges[$ "ms_overlap_emb_window"];
+        if (is_struct(entry_emb_window) && variable_struct_exists(entry_emb_window, "enabled")) {
+            enabled_emb_window = bool(variable_struct_get(entry_emb_window, "enabled"));
+        }
+    }
     return [{
         id: "ms_overlap",
-        name: "Matching time (Calibrated)",
+        name: "Matching ms calibrated",
         description: "Percent of measure milliseconds where tune and player match after scoring calibration offset.",
         enabled: enabled,
         settings: settings_obj
     }, {
         id: "ms_overlap_uncal",
-        name: "Matching time (Uncalibrated)",
+        name: "Matching ms uncal",
         description: "Percent of measure milliseconds where tune and player match with no scoring calibration offset.",
         enabled: enabled_uncal,
+        settings: settings_obj
+    }, {
+        id: "ms_overlap_emb_window",
+        name: "Matching ms emb",
+        description: "Strict ms-overlap for non-embellishment notes, with in-window ordered-note matching for embellishments.",
+        enabled: enabled_emb_window,
         settings: settings_obj
     }];
 }

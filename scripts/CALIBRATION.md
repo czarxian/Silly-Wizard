@@ -1,5 +1,5 @@
-Last reviewed: 2026-05-17
-Status: Manual-offset baseline. Split offsets persist and apply on startup; probe and mode workflow removed.
+Last reviewed: 2026-05-23
+Status: Continuous two-mode calibration workflow active. Audio is the primary measured compensation; Visual and MIDI In are advanced trims (MIDI In usually stays 0).
 
 ## 1. Purpose
 Calibration now manages only persistent split timing offsets for manual adjustment.
@@ -13,11 +13,9 @@ Supported behavior:
 Core implementation lives in `scr_tune_scripts.gml`.
 
 ## 2. Active Offset Domains
-- `audio_output_offset_ms` — audio playback scheduling offset
-- `visual_alignment_offset_ms` — planned notebeam/visual timeline offset
-
-Reserved (not currently used):
-- `input_capture_offset_ms` — reserved for future use if true MIDI device timestamps become available
+- `audio_output_offset_ms` — output-chain audio compensation (primary calibration target)
+- `visual_alignment_offset_ms` — display alignment trim (perceptual, optional)
+- `input_capture_offset_ms` — MIDI input capture trim (advanced; usually keep at 0)
 
 Removed:
 - `scoring_compare_offset_ms` — removed to ensure player feedback remains honest (offset should not mask timing issues)
@@ -34,7 +32,7 @@ Retained fields:
 - `device_profiles`
 - `audio_offset_ms`
 - `visual_offset_ms`
-- `input_offset_ms` (reserved; always 0)
+- `input_offset_ms` (advanced; default 0)
 - `last_message`
 - `jitter_summary`
 
@@ -65,28 +63,44 @@ Stored per-device profile fields:
 - `audio_output_offset_ms`
 - `visual_alignment_offset_ms`
 
+Runtime-only advanced field:
+- `input_capture_offset_ms` (edited in UI, default 0; not currently written into per-device profile payload)
+
 Removed from payload/profile:
 - `scoring_compare_offset_ms` (player feedback must remain honest)
 
 ## 6. UI Wiring
 Calibration buttons active in dispatcher:
-- `32` manual offset nudge (audio/visual only)
-- `37` apply saved profile
-
-Disabled/removed workflow buttons:
 - `31` mode change
-- `33` start run
-- `34` prepare probe draft
-- `35` accept
-- `36` cancel
+- `32` manual offset nudge (audio/visual/MIDI in)
+- `33` start/stop continuous calibration test loop (button text: `Start`)
+- `34` reset to system defaults
+- `35` OK (save profile + close)
+- `36` toggle advanced panel state (button text: `Adv`)
+- `37` Cancel (close + restore pre-session snapshot)
 
 Current manual nudge behavior:
-- Script supports two field names:
+-- Script supports three field names:
 	- `setting_field_cal_audio`
 	- `setting_field_cal_visual`
+	- `setting_field_cal_input`
 - Nudge applies immediately
-- Nudge persists immediately to current device profile and player settings
-- UI refresh updates only audio and visual offset fields
+- Audio/visual persist to current device profile and player settings
+- UI refresh updates mode, audio/visual/input offsets, summary canvas, and status field
+
+Current session behavior:
+- Opening calibration captures a session snapshot of current audio/visual/input offsets.
+- `Start` runs a continuous repeating click loop for live vetting (same button stops when active).
+- Mode changes can be made while the loop is running.
+- `OK` commits current values, saves device profile, and closes.
+- `Cancel` closes and restores offsets from the session snapshot.
+- Closing the window with the close button behaves as Cancel.
+
+Calibration window layout currently includes:
+- launcher in settings window
+- dedicated `calibration_window_layer`
+- mode/MIDI In/audio/visual/summary/status rows
+- action footer buttons: Start, Reset, OK, Adv, Cancel
 
 ## 7. Removed Workflow
 Removed concepts:
@@ -104,7 +118,6 @@ Already wired and retained:
 - Event history/export records both offsets
 
 No longer used:
-- Input capture offset (reserved for future MIDI timestamp work)
 - Scoring compare offset (removed to preserve honest feedback)
 
 ## 9. Diagnostics
@@ -114,31 +127,45 @@ No longer used:
 Stable retained baseline:
 
 Open follow-up work:
+- Manual validation pass for all calibration button handlers in-room (preview click cadence, reset/save/apply state transitions).
+- Optional: restore external audio sample capture hook once a reliable input path is available.
 
 ## 12. Staged Calibration Workflow (In Progress)
 
-Calibration now moves toward a 3-stage workflow:
+Calibration now uses a user-vetting-first workflow:
 
-1) Internal MIDI loopback (implemented)
-- Goal: measure internal MIDI path timing.
+1) Manual vetting with continuous loop (active)
+- Goal: let the user align click timing and visuals by ear/eye.
+- Modes: `Bouncing Ball`, `Converging Beams`.
+- Trigger: `Start` button in the calibration window.
+- Output: user-adjusted `audio_output_offset_ms`, optional `visual_alignment_offset_ms`, optional `input_capture_offset_ms`.
+
+2) Internal MIDI loopback seed (optional)
+- Goal: provide a baseline suggestion before manual refinement.
 - Trigger: `L` key (dev path) from main menu/settings.
 - Output: `midi_internal_offset_ms`, `jitter_midi_ms`.
 
-2) External audio loopback (scaffold implemented)
-- Goal: measure external audio chain timing (interface/driver/render/output path).
+3) External audio loopback (optional scaffold)
+- Goal: provide an optional measured seed for external audio path.
 - Trigger: `O` key (dev path) from main menu/settings.
-- Current behavior:
-	- emits timed pulse trials via MIDI output
-	- records send timing
-	- exposes sample registration hook `timing_calibration_external_audio_register_sample(_latency_ms)`
-	- computes/stores `audio_output_offset_ms` and `jitter_audio_ms` once samples are registered
-- Note: automatic audio-input capture hook is the next integration step.
-
-3) User perceptual dial (planned)
-- Goal: final ear-based trim after measured offsets are applied.
-- Status: not implemented yet.
+- Status: available as scaffold, not required for user calibration workflow.
 
 ## 11. Change Log
+2026-05-23
+- Re-enabled staged calibration controls (mode/test/reset/save/advanced/apply) in button dispatcher and room UI.
+- Added calibration window footer action buttons in `RoomUI.yy` and wired to button IDs `33`-`37`.
+
+2026-05-23 (continuous vetting update)
+- Reduced mode set to two user-vetting modes: `Bouncing Ball` and `Converging Beams`.
+- Updated Test to a continuous start/stop loop instead of one-shot click (UI label now `Start`).
+- Added calibration session snapshot behavior: open captures snapshot, Cancel/close restores snapshot.
+- Mapped `OK` to save+close and `Cancel` to close with no change.
+
+2026-05-23 (advanced offset and labels)
+- Added dedicated MIDI In row and nudge controls in calibration UI.
+- Kept MIDI In as advanced default-0 trim rather than a primary calibration target.
+- Shortened advanced footer label from `Advanced` to `Adv`.
+
 2026-05-17 (phase 2)
 - Simplified to two active offsets: audio and visual only.
 - Marked input_capture_offset_ms as reserved for future MIDI timestamp work.

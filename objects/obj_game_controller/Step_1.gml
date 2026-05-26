@@ -11,4 +11,8 @@ var _cal_ext_step_idx = asset_get_index("timing_calibration_step_external_audio_
 if (script_exists(_cal_ext_step_idx)) {
 	script_execute(_cal_ext_step_idx);
 }
+var _cal_preview_step_idx = asset_get_index("timing_calibration_step_preview_click");
+if (script_exists(_cal_preview_step_idx)) {
+	script_execute(_cal_preview_step_idx);
+}
 tune_rt_budget_diag_record_midi_step_ms((get_timer() - _midi_t0_us) / 1000);

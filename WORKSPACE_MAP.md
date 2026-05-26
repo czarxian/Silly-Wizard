@@ -4,6 +4,18 @@
 
 **Maintenance rule:** When adding or changing any function — update its `/// @` header block in code AND update its row in the Script Registry below.
 
+## Script Registry (Scoring Addendum)
+
+| Script | Function | Purpose | Reads | Writes | Callers |
+|---|---|---|---|---|---|
+| `scr_scoring.gml` | `scoring_judge_profile_get(_judge_id)` | Returns judge profile metadata (name, description, variable list, compact row order) for detail popup rendering. | none | none | `scoring_get_detail_popup_rows` |
+| `scr_scoring.gml` | `scoring_detail_metric_format(_label, _value, _format)` | Formats detail metric values for popup row text output. | none | none | `scoring_get_detail_popup_rows` |
+| `scr_scoring.gml` | `scoring_get_detail_popup_rows(_measure_num, _judge_id)` | Builds profile-driven detail popup rows for selected judge and scope. | `global.scoring_last_run`, `global.timeline_state`, `global.playback_context` | none | scoring detail popup UI |
+| `scr_game_viz.gml` | `gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2)` | Draws tune-structure grid and drives playback auto-follow scroll from local measure-nav entry time windows (single source of truth) into paged/continuous follow modes; emits `page_turn` log entries when follow changes rows. | `global.timeline_state.*`, `global.playback_context`, `global.timeline_cfg` | `global.timeline_state.measure_nav_scroll_row`, `global.timeline_state.measure_nav_total_rows`, `global.timeline_state.measure_nav_view_rows`, `global.timeline_state.measure_nav_tile_hitboxes`, `global.timeline_state.measure_nav_controls`, `global.timeline_state.measure_nav_auto_follow_last_ms` | gameviz panel draw pipeline |
+| `scr_game_viz.gml` | `gv_log_measure_nav_page_turn(_playhead_ms, _measure_num, _from_scroll, _to_scroll, _target_row, _view_rows, _page_rows, _follow_mode)` | Records tune-structure follow row/page changes as structured `page_turn` events in `EVENT_HISTORY` and debug output. | `global.EVENT_HISTORY_ENABLED`, `global.current_tune_name`, `global.playback_context` | `global.EVENT_HISTORY` | `gv_draw_tune_structure_panel` |
+| `scr_game_viz.gml` | `gv_measure_nav_find_local_idx(_ms, _measure_num)` | Resolves a panel-local measure-nav index for a wall-clock time and measure number; used to keep highlight indices in the same namespace as `measure_nav_entries`. | `global.timeline_state.measure_nav_entries` | none | `gv_get_current_planned_measure` |
+| `scr_game_viz.gml` | `gv_get_current_planned_measure(_playhead_ms)` | Resolves active measure from playhead time; in set mode converts flat set-nav resolution into segment-local panel nav index and fails closed on namespace mismatch. | `global.timeline_state`, `global.playback_set_measure_nav_all`, `global.playback_context`, `global.timeline_cfg` | `global.timeline_state.measure_highlight_last_measure`, `global.timeline_state.measure_highlight_last_nav_idx`, `global.timeline_state.current_measure` | tune-structure panel draw/overlay, score sync |
+
 **Last full review:** 2026-04-15
 
 ---
@@ -255,7 +267,7 @@ In set mode, `scr_set_preprocess_and_build_playback()` reads BPM from each `acti
 
 ## UI architecture (current state)
 
-- **UI Layers:** `main_menu_layer`, `settings_window_layer`, `tune_window_layer` (each layer contains backgrounds, flex panels and instances such as buttons and fields).
+- **UI Layers:** `main_menu_layer`, `settings_window_layer`, `tune_window_layer`, `calibration_window_layer` (each layer contains backgrounds, flex panels and instances such as buttons and fields).
 - **Flex panels:** Used for layout and row stacking in tune window and other panels.
 - **UI Script Flow:** `scripts/scr_button_scripts/` centralizes button actions and toggles windows; it calls `scr_ui_refresh()` / `scr_update_fields()` as needed.
 
@@ -335,7 +347,16 @@ Below are the actual UI layers and the important instances placed on each (based
   - MIDI In row: `setting_Lbutton_1` (left arrow `obj_btn_fieldL`), `setting_field_1` (`obj_field_base`) — field for MIDI IN device.
   - MIDI Out row: `setting_Lbutton_2`/`setting_Rbutton_2`, `setting_field_2` (`obj_field_base`) — field for MIDI OUT device.
   - Logs row: `setting_Lbutton_logs`/`setting_Rbutton_logs`, `setting_field_logs` (`obj_field_base`) — OFF/ON toggle for runtime score-lane debug logging.
+  - Calibration launcher: `obj_settings_calibration_button` (`obj_btn_main`) — opens `calibration_window_layer` via `scr_open_window` (layer index 8).
   - OK: `obj_setting_ok_button` (`obj_btn_main`) — typically configured to run the settings OK handler (`scr_settings_OK`).
+
+- `calibration_window_layer` — Calibration prototype window
+  - Title: `text_calibration_title` (text "Calibration").
+  - Close: `obj_calibration_win_close_button` (`obj_btn_winClose`).
+  - Mode row: `calibration_mode_left_button`, `calibration_mode_field`, `calibration_mode_right_button` (button ID/script index 31).
+  - Audio row: `calibration_audio_left_button`, `setting_field_cal_audio`, `calibration_audio_right_button` (button ID/script index 32).
+  - Visual row: `calibration_visual_left_button`, `setting_field_cal_visual`, `calibration_visual_right_button` (button ID/script index 32).
+  - Status rows: `calibration_summary_field`, `calibration_status_field` populated by `scr_button_calibration_refresh_ui()`.
 
 - `tune_window_layer` — Tune picker window
   - Title: `fp_Title_text` (text "Tune Library").
@@ -395,7 +416,7 @@ All globals are initialized by the owning script/object at startup. **Do not cre
 | `global.EVENT_HISTORY_ENABLED` | bool | Master on/off for event logging | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.EVENT_HISTORY_AUTO_EXPORT` | bool | Auto-export CSV after playback ends | `scr_event_log` (lazy init) | `scr_event_log` |
 | `global.scoring_last_run` | struct\|undefined | Result of most recent scoring run; undefined until first run | `scr_scoring` (lazy init) | `scr_scoring`, UI display |
-| `global.timing_calibration` | struct | Two-offset calibration state: `{active, status, active_device_key, device_profiles, audio_offset_ms, visual_offset_ms, input_offset_ms (reserved), last_message, jitter_summary}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions |
+| `global.timing_calibration` | struct | Two-offset calibration state: `{active, status, active_device_key, device_profiles, audio_offset_ms, visual_offset_ms, input_offset_ms (reserved), last_message, jitter_summary, calibration_mode_index, calibration_advanced_open, calibration_preview, calibration_logs, calibration_result}` | `scr_tune_scripts` (lazy init) | `scr_tune_scripts` timing calibration functions, `scr_button_scripts` calibration UI refresh/actions |
 | `global.metronome_mode` | real | 0=None 1=Click 2=Drums | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts`, `scr_scoring` |
 | `global.metronome_pattern_selection` | real | Index into `global.metronome_pattern_options` | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |
 | `global.metronome_volume` | real | MIDI velocity 0–127 | `obj_game_controller` Create | `scr_metronome`, `scr_button_scripts` |

@@ -40,9 +40,39 @@ function timing_calibration_ensure_state() {
             visual_offset_ms: 0,
             input_offset_ms: 0,  // RESERVED: future use if true MIDI device timestamps become available
             last_message: "Timing offsets loaded.",
+            calibration_mode_index: 0,
+            calibration_advanced_open: false,
+            calibration_preview: {
+                active: false,
+                loop_active: false,
+                note: 69,
+                channel: 0,
+                velocity: 110,
+                note_off_due_ms: 0,
+                next_note_on_ms: 0,
+                last_impact_ms: 0,
+                impact_seq: 0,
+                visual_last_impact_ms: 0,
+                visual_next_impact_ms: 0,
+                visual_impact_seq: 0,
+                interval_ms: 900,
+                pulse_ms: 35
+            },
+            calibration_session: {
+                active: false,
+                commit_on_close: false,
+                snapshot_audio_ms: 0,
+                snapshot_visual_ms: 0,
+                snapshot_input_ms: 0
+            },
             calibration_logs: [],
             calibration_result: {
-                audio_output_offset_ms: 0,
+                internal_midi_offset_ms: 0,
+                external_audio_offset_ms: 5,
+                system_audio_output_offset_ms: 7,
+                system_visual_alignment_offset_ms: 0,
+                audio_output_offset_ms: 7,
+                visual_alignment_offset_ms: 0,
                 midi_internal_offset_ms: 0,
                 jitter_audio_ms: 0,
                 jitter_midi_ms: 0,
@@ -71,15 +101,75 @@ function timing_calibration_ensure_state() {
     if (!variable_struct_exists(state, "audio_offset_ms")) state.audio_offset_ms = 0;
     if (!variable_struct_exists(state, "visual_offset_ms")) state.visual_offset_ms = 0;
     if (!variable_struct_exists(state, "input_offset_ms")) state.input_offset_ms = 0;  // RESERVED
+    if (!variable_struct_exists(state, "calibration_mode_index")) state.calibration_mode_index = 0;
+    if (!variable_struct_exists(state, "calibration_advanced_open")) state.calibration_advanced_open = false;
+    if (!variable_struct_exists(state, "calibration_preview") || !is_struct(state.calibration_preview)) {
+        state.calibration_preview = {
+            active: false,
+            loop_active: false,
+            note: 69,
+            channel: 0,
+            velocity: 110,
+            note_off_due_ms: 0,
+            next_note_on_ms: 0,
+            last_impact_ms: 0,
+            impact_seq: 0,
+            visual_last_impact_ms: 0,
+            visual_next_impact_ms: 0,
+            visual_impact_seq: 0,
+            interval_ms: 900,
+            pulse_ms: 35
+        };
+    }
+    if (!variable_struct_exists(state, "calibration_session") || !is_struct(state.calibration_session)) {
+        state.calibration_session = {
+            active: false,
+            commit_on_close: false,
+            snapshot_audio_ms: 0,
+            snapshot_visual_ms: 0,
+            snapshot_input_ms: 0
+        };
+    }
+    if (!variable_struct_exists(state.calibration_preview, "loop_active")) state.calibration_preview.loop_active = false;
+    if (!variable_struct_exists(state.calibration_preview, "next_note_on_ms")) state.calibration_preview.next_note_on_ms = 0;
+    if (!variable_struct_exists(state.calibration_preview, "last_impact_ms")) state.calibration_preview.last_impact_ms = 0;
+    if (!variable_struct_exists(state.calibration_preview, "impact_seq")) state.calibration_preview.impact_seq = 0;
+    if (!variable_struct_exists(state.calibration_preview, "visual_last_impact_ms")) state.calibration_preview.visual_last_impact_ms = 0;
+    if (!variable_struct_exists(state.calibration_preview, "visual_next_impact_ms")) state.calibration_preview.visual_next_impact_ms = 0;
+    if (!variable_struct_exists(state.calibration_preview, "visual_impact_seq")) state.calibration_preview.visual_impact_seq = 0;
+    if (!variable_struct_exists(state.calibration_preview, "interval_ms")) state.calibration_preview.interval_ms = 900;
+    if (!variable_struct_exists(state.calibration_preview, "pulse_ms")) state.calibration_preview.pulse_ms = 35;
+    if (!variable_struct_exists(state.calibration_session, "active")) state.calibration_session.active = false;
+    if (!variable_struct_exists(state.calibration_session, "commit_on_close")) state.calibration_session.commit_on_close = false;
+    if (!variable_struct_exists(state.calibration_session, "snapshot_audio_ms")) state.calibration_session.snapshot_audio_ms = 0;
+    if (!variable_struct_exists(state.calibration_session, "snapshot_visual_ms")) state.calibration_session.snapshot_visual_ms = 0;
+    if (!variable_struct_exists(state.calibration_session, "snapshot_input_ms")) state.calibration_session.snapshot_input_ms = 0;
     if (!variable_struct_exists(state, "calibration_logs") || !is_array(state.calibration_logs)) state.calibration_logs = [];
     if (!variable_struct_exists(state, "calibration_result") || !is_struct(state.calibration_result)) {
         state.calibration_result = {
-            audio_output_offset_ms: 0,
+            internal_midi_offset_ms: 0,
+            external_audio_offset_ms: 5,
+            system_audio_output_offset_ms: 7,
+            system_visual_alignment_offset_ms: 0,
+            audio_output_offset_ms: 7,
+            visual_alignment_offset_ms: 0,
             midi_internal_offset_ms: 0,
             jitter_audio_ms: 0,
             jitter_midi_ms: 0,
             timestamp: 0
         };
+    } else {
+        var result = state.calibration_result;
+        if (!variable_struct_exists(result, "internal_midi_offset_ms")) result.internal_midi_offset_ms = 0;
+        if (!variable_struct_exists(result, "external_audio_offset_ms")) result.external_audio_offset_ms = 5;
+        if (!variable_struct_exists(result, "system_audio_output_offset_ms")) result.system_audio_output_offset_ms = 7;
+        if (!variable_struct_exists(result, "system_visual_alignment_offset_ms")) result.system_visual_alignment_offset_ms = 0;
+        if (!variable_struct_exists(result, "audio_output_offset_ms")) result.audio_output_offset_ms = real(result.system_audio_output_offset_ms ?? 7);
+        if (!variable_struct_exists(result, "visual_alignment_offset_ms")) result.visual_alignment_offset_ms = real(result.system_visual_alignment_offset_ms ?? 0);
+        if (!variable_struct_exists(result, "midi_internal_offset_ms")) result.midi_internal_offset_ms = 0;
+        if (!variable_struct_exists(result, "jitter_audio_ms")) result.jitter_audio_ms = 0;
+        if (!variable_struct_exists(result, "jitter_midi_ms")) result.jitter_midi_ms = 0;
+        if (!variable_struct_exists(result, "timestamp")) result.timestamp = 0;
     }
     if (!variable_struct_exists(state, "midi_loopback") || !is_struct(state.midi_loopback)) {
         state.midi_loopback = { active: false, status: "idle" };
@@ -115,20 +205,459 @@ function timing_calibration_is_active() {
     return state.active;
 }
 
+/// @function timing_calibration_get_mode_labels()
+/// @description Return the calibration mode labels used by the prototype UI.
+/// @returns Array of mode labels
+function timing_calibration_get_mode_labels() {
+    return ["Bouncing Ball", "Converging Beams"];
+}
+
+/// @function timing_calibration_begin_session()
+/// @description Capture a calibration snapshot when the calibration window is opened.
+/// @returns Bool active session
+/// @writes global.timing_calibration.calibration_session
+function timing_calibration_begin_session() {
+    var state = timing_calibration_ensure_state();
+    var session = state.calibration_session;
+    if (!bool(session.active ?? false)) {
+        var cur_offsets = timing_calibration_get_current_offsets();
+        session.snapshot_audio_ms = real(cur_offsets.audio_output_offset_ms ?? 0);
+        session.snapshot_visual_ms = real(cur_offsets.visual_alignment_offset_ms ?? 0);
+        session.snapshot_input_ms = real(cur_offsets.input_capture_offset_ms ?? 0);
+        session.active = true;
+    }
+    session.commit_on_close = false;
+    state.calibration_session = session;
+    return true;
+}
+
+/// @function timing_calibration_set_session_commit_on_close(_commit)
+/// @description Set whether closing the calibration window should commit or restore session offsets.
+/// @param _commit Bool commit on close
+/// @returns Bool commit state
+/// @writes global.timing_calibration.calibration_session.commit_on_close
+function timing_calibration_set_session_commit_on_close(_commit) {
+    var state = timing_calibration_ensure_state();
+    state.calibration_session.commit_on_close = bool(_commit);
+    return bool(state.calibration_session.commit_on_close);
+}
+
+/// @function timing_calibration_get_session_commit_on_close()
+/// @description Return the current commit-on-close flag for the calibration session.
+/// @returns Bool commit state
+function timing_calibration_get_session_commit_on_close() {
+    var state = timing_calibration_ensure_state();
+    return bool(state.calibration_session.commit_on_close ?? false);
+}
+
+/// @function timing_calibration_close_session(_commit)
+/// @description End the calibration session, restoring snapshot offsets when canceled.
+/// @param _commit Bool true to keep current values, false to restore snapshot
+/// @returns Bool success
+/// @writes global.timeline_cfg.audio_output_offset_ms, global.timeline_cfg.visual_alignment_offset_ms, global.timing_calibration.calibration_session
+function timing_calibration_close_session(_commit) {
+    var state = timing_calibration_ensure_state();
+    var session = state.calibration_session;
+    var commit = bool(_commit);
+
+    // Always stop any running preview loop when leaving the calibration window.
+    var preview = state.calibration_preview;
+    if (is_struct(preview) && bool(preview.active ?? false)) {
+        var output_count = midi_output_device_count();
+        var output_idx = variable_global_exists("midi_output_device") ? floor(real(global.midi_output_device)) : 0;
+        if (output_count > 0) {
+            output_idx = clamp(output_idx, 0, output_count - 1);
+            midi_output_message_send_short(output_idx, 128 + floor(real(preview.channel ?? 0)), floor(real(preview.note ?? 69)), 0);
+        }
+    }
+    preview.active = false;
+    preview.loop_active = false;
+    preview.note_off_due_ms = 0;
+    preview.next_note_on_ms = 0;
+    state.calibration_preview = preview;
+
+    if (bool(session.active ?? false) && !commit) {
+        timing_calibration_apply_offsets(
+            real(session.snapshot_audio_ms ?? 0),
+            real(session.snapshot_visual_ms ?? 0),
+            "session-cancel"
+        );
+        var cfg = gv_ensure_timeline_cfg_defaults();
+        variable_struct_set(cfg, "input_capture_offset_ms", real(session.snapshot_input_ms ?? 0));
+        state.last_message = "Calibration canceled. Previous offsets restored.";
+    }
+
+    session.active = false;
+    session.commit_on_close = false;
+    state.calibration_session = session;
+    return true;
+}
+
+/// @function timing_calibration_get_mode_label(_mode_index)
+/// @description Return a safe calibration mode label for the given index.
+/// @param _mode_index Requested mode index
+/// @returns Mode label string
+function timing_calibration_get_mode_label(_mode_index = 0) {
+    var labels = timing_calibration_get_mode_labels();
+    if (array_length(labels) <= 0) return "Calibration";
+    var idx = floor(real(_mode_index));
+    idx = (idx mod array_length(labels) + array_length(labels)) mod array_length(labels);
+    return string(labels[idx]);
+}
+
+/// @function timing_calibration_get_current_mode_index()
+/// @description Return the current prototype calibration mode index.
+/// @returns Integer mode index
+function timing_calibration_get_current_mode_index() {
+    var state = timing_calibration_ensure_state();
+    return max(0, floor(real(state.calibration_mode_index ?? 0)));
+}
+
+/// @function timing_calibration_set_mode_index(_delta)
+/// @description Cycle the calibration mode index by a signed step.
+/// @param _delta Signed integer step
+/// @returns Integer new mode index
+/// @writes global.timing_calibration.calibration_mode_index, global.timing_calibration.last_message
+function timing_calibration_set_mode_index(_delta) {
+    var state = timing_calibration_ensure_state();
+    var labels = timing_calibration_get_mode_labels();
+    var count = array_length(labels);
+    if (count <= 0) return 0;
+
+    var delta = floor(real(_delta ?? 0));
+    var cur = floor(real(state.calibration_mode_index ?? 0));
+    var next = (cur + delta) mod count;
+    if (next < 0) next += count;
+    state.calibration_mode_index = next;
+    state.last_message = "Calibration mode: " + timing_calibration_get_mode_label(next);
+    return next;
+}
+
+/// @function timing_calibration_toggle_advanced_panel()
+/// @description Toggle the prototype calibration advanced panel open/closed state.
+/// @returns Bool new state
+/// @writes global.timing_calibration.calibration_advanced_open, global.timing_calibration.last_message
+function timing_calibration_toggle_advanced_panel() {
+    var state = timing_calibration_ensure_state();
+    state.calibration_advanced_open = !bool(state.calibration_advanced_open ?? false);
+    state.last_message = state.calibration_advanced_open
+        ? "Advanced calibration details shown."
+        : "Advanced calibration details hidden.";
+    return bool(state.calibration_advanced_open);
+}
+
+/// @function timing_calibration_reset_to_system_defaults()
+/// @description Restore the current audio/visual offsets to the measured system defaults.
+/// @returns Struct applied offsets
+/// @writes global.timeline_cfg.audio_output_offset_ms, global.timeline_cfg.visual_alignment_offset_ms
+function timing_calibration_reset_to_system_defaults() {
+    var state = timing_calibration_ensure_state();
+    var audio_ms = real(state.calibration_result.system_audio_output_offset_ms ?? 7);
+    var visual_ms = real(state.calibration_result.system_visual_alignment_offset_ms ?? 0);
+    timing_calibration_apply_offsets(audio_ms, visual_ms, "system-defaults");
+    state.last_message = "System defaults restored (audio " + string_format(audio_ms, 0, 2) + " ms, visual " + string_format(visual_ms, 0, 2) + " ms).";
+    timing_calibration_store_current_device_profile();
+    if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+        scoring_player_settings_save_for_player();
+    }
+    return timing_calibration_get_current_offsets();
+}
+
+/// @function timing_calibration_save_current_profile()
+/// @description Persist the current offsets to the active device profile and player settings.
+/// @returns Bool success
+/// @writes global.timing_calibration.device_profiles
+function timing_calibration_save_current_profile() {
+    var state = timing_calibration_ensure_state();
+    timing_calibration_store_current_device_profile();
+    if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+        scoring_player_settings_save_for_player();
+    }
+    state.last_message = "Calibration profile saved for current device.";
+    return true;
+}
+
+/// @function timing_calibration_start_preview_click()
+/// @description Toggle a continuous preview click loop for the current calibration mode.
+/// @returns Bool true when loop is running, false when stopped or unavailable
+/// @writes global.timing_calibration.calibration_preview
+function timing_calibration_start_preview_click() {
+    var state = timing_calibration_ensure_state();
+    var preview = state.calibration_preview;
+    if (!is_struct(preview)) {
+        preview = { active: false, loop_active: false, note: 69, channel: 0, velocity: 110, note_off_due_ms: 0, next_note_on_ms: 0, last_impact_ms: 0, impact_seq: 0, visual_last_impact_ms: 0, visual_next_impact_ms: 0, visual_impact_seq: 0, interval_ms: 900, pulse_ms: 35 };
+    }
+
+    var output_count = midi_output_device_count();
+    if (output_count <= 0) {
+        state.last_message = "Preview unavailable: no MIDI output devices found.";
+        preview.active = false;
+        preview.loop_active = false;
+        preview.note_off_due_ms = 0;
+        preview.next_note_on_ms = 0;
+        preview.last_impact_ms = 0;
+        preview.impact_seq = 0;
+        preview.visual_last_impact_ms = 0;
+        preview.visual_next_impact_ms = 0;
+        preview.visual_impact_seq = 0;
+        state.calibration_preview = preview;
+        return false;
+    }
+
+    var output_idx = variable_global_exists("midi_output_device") ? floor(real(global.midi_output_device)) : 0;
+    output_idx = clamp(output_idx, 0, output_count - 1);
+    global.midi_output_device = output_idx;
+    global.midi_output_device_name = midi_output_device_name(output_idx);
+    midi_output_device_open(output_idx);
+    // Try to clear lingering notes on common preview channels before (re)starting.
+    midi_output_message_send_short(output_idx, 176 + 0, 123, 0);
+    midi_output_message_send_short(output_idx, 176 + 9, 123, 0);
+
+    if (bool(preview.loop_active ?? false)) {
+        // Stop loop and ensure no note remains active.
+        if (bool(preview.active ?? false)) {
+            midi_output_message_send_short(output_idx, 128 + floor(real(preview.channel ?? 0)), floor(real(preview.note ?? 69)), 0);
+        }
+        preview.active = false;
+        preview.loop_active = false;
+        preview.note_off_due_ms = 0;
+        preview.next_note_on_ms = 0;
+        preview.last_impact_ms = 0;
+        preview.impact_seq = 0;
+        preview.visual_last_impact_ms = 0;
+        preview.visual_next_impact_ms = 0;
+        preview.visual_impact_seq = 0;
+        state.calibration_preview = preview;
+        state.last_message = "Calibration test stopped.";
+        scoring_calibration_debug_log("[PREVIEW] stopped out='" + string(global.midi_output_device_name) + "'");
+        return false;
+    }
+
+    var mode_idx = timing_calibration_get_current_mode_index();
+    var canonical_note = (mode_idx == 0) ? "e" : "a";
+    var mapped_note = chanter_canonical_to_midi(canonical_note, global.MIDI_chanter ?? "default");
+    var note = is_undefined(mapped_note) ? ((mode_idx == 0) ? 64 : 69) : floor(real(mapped_note));
+    preview.active = false;
+    preview.loop_active = true;
+    preview.note = floor(real(note));
+    preview.channel = 0;
+    preview.velocity = 110;
+    preview.interval_ms = max(350, real(preview.interval_ms ?? 900));
+    preview.pulse_ms = clamp(real(preview.pulse_ms ?? 35), 15, preview.interval_ms - 60);
+    var offsets = timing_calibration_get_current_offsets();
+    var audio_sched_offset_ms = real(offsets.audio_output_offset_ms ?? 0);
+    var now_engine_ms = timing_get_engine_now_ms();
+    var now_audio_ms = now_engine_ms + audio_sched_offset_ms;
+    preview.note_off_due_ms = 0;
+    preview.next_note_on_ms = now_audio_ms;
+    preview.last_impact_ms = now_audio_ms;
+    preview.impact_seq = 0;
+    preview.visual_last_impact_ms = now_engine_ms;
+    preview.visual_next_impact_ms = now_engine_ms;
+    preview.visual_impact_seq = 0;
+
+    scoring_calibration_debug_log("[PREVIEW] start mode='" + timing_calibration_get_mode_label(mode_idx) + "' note=" + string(preview.note)
+        + " out='" + string(global.midi_output_device_name) + "' audio_offset_ms=" + string_format(audio_sched_offset_ms, 0, 2));
+    state.calibration_preview = preview;
+    state.last_message = "Calibration test running in " + timing_calibration_get_mode_label(mode_idx) + " mode on " + string(global.midi_output_device_name) + ".";
+    return true;
+}
+
+/// @function timing_calibration_step_preview_click()
+/// @description Tick the continuous preview loop and send note-on/off events at the loop cadence.
+/// @returns Bool true while preview loop or note gate is active
+function timing_calibration_step_preview_click() {
+    var state = timing_calibration_ensure_state();
+    var preview = state.calibration_preview;
+    if (!is_struct(preview)) return false;
+    if (!bool(preview.loop_active ?? false) && !bool(preview.active ?? false)) return false;
+
+    var output_count = midi_output_device_count();
+    if (output_count <= 0) {
+        preview.active = false;
+        preview.loop_active = false;
+        preview.note_off_due_ms = 0;
+        preview.next_note_on_ms = 0;
+        preview.last_impact_ms = 0;
+        preview.impact_seq = 0;
+        preview.visual_last_impact_ms = 0;
+        preview.visual_next_impact_ms = 0;
+        preview.visual_impact_seq = 0;
+        state.calibration_preview = preview;
+        return false;
+    }
+
+    var output_idx = variable_global_exists("midi_output_device") ? floor(real(global.midi_output_device)) : 0;
+    output_idx = clamp(output_idx, 0, output_count - 1);
+
+    var offsets = timing_calibration_get_current_offsets();
+    var audio_sched_offset_ms = real(offsets.audio_output_offset_ms ?? 0);
+    var now_engine_ms = timing_get_engine_now_ms();
+    var now_audio_ms = now_engine_ms + audio_sched_offset_ms;
+
+    if (bool(preview.loop_active ?? false) && now_engine_ms >= real(preview.visual_next_impact_ms ?? 0)) {
+        preview.visual_last_impact_ms = now_engine_ms;
+        preview.visual_impact_seq = floor(real(preview.visual_impact_seq ?? 0)) + 1;
+        preview.visual_next_impact_ms = now_engine_ms + real(preview.interval_ms ?? 900);
+    }
+
+    if (bool(preview.active ?? false) && now_audio_ms >= real(preview.note_off_due_ms ?? 0)) {
+        midi_output_message_send_short(output_idx, 128 + floor(real(preview.channel ?? 0)), floor(real(preview.note ?? 69)), 0);
+        midi_output_message_send_short(output_idx, 176 + floor(real(preview.channel ?? 0)), 120, 0);
+        midi_output_message_send_short(output_idx, 176 + floor(real(preview.channel ?? 0)), 123, 0);
+        preview.active = false;
+        preview.note_off_due_ms = 0;
+    }
+
+    if (bool(preview.loop_active ?? false) && now_audio_ms >= real(preview.next_note_on_ms ?? 0) && !bool(preview.active ?? false)) {
+        var mode_idx = timing_calibration_get_current_mode_index();
+        var canonical_note = (mode_idx == 0) ? "e" : "a";
+        var mapped_note = chanter_canonical_to_midi(canonical_note, global.MIDI_chanter ?? "default");
+        preview.note = is_undefined(mapped_note) ? ((mode_idx == 0) ? 64 : 69) : floor(real(mapped_note));
+        // Pre-clear voice so each impact pulse starts from silence.
+        midi_output_message_send_short(output_idx, 128 + floor(real(preview.channel ?? 0)), floor(real(preview.note ?? 69)), 0);
+        midi_output_message_send_short(output_idx, 176 + floor(real(preview.channel ?? 0)), 120, 0);
+        midi_output_message_send_short(output_idx, 144 + floor(real(preview.channel ?? 0)), floor(real(preview.note ?? 69)), floor(real(preview.velocity ?? 110)));
+        preview.active = true;
+        preview.last_impact_ms = now_audio_ms;
+        preview.impact_seq = floor(real(preview.impact_seq ?? 0)) + 1;
+        preview.note_off_due_ms = now_audio_ms + real(preview.pulse_ms ?? 35);
+        preview.next_note_on_ms = now_audio_ms + real(preview.interval_ms ?? 900);
+    }
+
+    state.calibration_preview = preview;
+    return bool(preview.loop_active ?? false) || bool(preview.active ?? false);
+}
+
+/// @function timing_calibration_draw_preview_canvas(_x1, _y1, _x2, _y2)
+/// @description Draw calibration preview visuals locked to the same impact schedule used by preview audio pulses.
+/// @param {real} _x1 Left canvas coordinate
+/// @param {real} _y1 Top canvas coordinate
+/// @param {real} _x2 Right canvas coordinate
+/// @param {real} _y2 Bottom canvas coordinate
+/// @returns {bool} True when calibration preview visuals were drawn
+/// @reads global.timing_calibration.calibration_preview, global.timeline_cfg.audio_output_offset_ms
+/// @callers obj_field_base Draw
+function timing_calibration_draw_preview_canvas(_x1, _y1, _x2, _y2) {
+    var x1 = real(_x1);
+    var y1 = real(_y1);
+    var x2 = real(_x2);
+    var y2 = real(_y2);
+
+    var state = timing_calibration_ensure_state();
+    var preview = state.calibration_preview;
+    var mode_idx = timing_calibration_get_current_mode_index();
+    var running = is_struct(preview) && bool(preview.loop_active ?? false);
+
+    draw_set_alpha(1);
+    draw_set_color(make_color_rgb(30, 34, 42));
+    draw_rectangle(x1, y1, x2, y2, false);
+
+    var pad = 14;
+    var ix1 = x1 + pad;
+    var iy1 = y1 + pad;
+    var ix2 = x2 - pad;
+    var iy2 = y2 - pad;
+    if (ix2 <= ix1 + 4 || iy2 <= iy1 + 4) return true;
+
+    draw_set_color(make_color_rgb(58, 66, 80));
+    draw_rectangle(ix1, iy1, ix2, iy2, true);
+
+    var now_engine_ms = timing_get_engine_now_ms();
+    var interval_ms = running ? max(1, real(preview.interval_ms ?? 900)) : 900;
+    var last_impact_ms = running ? real(preview.visual_last_impact_ms ?? now_engine_ms) : now_engine_ms;
+    var phase = clamp((now_engine_ms - last_impact_ms) / interval_ms, 0, 1);
+    var impact_age_ms = now_engine_ms - last_impact_ms;
+
+    if (mode_idx == 0) {
+        var track_y = (iy1 + iy2) * 0.5;
+        var rail_left = ix1 + 8;
+        var rail_right = ix2 - 8;
+
+        draw_set_alpha(0.9);
+        draw_set_color(make_color_rgb(198, 206, 220));
+        draw_line_width(rail_left, track_y, rail_right, track_y, 3);
+
+        draw_set_alpha(0.5);
+        draw_set_color(make_color_rgb(244, 111, 91));
+        draw_line_width(rail_left, track_y - 10, rail_left, track_y + 10, 2);
+        draw_line_width(rail_right, track_y - 10, rail_right, track_y + 10, 2);
+
+        var seq = running ? floor(real(preview.visual_impact_seq ?? 0)) : 0;
+        var left_to_right = ((seq mod 2) == 1);
+        var ball_x = left_to_right
+            ? lerp(rail_left, rail_right, phase)
+            : lerp(rail_right, rail_left, phase);
+        var ball_r = 10;
+
+        if (impact_age_ms <= 85) {
+            var flash = 1 - (impact_age_ms / 85);
+            draw_set_alpha(0.35 * flash);
+            draw_set_color(make_color_rgb(255, 235, 140));
+            var wall_x = left_to_right ? rail_left : rail_right;
+            draw_circle(wall_x, track_y, 18 + flash * 14, false);
+        }
+
+        draw_set_alpha(1);
+        draw_set_color(make_color_rgb(243, 197, 91));
+        draw_circle(ball_x, track_y, ball_r, false);
+    } else {
+        var mid_x = (ix1 + ix2) * 0.5;
+        var beam_y1 = iy1 + 12;
+        var beam_y2 = iy2 - 12;
+        var left_x = lerp(ix1 + 6, mid_x, phase);
+        var right_x = lerp(ix2 - 6, mid_x, phase);
+        draw_set_alpha(0.8);
+        draw_set_color(make_color_rgb(117, 190, 218));
+        draw_line_width(left_x, beam_y1, left_x, beam_y2, 4);
+        draw_line_width(right_x, beam_y1, right_x, beam_y2, 4);
+        // Keep center line width fixed; amplify impact readability via color + vertical pulse only.
+        var center_pulse = 0;
+        if (impact_age_ms <= 140) {
+            center_pulse = 1 - (impact_age_ms / 140);
+        }
+        var center_y_pad = 2 + (12 * center_pulse);
+        var center_y1 = max(iy1 + 2, beam_y1 - center_y_pad);
+        var center_y2 = min(iy2 - 2, beam_y2 + center_y_pad);
+
+        var base_r = 255;
+        var base_g = 235;
+        var base_b = 140;
+        var hit_r = 255;
+        var hit_g = 110;
+        var hit_b = 90;
+        var center_r = floor(lerp(base_r, hit_r, center_pulse));
+        var center_g = floor(lerp(base_g, hit_g, center_pulse));
+        var center_b = floor(lerp(base_b, hit_b, center_pulse));
+
+        draw_set_alpha(0.4 + (0.45 * center_pulse));
+        draw_set_color(make_color_rgb(center_r, center_g, center_b));
+        draw_line_width(mid_x, center_y1, mid_x, center_y2, 2);
+    }
+
+    draw_set_alpha(1);
+    draw_set_color(c_white);
+
+    return true;
+}
+
 /// @function timing_calibration_get_current_offsets()
 /// @description Return current split offsets (audio and visual) from global.timeline_cfg.
-/// @returns Struct {audio_output_offset_ms, visual_alignment_offset_ms}
+/// @returns Struct {audio_output_offset_ms, visual_alignment_offset_ms, input_capture_offset_ms}
 /// @reads global.timeline_cfg (via gv_ensure_timeline_cfg_defaults)
 function timing_calibration_get_current_offsets() {
     var cfg = gv_ensure_timeline_cfg_defaults();
     var audio_offset_ms = 0;
     var visual_offset_ms = 0;
+    var input_offset_ms = 0;
     if (variable_struct_exists(cfg, "audio_output_offset_ms")) audio_offset_ms = real(variable_struct_get(cfg, "audio_output_offset_ms"));
     if (variable_struct_exists(cfg, "visual_alignment_offset_ms")) visual_offset_ms = real(variable_struct_get(cfg, "visual_alignment_offset_ms"));
+    if (variable_struct_exists(cfg, "input_capture_offset_ms")) input_offset_ms = real(variable_struct_get(cfg, "input_capture_offset_ms"));
 
     return {
         audio_output_offset_ms: audio_offset_ms,
-        visual_alignment_offset_ms: visual_offset_ms
+        visual_alignment_offset_ms: visual_offset_ms,
+        input_capture_offset_ms: input_offset_ms
     };
 }
 
@@ -144,7 +673,7 @@ function timing_calibration_get_device_key() {
 }
 
 /// @function timing_calibration_store_current_device_profile()
-/// @description Persist current split offsets (audio/visual) to the active device profile.
+/// @description Persist current split offsets (audio/visual/input) to the active device profile.
 /// @returns Struct profile stored for current device
 /// @reads global.timeline_cfg (via timing_calibration_get_current_offsets)
 /// @writes global.timing_calibration.device_profiles, global.timing_calibration.active_device_key
@@ -153,12 +682,13 @@ function timing_calibration_store_current_device_profile() {
     var device_key = timing_calibration_get_device_key();
     var offsets = timing_calibration_get_current_offsets();
     
-    scoring_calibration_debug_log("[STORE_PROFILE] device_key='" + device_key + "' | audio_ms=" + string(offsets.audio_output_offset_ms ?? 0) + " | visual_ms=" + string(offsets.visual_alignment_offset_ms ?? 0));
+    scoring_calibration_debug_log("[STORE_PROFILE] device_key='" + device_key + "' | audio_ms=" + string(offsets.audio_output_offset_ms ?? 0) + " | visual_ms=" + string(offsets.visual_alignment_offset_ms ?? 0) + " | input_ms=" + string(offsets.input_capture_offset_ms ?? 0));
 
     state.active_device_key = device_key;
     state.device_profiles[$ device_key] = {
         audio_output_offset_ms: real(offsets.audio_output_offset_ms ?? 0),
-        visual_alignment_offset_ms: real(offsets.visual_alignment_offset_ms ?? 0)
+        visual_alignment_offset_ms: real(offsets.visual_alignment_offset_ms ?? 0),
+        input_capture_offset_ms: real(offsets.input_capture_offset_ms ?? 0)
     };
 
     return state.device_profiles[$ device_key];
@@ -192,11 +722,12 @@ function timing_calibration_apply_profile_for_current_device() {
         return false;
     }
     
-    scoring_calibration_debug_log("[APPLY_PROFILE] SUCCESS! Applying audio_ms=" + string(prof.audio_output_offset_ms ?? 0) + " | visual_ms=" + string(prof.visual_alignment_offset_ms ?? 0));
+    scoring_calibration_debug_log("[APPLY_PROFILE] SUCCESS! Applying audio_ms=" + string(prof.audio_output_offset_ms ?? 0) + " | visual_ms=" + string(prof.visual_alignment_offset_ms ?? 0) + " | input_ms=" + string(prof.input_capture_offset_ms ?? 0));
     timing_calibration_apply_offsets(
         real(prof.audio_output_offset_ms ?? 0),
         real(prof.visual_alignment_offset_ms ?? 0),
-        "profile-load"
+        "profile-load",
+        real(prof.input_capture_offset_ms ?? 0)
     );
     return true;
 }
@@ -236,6 +767,17 @@ function timing_calibration_hydrate_from_settings(_settings) {
     }
     if (variable_struct_exists(tc, "device_profiles") && is_struct(tc[$ "device_profiles"])) {
         state.device_profiles = tc[$ "device_profiles"];
+        var _profile_keys = struct_get_names(state.device_profiles);
+        for (var _pi = 0; _pi < array_length(_profile_keys); _pi++) {
+            var _pk = string(_profile_keys[_pi]);
+            if (!variable_struct_exists(state.device_profiles, _pk)) continue;
+            var _prof = state.device_profiles[$ _pk];
+            if (!is_struct(_prof)) continue;
+            if (!variable_struct_exists(_prof, "audio_output_offset_ms")) _prof.audio_output_offset_ms = 0;
+            if (!variable_struct_exists(_prof, "visual_alignment_offset_ms")) _prof.visual_alignment_offset_ms = 0;
+            if (!variable_struct_exists(_prof, "input_capture_offset_ms")) _prof.input_capture_offset_ms = 0;
+            state.device_profiles[$ _pk] = _prof;
+        }
         var dp_keys = struct_get_names(tc[$ "device_profiles"]);
         scoring_calibration_debug_log("[HYDRATE] Loaded device_profiles with " + string(array_length(dp_keys)) + " keys");
     }
@@ -757,11 +1299,12 @@ function apply_calibration_offset(_subsystem, _raw_timestamp_ms) {
         if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
             offset_ms = real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"));
         }
-    } else if (sub == "midi_in" || sub == "midi_out") {
-        var state = timing_calibration_ensure_state();
-        if (is_struct(state.calibration_result)) {
-            offset_ms = real(state.calibration_result.midi_internal_offset_ms ?? 0);
+    } else if (sub == "midi_in") {
+        if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) {
+            offset_ms = real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"));
         }
+    } else if (sub == "midi_out") {
+        offset_ms = 0;
     }
 
     return t + offset_ms;
@@ -2634,22 +3177,29 @@ function tune_cleanup_after_finish() {
 /// @param _audio_ms Audio output scheduling offset in ms
 /// @param _visual_ms Visual alignment offset in ms
 /// @param _source_label Optional text label for diagnostics
-/// @returns Struct { audio_output_offset_ms, visual_alignment_offset_ms }
-/// @writes global.timeline_cfg.audio_output_offset_ms, global.timeline_cfg.visual_alignment_offset_ms
-function timing_calibration_apply_offsets(_audio_ms, _visual_ms, _source_label = "manual") {
+/// @param [_input_ms] Optional input capture offset in ms; omitted preserves current value
+/// @returns Struct { audio_output_offset_ms, visual_alignment_offset_ms, input_capture_offset_ms }
+/// @writes global.timeline_cfg.audio_output_offset_ms, global.timeline_cfg.visual_alignment_offset_ms, global.timeline_cfg.input_capture_offset_ms
+function timing_calibration_apply_offsets(_audio_ms, _visual_ms, _source_label = "manual", _input_ms = undefined) {
     var cfg = gv_ensure_timeline_cfg_defaults();
     var audio_ms = real(_audio_ms ?? 0);
     var visual_ms = real(_visual_ms ?? 0);
+    var input_ms = is_undefined(_input_ms)
+        ? (variable_struct_exists(cfg, "input_capture_offset_ms") ? real(variable_struct_get(cfg, "input_capture_offset_ms")) : 0)
+        : real(_input_ms);
 
     variable_struct_set(cfg, "audio_output_offset_ms", audio_ms);
     variable_struct_set(cfg, "visual_alignment_offset_ms", visual_ms);
+    variable_struct_set(cfg, "input_capture_offset_ms", input_ms);
 
     show_debug_message("[CALIBRATION] offsets applied source=" + string(_source_label)
         + " audio=" + string_format(audio_ms, 0, 2)
-        + " visual=" + string_format(visual_ms, 0, 2));
+        + " visual=" + string_format(visual_ms, 0, 2)
+        + " input=" + string_format(input_ms, 0, 2));
 
     return {
         audio_output_offset_ms: audio_ms,
-        visual_alignment_offset_ms: visual_ms
+        visual_alignment_offset_ms: visual_ms,
+        input_capture_offset_ms: input_ms
     };
 }

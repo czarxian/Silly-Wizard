@@ -49,13 +49,17 @@
 			case 28: scr_player_clear_guest_history(); break;
 			case 29: scr_toggle_loop_score_overview(ctx); break;
 			case 30: scr_settings_logs_toggle(ctx); break;
-			case 31: scr_script_not_set(ctx); break;
+			case 31: scr_calibration_mode_change(ctx); break;
 			case 32: scr_calibration_offset_change(ctx); break;
-			case 33: scr_script_not_set(ctx); break;
-			case 34: scr_script_not_set(ctx); break;
-			case 35: scr_script_not_set(ctx); break;
-			case 36: scr_script_not_set(ctx); break;
+			case 33: scr_calibration_test_preview(ctx); break;
+			case 34: scr_calibration_reset_defaults(ctx); break;
+			case 35: scr_calibration_save_profile(ctx); break;
+			case 36: scr_calibration_toggle_advanced(ctx); break;
 			case 37: scr_calibration_apply_profile(ctx); break;
+			// Compatibility aliases for calibration controls if RoomUI script indices drift.
+			case 78: scr_calibration_test_preview(ctx); break;
+			case 92: scr_calibration_mode_change(ctx); break;
+			case 93: scr_calibration_mode_change(ctx); break;
 			default: show_debug_message("Unknown button script index: " + string(button_ID)); scr_script_not_set(ctx); break;
 		}
 	}
@@ -163,8 +167,12 @@
 		var offset_min = -300;
 		var offset_max = 300;
 		var specs = [
+			{ ui_name: "calibration_mode_field", key: "mode" },
 			{ ui_name: "setting_field_cal_audio", key: "audio_output_offset_ms" },
-			{ ui_name: "setting_field_cal_visual", key: "visual_alignment_offset_ms" }
+			{ ui_name: "setting_field_cal_visual", key: "visual_alignment_offset_ms" },
+			{ ui_name: "setting_field_cal_input", key: "input_capture_offset_ms" },
+			{ ui_name: "calibration_summary_field", key: "summary" },
+			{ ui_name: "calibration_status_field", key: "status" }
 		];
 
 		for (var i = 0; i < array_length(specs); i++) {
@@ -172,18 +180,46 @@
 			var field_inst = scr_button_find_field_by_ui_name(spec.ui_name);
 			if (!instance_exists(field_inst)) continue;
 
-			var current_ms = variable_struct_exists(offsets, spec.key)
-				? real(variable_struct_get(offsets, spec.key))
-				: 0;
-			scr_button_field_set(field_inst, "field_min_value", offset_min);
-			scr_button_field_set(field_inst, "field_max_value", offset_max);
-			scr_button_field_set(field_inst, "field_value", current_ms);
-			scr_button_field_set(field_inst, "field_contents", string_format(current_ms, 0, 1) + " ms");
+			if (spec.key == "mode") {
+				var mode_idx = timing_calibration_get_current_mode_index();
+				var mode_labels = timing_calibration_get_mode_labels();
+				scr_button_field_set(field_inst, "field_min_value", 0);
+				scr_button_field_set(field_inst, "field_max_value", max(0, array_length(mode_labels) - 1));
+				scr_button_field_set(field_inst, "field_value", mode_idx);
+				scr_button_field_set(field_inst, "field_contents", timing_calibration_get_mode_label(mode_idx));
+			} else if (spec.key == "summary") {
+				scr_button_field_set(field_inst, "field_min_value", 0);
+				scr_button_field_set(field_inst, "field_max_value", 1);
+				scr_button_field_set(field_inst, "field_value", 0);
+				scr_button_field_set(field_inst, "field_contents", "");
+			} else if (spec.key == "input_capture_offset_ms") {
+				var input_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms"))
+					? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+					: 0;
+				scr_button_field_set(field_inst, "field_min_value", offset_min);
+				scr_button_field_set(field_inst, "field_max_value", offset_max);
+				scr_button_field_set(field_inst, "field_value", input_ms);
+				scr_button_field_set(field_inst, "field_contents", string_format(input_ms, 0, 1) + " ms (usually keep 0)");
+			} else if (spec.key == "status") {
+				var state_status = timing_calibration_ensure_state();
+				scr_button_field_set(field_inst, "field_min_value", 0);
+				scr_button_field_set(field_inst, "field_max_value", 1);
+				scr_button_field_set(field_inst, "field_value", 0);
+				scr_button_field_set(field_inst, "field_contents", string(state_status.last_message ?? "Ready"));
+			} else {
+				var current_ms = variable_struct_exists(offsets, spec.key)
+					? real(variable_struct_get(offsets, spec.key))
+					: 0;
+				scr_button_field_set(field_inst, "field_min_value", offset_min);
+				scr_button_field_set(field_inst, "field_max_value", offset_max);
+				scr_button_field_set(field_inst, "field_value", current_ms);
+				scr_button_field_set(field_inst, "field_contents", string_format(current_ms, 0, 1) + " ms");
+			}
 		}
 	}
 
 	/// @function scr_button_calibration_apply_offset_delta(_field_ui_name, _delta_ms)
-	/// @description Apply a manual ms delta to audio or visual calibration offset domain.
+	/// @description Apply a manual ms delta to audio, visual, or MIDI input calibration offset domain.
 	/// @param _field_ui_name Calibration field ui_name
 	/// @param _delta_ms Signed milliseconds to apply
 	/// @returns {bool} True when a known offset field was updated
@@ -201,16 +237,20 @@
 		var offsets = timing_calibration_get_current_offsets();
 		var audio_ms = real(offsets.audio_output_offset_ms ?? 0);
 		var visual_ms = real(offsets.visual_alignment_offset_ms ?? 0);
+		var input_ms = real(offsets.input_capture_offset_ms ?? 0);
 
 		if (ui_name == "setting_field_cal_audio") {
 			audio_ms += delta;
 		} else if (ui_name == "setting_field_cal_visual") {
 			visual_ms += delta;
+		} else if (ui_name == "setting_field_cal_input") {
+			input_ms += delta;
 		} else {
 			return false;
 		}
 
 		timing_calibration_apply_offsets(audio_ms, visual_ms, "settings-manual");
+		variable_struct_set(gv_ensure_timeline_cfg_defaults(), "input_capture_offset_ms", input_ms);
 		var state = timing_calibration_ensure_state();
 		state.last_message = "Manual calibration nudge applied.";
 		if (script_exists(asset_get_index("timing_calibration_store_current_device_profile"))) {
@@ -1056,6 +1096,9 @@
 		var ctx = scr_button_get_ctx(_ctx);
 		var ui_name = string(scr_button_inst_get(ctx, "ui_name", "button"));
 		if (ui_name == "tune_library_canvas_anchor") return;
+		if (ui_name == "setting_field_cal_input") return;
+		if (ui_name == "calibration_status_field") return;
+		if (ui_name == "calibration_summary_field") return;
 		show_debug_message(ui_name + ": No button action set");
 		
 		// Assume arr is your 2D array
@@ -1451,6 +1494,18 @@
 			scr_button_calibration_refresh_ui();
 		}
 
+		if (layer_name == "calibration_window_layer") {
+			if (new_visibility) {
+				if (script_exists(asset_get_index("timing_calibration_apply_profile_for_current_device"))) {
+					timing_calibration_apply_profile_for_current_device();
+				}
+				timing_calibration_begin_session();
+			} else {
+				timing_calibration_close_session(timing_calibration_get_session_commit_on_close());
+			}
+			scr_button_calibration_refresh_ui();
+		}
+
     // Refresh and update fields for the target window
 		scr_ui_refresh(layer_num);
 		scr_update_fields(layer_num);
@@ -1649,7 +1704,7 @@
 		show_debug_message("[SETTINGS] Logs " + (logs_enabled ? "ON" : "OFF"));
 	}
 
-	//CASE 32 - Manual calibration offset nudge (+/- 5ms) for audio/visual/input/score fields
+	//CASE 32 - Manual calibration offset nudge (+/- 1ms) for audio/visual fields
 	/// @function scr_calibration_offset_change(_ctx)
 	/// @description Adjust one calibration offset domain by fixed-step milliseconds.
 	/// @callers scr_handle_button_click (button 32)
@@ -1661,28 +1716,90 @@
 		if (!instance_exists(field)) return;
 
 		var ui_name = string(scr_button_inst_get(field, "ui_name", ""));
-		var delta = real(scr_button_inst_get(ctx, "button_click_value", 0)) * 5;
+		var delta = real(scr_button_inst_get(ctx, "button_click_value", 0));
 		if (scr_button_calibration_apply_offset_delta(ui_name, delta)) {
 			scr_button_calibration_refresh_ui();
 		}
 	}
 
-	//CASE 37 - Apply saved profile for current MIDI device pairing
-	/// @function scr_calibration_apply_profile(_ctx)
-	/// @description Apply persisted calibration profile for current MIDI in/out + chanter signature.
-	/// @callers scr_handle_button_click (button 37)
-	function scr_calibration_apply_profile(_ctx = noone) {
+	//CASE 31 - Calibration mode selector
+	/// @function scr_calibration_mode_change(_ctx)
+	/// @description Cycle the calibration calibration mode between bouncing ball and converging beams.
+	/// @callers scr_handle_button_click (button 31)
+	function scr_calibration_mode_change(_ctx = noone) {
+		var ctx = scr_button_get_ctx(_ctx);
+		if (ctx == noone) return;
+
+		var delta = real(scr_button_inst_get(ctx, "button_click_value", 0));
+		timing_calibration_set_mode_index(delta);
+		scr_button_calibration_refresh_ui();
+	}
+
+	//CASE 33 - Start/stop continuous calibration test loop
+	/// @function scr_calibration_test_preview(_ctx)
+	/// @description Toggle the continuous preview loop for the current calibration mode.
+	/// @callers scr_handle_button_click (button 33)
+	function scr_calibration_test_preview(_ctx = noone) {
 		var state = timing_calibration_ensure_state();
-		var ok = timing_calibration_apply_profile_for_current_device();
-		if (ok) {
-			state.last_message = "Loaded saved calibration profile for current device.";
-			if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
-				scoring_player_settings_save_for_player();
-			}
+		var running = timing_calibration_start_preview_click();
+		if (running) {
+			var offsets = timing_calibration_get_current_offsets();
+			var audio_ms = real(offsets.audio_output_offset_ms ?? 0);
+			var visual_ms = real(offsets.visual_alignment_offset_ms ?? 0);
+			var input_ms = real(offsets.input_capture_offset_ms ?? 0);
+			state.last_message = "Calibration test running in " + timing_calibration_get_mode_label(timing_calibration_get_current_mode_index())
+				+ " (audio " + string_format(audio_ms, 0, 1)
+				+ " ms, visual " + string_format(visual_ms, 0, 1)
+				+ " ms, MIDI In " + string_format(input_ms, 0, 1) + " ms).";
 		} else {
-			state.last_message = "No saved calibration profile for current device.";
+			state.last_message = "Calibration test stopped.";
 		}
 		scr_button_calibration_refresh_ui();
+	}
+
+	//CASE 34 - Reset calibration to system defaults
+	/// @function scr_calibration_reset_defaults(_ctx)
+	/// @description Restore current offsets to the measured system baseline.
+	/// @callers scr_handle_button_click (button 34)
+	function scr_calibration_reset_defaults(_ctx = noone) {
+		var state = timing_calibration_ensure_state();
+		timing_calibration_reset_to_system_defaults();
+		state.last_message = "Calibration restored to system defaults.";
+		scr_button_calibration_refresh_ui();
+	}
+
+	//CASE 35 - Calibration OK (save + close)
+	/// @function scr_calibration_save_profile(_ctx)
+	/// @description Persist the current offsets, commit the session, and close the calibration window.
+	/// @callers scr_handle_button_click (button 35)
+	function scr_calibration_save_profile(_ctx = noone) {
+		var state = timing_calibration_ensure_state();
+		timing_calibration_set_session_commit_on_close(true);
+		timing_calibration_save_current_profile();
+		state.last_message = "Calibration saved.";
+		scr_open_window(8);
+	}
+
+	//CASE 36 - Toggle calibration advanced panel
+	/// @function scr_calibration_toggle_advanced(_ctx)
+	/// @description Toggle the advanced calibration readout between compact and verbose summaries.
+	/// @callers scr_handle_button_click (button 36)
+	function scr_calibration_toggle_advanced(_ctx = noone) {
+		var state = timing_calibration_ensure_state();
+		timing_calibration_toggle_advanced_panel();
+		state.last_message = bool(state.calibration_advanced_open ?? false)
+			? "Advanced calibration details opened."
+			: "Advanced calibration details closed.";
+		scr_button_calibration_refresh_ui();
+	}
+
+	//CASE 37 - Calibration Cancel (close with no change)
+	/// @function scr_calibration_apply_profile(_ctx)
+	/// @description Close the calibration window and restore pre-session offsets.
+	/// @callers scr_handle_button_click (button 37)
+	function scr_calibration_apply_profile(_ctx = noone) {
+		timing_calibration_set_session_commit_on_close(false);
+		scr_open_window(8);
 	}
 	
 	//CASE 14 - Metronome Mode (None/Click/Drums)

@@ -629,6 +629,12 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "tune_other_parts_alpha")) {
         variable_struct_set(global.timeline_cfg, "tune_other_parts_alpha", 0.18);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "tune_structure_follow_mode")) {
+        variable_struct_set(global.timeline_cfg, "tune_structure_follow_mode", "paged");
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "tune_structure_page_rows")) {
+        variable_struct_set(global.timeline_cfg, "tune_structure_page_rows", 8);
+    }
     if (!variable_struct_exists(global.timeline_cfg, "now_ratio")) {
         variable_struct_set(global.timeline_cfg, "now_ratio", 0.33);
     }
@@ -1200,7 +1206,7 @@ function gv_scoring_get_grade(_score_value) {
 /// @param {real} _y2  Bottom edge.
 /// @returns {struct}  Layout struct with: panel_rect, overview_rect, table_header_rect, table_rows_rect, row_h.
 function gv_notebeam_scoring_panel_get_layout(_x1, _y1, _x2, _y2) {
-    var panel_w = clamp(floor((_x2 - _x1) * 0.25), 200, 360);
+    var panel_w = clamp(floor((_x2 - _x1) * 0.30), 240, 430);
     var pad = 8;
     var panel_x1 = _x1 + pad;
     var panel_x2 = min(_x2 - pad, panel_x1 + panel_w);
@@ -1322,7 +1328,7 @@ function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
     var table_rows_rect = layout.table_rows_rect;
     var table_w = table_rows_rect[2] - table_rows_rect[0];
     var col_judge = table_rows_rect[0] + 4;
-    var col_score = table_rows_rect[0] + floor(table_w * 0.56);
+    var col_score = table_rows_rect[0] + floor(table_w * 0.62);
     var col_best = table_rows_rect[0] + floor(table_w * 0.74);
     var col_avg = table_rows_rect[0] + floor(table_w * 0.87);
 
@@ -2810,6 +2816,8 @@ function gv_on_tune_playback_finished(_final_time_ms = -1) {
         var _export_info = event_history_get_export_info();
         // Primary calibrated judge
         script_execute(_scoring_build_idx, _export_info, "ms_overlap", undefined, true);
+        // Embellishment-window variant (calibrated only)
+        script_execute(_scoring_build_idx, _export_info, "ms_overlap_emb_window", undefined, false);
         // Companion uncalibrated judge (same algorithm, no compare offset)
         script_execute(_scoring_build_idx, _export_info, "ms_overlap_uncal", 0, false);
 
@@ -2922,6 +2930,58 @@ function gv_measure_at_ms(_ms) {
     // Past end: return last measure.
     if (n > 0) return floor(real(entries[n-1][$ "measure"] ?? -1));
     return -1;
+}
+
+/// @function gv_measure_nav_find_local_idx(_ms, _measure_num)
+/// @description Resolve a measure-nav index in timeline_state.measure_nav_entries for a given wall-clock time and measure number.
+/// @param {real} _ms  Time in ms.
+/// @param {real} _measure_num  Target measure number (>= 1).
+/// @returns {real}  Local nav index (0-based), or -1 if no matching entry exists.
+/// @reads  global.timeline_state.measure_nav_entries
+function gv_measure_nav_find_local_idx(_ms, _measure_num) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return -1;
+    if (!variable_struct_exists(global.timeline_state, "measure_nav_entries") || !is_array(global.timeline_state.measure_nav_entries)) return -1;
+
+    var entries = global.timeline_state.measure_nav_entries;
+    var target_measure = floor(real(_measure_num));
+    var n = array_length(entries);
+
+    // Primary resolution: local time window only (authoritative for panel namespace).
+    var active_idx = -1;
+    for (var i = 0; i < n; i++) {
+        var e = entries[i];
+        if (!is_struct(e)) continue;
+        var m = floor(real(e[$ "measure"] ?? -1));
+        if (m < 1) continue;
+        var s = real(e[$ "start_ms"] ?? 0);
+        var ed = real(e[$ "end_ms"] ?? s);
+        if (_ms >= s && _ms < ed) {
+            active_idx = i;
+            break;
+        }
+    }
+    if (active_idx >= 0) return active_idx;
+
+    if (target_measure < 1) return -1;
+
+    var first_match_idx = -1;
+    var last_match_before_or_at_ms = -1;
+    for (var i = 0; i < n; i++) {
+        var e = entries[i];
+        if (!is_struct(e)) continue;
+        var m = floor(real(e[$ "measure"] ?? -1));
+        if (m != target_measure) continue;
+
+        if (first_match_idx < 0) first_match_idx = i;
+
+        var s = real(e[$ "start_ms"] ?? 0);
+        var ed = real(e[$ "end_ms"] ?? s);
+        if (_ms >= s && _ms < ed) return i;
+        if (_ms >= s) last_match_before_or_at_ms = i;
+    }
+
+    if (last_match_before_or_at_ms >= 0) return last_match_before_or_at_ms;
+    return first_match_idx;
 }
 
 /// @function gv_sync_now_line_display()
@@ -3510,6 +3570,93 @@ function gv_measure_nav_scroll_rows(_delta_rows) {
     return true;
 }
 
+/// @function gv_log_measure_nav_page_turn(_playhead_ms, _measure_num, _from_scroll, _to_scroll, _target_row, _view_rows, _page_rows, _follow_mode)
+/// @description Emit a structured page_turn event when tune-structure auto-follow changes panel scroll.
+/// @param {real} _playhead_ms  Playhead time that triggered the turn.
+/// @param {real} _measure_num  Measure active when the turn happened.
+/// @param {real} _from_scroll  Previous scroll row.
+/// @param {real} _to_scroll  New scroll row.
+/// @param {real} _target_row  Target row for the active measure entry.
+/// @param {real} _view_rows  Visible panel rows.
+/// @param {real} _page_rows  Follow page size rows (0 when continuous mode).
+/// @param {string} _follow_mode  Follow mode name (paged/continuous).
+/// @returns {none}
+/// @reads  global.EVENT_HISTORY_ENABLED, global.current_tune_name, global.current_set_item_index, global.playback_context
+/// @writes global.EVENT_HISTORY
+function gv_log_measure_nav_page_turn(_playhead_ms, _measure_num, _from_scroll, _to_scroll, _target_row, _view_rows, _page_rows, _follow_mode) {
+    if (!variable_global_exists("EVENT_HISTORY")) return;
+    if (variable_global_exists("EVENT_HISTORY_ENABLED") && !global.EVENT_HISTORY_ENABLED) return;
+
+    var playhead_ms = real(_playhead_ms);
+    var from_scroll = max(0, floor(real(_from_scroll)));
+    var to_scroll = max(0, floor(real(_to_scroll)));
+    var target_row = max(0, floor(real(_target_row)));
+    var view_rows = max(1, floor(real(_view_rows)));
+    var page_rows = max(0, floor(real(_page_rows)));
+    var follow_mode = string_lower(string(_follow_mode ?? "paged"));
+
+    var page_size = max(1, (page_rows > 0) ? page_rows : view_rows);
+    var from_page = floor(from_scroll / page_size);
+    var to_page = floor(to_scroll / page_size);
+
+    var active_segment = 0;
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        active_segment = floor(real(global.playback_context[$ "active_segment"] ?? 0));
+    }
+
+    var tune_name = variable_global_exists("current_tune_name")
+        ? string(global.current_tune_name)
+        : "unknown";
+
+    var eh_add_idx = asset_get_index("event_history_add");
+    if (!script_exists(eh_add_idx)) {
+        // Logging must never block panel rendering.
+        return;
+    }
+
+    script_execute(eh_add_idx, {
+        timestamp_ms: playhead_ms,
+        expected_time_ms: playhead_ms,
+        actual_time_ms: playhead_ms,
+        delta_ms: 0,
+        canonical_time_ms: playhead_ms,
+        audio_target_time_ms: playhead_ms,
+        visual_target_time_ms: playhead_ms,
+        input_aligned_time_ms: playhead_ms,
+        event_type: "page_turn",
+        source: "tune_structure_follow",
+        note_midi: 0,
+        note_letter: "",
+        velocity: 0,
+        channel: 0,
+        tune_name: tune_name,
+        event_id: -1,
+        marker_type: "page_turn",
+        measure: max(-1, floor(real(_measure_num))),
+        beat: 0,
+        beat_fraction: 0,
+        follow_mode: follow_mode,
+        from_scroll_row: from_scroll,
+        to_scroll_row: to_scroll,
+        target_row: target_row,
+        view_rows: view_rows,
+        page_rows: page_rows,
+        from_page: from_page,
+        to_page: to_page,
+        active_segment: max(0, active_segment)
+    });
+
+    show_debug_message(
+        "[PAGE_TURN] ms=" + string(playhead_ms)
+        + " measure=" + string(max(-1, floor(real(_measure_num))))
+        + " mode=" + follow_mode
+        + " seg=" + string(max(0, active_segment))
+        + " row " + string(from_scroll) + "->" + string(to_scroll)
+        + " page " + string(from_page) + "->" + string(to_page)
+        + " target_row=" + string(target_row)
+    );
+}
+
 /// @function gv_loop_mode_enabled()
 /// @description Return true if global loop mode is currently enabled.
 /// @returns {bool}
@@ -3664,7 +3811,7 @@ function gv_loop_select_measure_range(_m1, _m2, _additive) {
 }
 
 /// @function gv_measure_nav_hit_test(_mx, _my)
-/// @description Test a screen point against all measure-nav tile hitboxes and scroll buttons.
+/// @description Test a screen point against measure-nav tile hitboxes and nav controls (scrollbar, loop controls, segment arrows).
 /// @param {real} _mx  Mouse X.
 /// @param {real} _my  Mouse Y.
 /// @returns {struct|undefined}  Hit result struct (with type/measure fields) or undefined.
@@ -3674,6 +3821,23 @@ function gv_measure_nav_hit_test(_mx, _my) {
 
     if (variable_struct_exists(global.timeline_state, "measure_nav_controls") && is_struct(global.timeline_state.measure_nav_controls)) {
         var ctrls = global.timeline_state.measure_nav_controls;
+
+        if (variable_struct_exists(ctrls, "scroll_thumb") && is_struct(ctrls.scroll_thumb)) {
+            var thumb = ctrls.scroll_thumb;
+            if (variable_struct_exists(thumb, "enabled") && thumb.enabled
+                && _mx >= real(thumb.x1 ?? -1) && _mx <= real(thumb.x2 ?? -1)
+                && _my >= real(thumb.y1 ?? -1) && _my <= real(thumb.y2 ?? -1)) {
+                return { kind: "scroll_thumb" };
+            }
+        }
+        if (variable_struct_exists(ctrls, "scroll_track") && is_struct(ctrls.scroll_track)) {
+            var track = ctrls.scroll_track;
+            if (variable_struct_exists(track, "enabled") && track.enabled
+                && _mx >= real(track.x1 ?? -1) && _mx <= real(track.x2 ?? -1)
+                && _my >= real(track.y1 ?? -1) && _my <= real(track.y2 ?? -1)) {
+                return { kind: "scroll_track" };
+            }
+        }
 
         if (variable_struct_exists(ctrls, "up") && is_struct(ctrls.up)) {
             var up = ctrls.up;
@@ -3802,7 +3966,7 @@ function gv_review_jump_to_measure(_measure) {
 }
 
 /// @function gv_measure_nav_handle_click(_mx, _my)
-/// @description Handle a mouse click on the measure nav panel. Routes to: scroll buttons, loop-mode measure selection, or jumping the review playhead to the clicked measure.
+/// @description Handle a mouse click on the measure nav panel. Routes to: scrollbar navigation, loop-mode measure selection, or jumping the review playhead to the clicked measure.
 /// @param {real} _mx  Mouse X.
 /// @param {real} _my  Mouse Y.
 /// @returns {bool}  true if click was consumed.
@@ -3818,6 +3982,42 @@ function gv_measure_nav_handle_click(_mx, _my) {
 
     var kind = string(hit.kind ?? "");
     switch (kind) {
+        case "scroll_thumb":
+        case "scroll_track":
+            if (!variable_struct_exists(global.timeline_state, "measure_nav_controls")
+                || !is_struct(global.timeline_state.measure_nav_controls)) {
+                return false;
+            }
+            var _scroll_ctrls = global.timeline_state.measure_nav_controls;
+            if (!variable_struct_exists(_scroll_ctrls, "scroll_track")
+                || !is_struct(_scroll_ctrls.scroll_track)
+                || !variable_struct_exists(_scroll_ctrls, "scroll_thumb")
+                || !is_struct(_scroll_ctrls.scroll_thumb)) {
+                return false;
+            }
+            var _track = _scroll_ctrls.scroll_track;
+            var _thumb = _scroll_ctrls.scroll_thumb;
+            if (!(variable_struct_exists(_track, "enabled") && _track.enabled)) return false;
+
+            var _total_rows = max(0, floor(real(global.timeline_state.measure_nav_total_rows ?? 0)));
+            var _view_rows = max(1, floor(real(global.timeline_state.measure_nav_view_rows ?? 1)));
+            var _max_scroll = max(0, _total_rows - _view_rows);
+            if (_max_scroll <= 0) return false;
+
+            var _track_y1 = real(_track.y1 ?? 0);
+            var _track_y2 = real(_track.y2 ?? 0);
+            var _thumb_h = max(1, real(_thumb.y2 ?? _track_y1) - real(_thumb.y1 ?? _track_y1));
+            var _track_h = max(1, _track_y2 - _track_y1);
+            _thumb_h = clamp(_thumb_h, 1, _track_h);
+            var _thumb_range = max(1, _track_h - _thumb_h);
+
+            var _thumb_top = clamp(_my - _track_y1 - (_thumb_h * 0.5), 0, _thumb_range);
+            var _target_scroll = floor((_thumb_top / _thumb_range) * _max_scroll + 0.5);
+            _target_scroll = clamp(_target_scroll, 0, _max_scroll);
+
+            if (_target_scroll == floor(real(global.timeline_state.measure_nav_scroll_row ?? 0))) return false;
+            global.timeline_state.measure_nav_scroll_row = _target_scroll;
+            return true;
         case "up":
             return gv_measure_nav_scroll_rows(-1);
         case "down":
@@ -4014,7 +4214,7 @@ function gv_draw_gameviz_structure_panel(_x1, _y1, _x2, _y2) {
 }
 
 /// @function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2)
-/// @description Draw the full tune structure grid panel: measure tiles, part labels, scroll buttons, loop selection overlays. Computes and stores tile hitboxes.
+/// @description Draw the full tune structure grid panel: measure tiles, part labels, post-play scrollbar, loop selection overlays. Computes and stores tile hitboxes.
 /// @param {real} _x1  Left edge.
 /// @param {real} _y1  Top edge.
 /// @param {real} _x2  Right edge.
@@ -4072,6 +4272,8 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
         _ctrls_empty.show = false;
         _ctrls_empty.up = { x1: -1, y1: -1, x2: -1, y2: -1, enabled: false };
         _ctrls_empty.down = { x1: -1, y1: -1, x2: -1, y2: -1, enabled: false };
+        _ctrls_empty.scroll_track = { x1: -1, y1: -1, x2: -1, y2: -1, enabled: false };
+        _ctrls_empty.scroll_thumb = { x1: -1, y1: -1, x2: -1, y2: -1, enabled: false };
         global.timeline_state.measure_nav_controls = _ctrls_empty;
         draw_set_font(fnt_setting);
         draw_set_halign(fa_left);
@@ -4272,7 +4474,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             part_entries[$ pkey] = [];
         }
         var arr = part_entries[$ pkey];
-        array_push(arr, e);
+        array_push(arr, { entry: e, source_idx: pe });
         part_entries[$ pkey] = arr;
     }
 
@@ -4298,7 +4500,17 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     var show_scroll_controls = playback_complete && (max_scroll > 0);
 
     var ctrl_x1 = x1 + 2;
-    var ctrl_x2 = x1 + 18;
+    var ctrl_x2 = x1 + 16;
+    var track_y1 = y1 + 2;
+    var track_y2 = y2 - 2;
+    var track_h = max(1, track_y2 - track_y1);
+    var thumb_h = max(14, floor((view_rows / max(1, total_rows)) * track_h));
+    thumb_h = clamp(thumb_h, 14, track_h);
+    var thumb_range = max(1, track_h - thumb_h);
+    var thumb_t = (max_scroll > 0) ? (real(scroll_row) / real(max_scroll)) : 0;
+    var thumb_y1 = track_y1 + floor(thumb_t * thumb_range);
+    var thumb_y2 = thumb_y1 + thumb_h;
+
     var ctrl_h = max(8, floor(tile_h * 0.45));
     var up_y1 = y1 + 2;
     var up_y2 = up_y1 + ctrl_h;
@@ -4314,18 +4526,32 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     var _ctrls = global.timeline_state.measure_nav_controls;
     _ctrls.show = show_scroll_controls;
     _ctrls.up = {
-        x1: ctrl_x1 + hitbox_x_bias,
-        y1: up_y1 + hitbox_y_bias,
-        x2: ctrl_x2 + hitbox_x_bias,
-        y2: up_y2 + hitbox_y_bias,
-        enabled: up_enabled
+        x1: -1,
+        y1: -1,
+        x2: -1,
+        y2: -1,
+        enabled: false
     };
     _ctrls.down = {
+        x1: -1,
+        y1: -1,
+        x2: -1,
+        y2: -1,
+        enabled: false
+    };
+    _ctrls.scroll_track = {
         x1: ctrl_x1 + hitbox_x_bias,
-        y1: down_y1 + hitbox_y_bias,
+        y1: track_y1 + hitbox_y_bias,
         x2: ctrl_x2 + hitbox_x_bias,
-        y2: down_y2 + hitbox_y_bias,
-        enabled: down_enabled
+        y2: track_y2 + hitbox_y_bias,
+        enabled: show_scroll_controls
+    };
+    _ctrls.scroll_thumb = {
+        x1: ctrl_x1 + hitbox_x_bias,
+        y1: thumb_y1 + hitbox_y_bias,
+        x2: ctrl_x2 + hitbox_x_bias,
+        y2: thumb_y2 + hitbox_y_bias,
+        enabled: show_scroll_controls && (max_scroll > 0)
     };
     // Segment navigation arrow hitboxes (set during title strip draw above; -1 = no-hit default)
     _ctrls.seg_prev = {
@@ -4341,18 +4567,13 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     global.timeline_state.measure_nav_controls = _ctrls;
 
     if (show_scroll_controls) {
-        draw_set_alpha(0.85);
-        draw_set_color(up_enabled ? make_color_rgb(78, 78, 84) : make_color_rgb(52, 52, 56));
-        draw_rectangle(ctrl_x1, up_y1, ctrl_x2, up_y2, false);
-        draw_set_color(down_enabled ? make_color_rgb(78, 78, 84) : make_color_rgb(52, 52, 56));
-        draw_rectangle(ctrl_x1, down_y1, ctrl_x2, down_y2, false);
+        draw_set_alpha(0.8);
+        draw_set_color(make_color_rgb(58, 58, 64));
+        draw_rectangle(ctrl_x1, track_y1, ctrl_x2, track_y2, false);
+        draw_set_alpha(0.95);
+        draw_set_color(make_color_rgb(166, 166, 176));
+        draw_rectangle(ctrl_x1 + 1, thumb_y1, ctrl_x2 - 1, thumb_y2, false);
         draw_set_alpha(1);
-
-        draw_set_halign(fa_center);
-        draw_set_valign(fa_middle);
-        draw_set_color(c_white);
-        draw_text((ctrl_x1 + ctrl_x2) * 0.5, (up_y1 + up_y2) * 0.5, "^");
-        draw_text((ctrl_x1 + ctrl_x2) * 0.5, (down_y1 + down_y2) * 0.5, "v");
     }
 
     var display_ms = real(global.timeline_state.playhead_ms ?? 0);
@@ -4363,36 +4584,86 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
     // During active gameplay the tune-structure panel is intentionally static;
     // the current-measure highlight is composited separately as a lightweight overlay.
-    if (!gameplay_static && !playback_complete && current_measure >= 1 && max_scroll > 0) {
+    if (!playback_complete && current_measure >= 1 && max_scroll > 0) {
+        // Auto-follow uses one source of truth: active local measure-nav entry by playhead time.
+        var ags_active_source_idx = -1;
+        var ags_best_source_idx = -1;
+        var ags_entry_n = array_length(entries);
+        for (var ags_ei = 0; ags_ei < ags_entry_n; ags_ei++) {
+            var ags_e = entries[ags_ei];
+            if (!is_struct(ags_e)) continue;
+            var ags_m = floor(real(ags_e.measure ?? -1));
+            if (ags_m < 1) continue;
+            var ags_s = real(ags_e.start_ms ?? 0);
+            var ags_ed = real(ags_e.end_ms ?? ags_s);
+
+            if (display_ms < ags_s) break;
+
+            ags_best_source_idx = ags_ei;
+            if (display_ms < ags_ed) {
+                ags_active_source_idx = ags_ei;
+                break;
+            }
+        }
+        if (ags_active_source_idx < 0) ags_active_source_idx = ags_best_source_idx;
+
         var ags_count = 0;
         var ags_target_row = -1;
-        for (var ags_pi = 0; ags_pi < n_parts && ags_target_row < 0; ags_pi++) {
-            var ags_pk = string(floor(real(part_order[ags_pi])));
-            var ags_pa = variable_struct_exists(part_entries, ags_pk) ? part_entries[$ ags_pk] : [];
-            var ags_rp = max(2, ceil(max(1, array_length(ags_pa)) / cols));
-            for (var ags_ri = 0; ags_ri < ags_rp && ags_target_row < 0; ags_ri++) {
-                for (var ags_ci = 0; ags_ci < cols; ags_ci++) {
-                    var ags_idx = (ags_ri * cols) + ags_ci;
-                    if (ags_idx >= array_length(ags_pa)) break;
-                    if (floor(real(ags_pa[ags_idx].measure ?? -1)) == current_measure) {
-                        ags_target_row = ags_count + ags_ri;
+        if (ags_active_source_idx >= 0) {
+            for (var ags_pi = 0; ags_pi < n_parts && ags_target_row < 0; ags_pi++) {
+                var ags_pk = string(floor(real(part_order[ags_pi])));
+                var ags_pa = variable_struct_exists(part_entries, ags_pk) ? part_entries[$ ags_pk] : [];
+                var ags_rp = max(2, ceil(max(1, array_length(ags_pa)) / cols));
+
+                var ags_local_idx = -1;
+                var ags_pa_n = array_length(ags_pa);
+                for (var ags_ai = 0; ags_ai < ags_pa_n; ags_ai++) {
+                    var ags_slot = ags_pa[ags_ai];
+                    if (!is_struct(ags_slot)) continue;
+                    var ags_src_idx = variable_struct_exists(ags_slot, "source_idx")
+                        ? floor(real(ags_slot.source_idx))
+                        : -1;
+                    if (ags_src_idx == ags_active_source_idx) {
+                        ags_local_idx = ags_ai;
                         break;
                     }
                 }
+
+                if (ags_local_idx >= 0) {
+                    ags_target_row = ags_count + floor(ags_local_idx / cols);
+                    break;
+                }
+
+                ags_count += ags_rp;
+                if (ags_pi < n_parts - 1) ags_count += part_gap_rows;
             }
-            ags_count += ags_rp;
-            if (ags_pi < n_parts - 1) ags_count += part_gap_rows;
         }
         if (ags_target_row >= 0) {
-            var follow_margin = clamp(floor(view_rows * 0.25), 1, max(1, view_rows - 1));
-            var view_top = scroll_row + follow_margin;
-            var view_bottom = scroll_row + max(0, view_rows - 1 - follow_margin);
+            var follow_mode = (is_struct(ts_cfg) && variable_struct_exists(ts_cfg, "tune_structure_follow_mode"))
+                ? string_lower(string(ts_cfg.tune_structure_follow_mode))
+                : "paged";
+            var use_paged_follow = (follow_mode == "paged" || follow_mode == "page");
             var desired_scroll = scroll_row;
+            var follow_page_rows = 0;
 
-            if (ags_target_row < view_top) {
-                desired_scroll = clamp(ags_target_row - follow_margin, 0, max_scroll);
-            } else if (ags_target_row > view_bottom) {
-                desired_scroll = clamp(ags_target_row - max(0, view_rows - 1 - follow_margin), 0, max_scroll);
+            if (use_paged_follow) {
+                var page_rows_cfg = (is_struct(ts_cfg) && variable_struct_exists(ts_cfg, "tune_structure_page_rows"))
+                    ? max(1, floor(real(ts_cfg.tune_structure_page_rows)))
+                    : 8;
+                var page_rows = clamp(page_rows_cfg, 1, max(1, view_rows));
+                follow_page_rows = page_rows;
+                desired_scroll = clamp(floor(ags_target_row / page_rows) * page_rows, 0, max_scroll);
+            } else {
+                var top_margin = clamp(1, 0, max(0, view_rows - 1));
+                var bottom_margin = clamp(2, 0, max(0, view_rows - 1));
+                var view_top = scroll_row + top_margin;
+                var view_bottom = scroll_row + max(0, view_rows - 1 - bottom_margin);
+
+                if (ags_target_row < view_top) {
+                    desired_scroll = clamp(ags_target_row - top_margin, 0, max_scroll);
+                } else if (ags_target_row > view_bottom) {
+                    desired_scroll = clamp(ags_target_row - max(0, view_rows - 1 - bottom_margin), 0, max_scroll);
+                }
             }
 
             if (desired_scroll != scroll_row) {
@@ -4408,11 +4679,28 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                     : -1000000000;
 
                 if ((follow_now_ms - follow_last_ms) >= follow_cfg_ms) {
-                    var row_delta = desired_scroll - scroll_row;
-                    var clamped_delta = clamp(row_delta, -follow_cfg_max_rows, follow_cfg_max_rows);
-                    scroll_row = clamp(scroll_row + clamped_delta, 0, max_scroll);
+                    var scroll_before_follow = scroll_row;
+                    if (use_paged_follow) {
+                        scroll_row = desired_scroll;
+                    } else {
+                        var row_delta = desired_scroll - scroll_row;
+                        var clamped_delta = clamp(row_delta, -follow_cfg_max_rows, follow_cfg_max_rows);
+                        scroll_row = clamp(scroll_row + clamped_delta, 0, max_scroll);
+                    }
                     global.timeline_state.measure_nav_scroll_row = scroll_row;
                     global.timeline_state.measure_nav_auto_follow_last_ms = follow_now_ms;
+                    if (scroll_row != scroll_before_follow) {
+                        gv_log_measure_nav_page_turn(
+                            display_ms,
+                            current_measure,
+                            scroll_before_follow,
+                            scroll_row,
+                            ags_target_row,
+                            view_rows,
+                            follow_page_rows,
+                            follow_mode
+                        );
+                    }
                 }
             }
         }
@@ -4428,6 +4716,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     // used to make every row_y relative to y_top.
     var _sep_base_n      = floor(scroll_row / section_rows);
     var _sep_base_part_n = floor(scroll_row / (section_rows * 2));
+    var section_label_x = content_x1 - 8;
 
     var global_row_cursor = 0;
     for (var pidx = 0; pidx < n_parts; pidx++) {
@@ -4465,12 +4754,34 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                 }
             }
 
+            if ((abs_row mod section_rows) == 0) {
+                var _section_start_idx = (r * cols);
+                if (_section_start_idx < array_length(rows_part_entries)) {
+                    var _section_slot = rows_part_entries[_section_start_idx];
+                    if (is_struct(_section_slot) && variable_struct_exists(_section_slot, "entry") && is_struct(_section_slot.entry)) {
+                        var _section_measure = floor(real(_section_slot.entry.measure ?? -1));
+                        if (_section_measure >= 1) {
+                            draw_set_alpha(0.95);
+                            draw_set_color(make_color_rgb(188, 190, 205));
+                            draw_set_halign(fa_right);
+                            draw_set_valign(fa_middle);
+                            draw_text_transformed(section_label_x, row_y + (tile_h * 0.5), string(_section_measure), 0.68, 0.68, 0);
+                            draw_set_alpha(1);
+                        }
+                    }
+                }
+            }
+
             for (var c = 0; c < cols; c++) {
                 var idx = (r * cols) + c;
                 if (idx >= array_length(rows_part_entries)) continue;
 
-                var entry = rows_part_entries[idx];
-                if (!is_struct(entry)) continue;
+                var slot = rows_part_entries[idx];
+                if (!is_struct(slot) || !variable_struct_exists(slot, "entry") || !is_struct(slot.entry)) continue;
+                var entry = slot.entry;
+                var source_idx = variable_struct_exists(slot, "source_idx")
+                    ? floor(real(slot.source_idx))
+                    : -1;
 
                 var tx1 = content_x1 + (c * (tile_w + col_gap));
                 var ty1 = row_y;
@@ -4548,6 +4859,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
                 array_push(tile_hits, {
                     measure: entry_measure,
+                    nav_idx: source_idx,
                     x1: tx1 + hitbox_x_bias,
                     y1: ty1 + hitbox_y_bias,
                     x2: tx2 + hitbox_x_bias,
@@ -4599,6 +4911,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
             array_push(tile_hits, {
                 measure: fm,
+                nav_idx: -1,
                 x1: fx1 + hitbox_x_bias,
                 y1: fy1 + hitbox_y_bias,
                 x2: fx2 + hitbox_x_bias,
@@ -4651,10 +4964,20 @@ function gv_draw_tune_structure_current_overlay_to_surface(_sx, _sy, _ex, _ey, _
         : 1.0;
 
     var hits = global.timeline_state.measure_nav_tile_hitboxes;
+    var current_nav_idx = variable_struct_exists(global.timeline_state, "measure_highlight_last_nav_idx")
+        ? floor(real(global.timeline_state.measure_highlight_last_nav_idx))
+        : -1;
     for (var i = 0; i < array_length(hits); i++) {
         var hit = hits[i];
         if (!is_struct(hit)) continue;
-        if (floor(real(hit.measure ?? -1)) != current_measure) continue;
+        var hit_nav_idx = variable_struct_exists(hit, "nav_idx")
+            ? floor(real(hit.nav_idx))
+            : -1;
+        if (current_nav_idx >= 0) {
+            if (hit_nav_idx != current_nav_idx) continue;
+        } else {
+            if (floor(real(hit.measure ?? -1)) != current_measure) continue;
+        }
 
         // Hitbox is in screen coords, but we're drawing to surface coords (0-based).
         // Account for any offset stored during main panel render.
@@ -5877,7 +6200,6 @@ function gv_get_current_planned_measure(_playhead_ms) {
         var _fall_n = array_length(_fall);
         var _fall_best_m = -1;
         var _fall_resolved_m = -1;
-        var _fall_resolved_idx = -1;
         for (var _fi = 0; _fi < _fall_n; _fi++) {
             var _fe = _fall[_fi];
             if (!is_struct(_fe)) continue;
@@ -5894,7 +6216,6 @@ function gv_get_current_planned_measure(_playhead_ms) {
                     return -1;
                 }
                 _fall_resolved_m = _fm;
-                _fall_resolved_idx = _fi;
                 break;
             }
             if (_fm < 1) continue;
@@ -5913,8 +6234,18 @@ function gv_get_current_planned_measure(_playhead_ms) {
             _fall_resolved_m = _fall_best_m;
         }
         if (_fall_resolved_m >= 1) {
+            var _local_nav_idx = gv_measure_nav_find_local_idx(_query_ms, _fall_resolved_m);
+            if (_local_nav_idx < 0) {
+                // Fail closed when set-wide and panel-local nav tables disagree.
+                // This prevents writing a cross-namespace index that would break follow/page turn.
+                global.timeline_state.measure_highlight_last_measure = -1;
+                global.timeline_state.measure_highlight_last_nav_idx = -1;
+                global.timeline_state.measure_highlight_last_struct_idx = -1;
+                global.timeline_state.current_measure = -1;
+                return -1;
+            }
             global.timeline_state.measure_highlight_last_measure = _fall_resolved_m;
-            global.timeline_state.measure_highlight_last_nav_idx = _fall_resolved_idx;
+            global.timeline_state.measure_highlight_last_nav_idx = _local_nav_idx;
             global.timeline_state.measure_highlight_last_struct_idx = -1;
             global.timeline_state.current_measure = _fall_resolved_m;
             return _fall_resolved_m;
@@ -7820,6 +8151,9 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
     if (!variable_struct_exists(cfg, "enabled") || !cfg.enabled) return;
     var is_active = variable_struct_exists(global.timeline_state, "active") && global.timeline_state.active;
+    var visual_cal_ms = variable_struct_exists(cfg, "visual_alignment_offset_ms")
+        ? real(cfg.visual_alignment_offset_ms)
+        : 0;
 
     var pad = variable_struct_exists(cfg, "padding_px") ? real(cfg.padding_px) : 8;
     var x1 = _x1 + pad;  var y1 = _y1 + pad;
@@ -7851,7 +8185,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
         var _spr_count = (variable_global_exists("score_lane_sprites")) ? array_length(global.score_lane_sprites) : -1;
         if (_spr_count > 0) {
-            var _playhead = global.timeline_state.playhead_ms;
+            var _playhead = max(0, real(global.timeline_state.playhead_ms ?? 0) + visual_cal_ms);
             var _ms_behind = variable_struct_exists(global.timeline_state, "ms_behind") ? real(global.timeline_state.ms_behind) : 2000;
             var _ms_ahead  = variable_struct_exists(global.timeline_state, "ms_ahead")  ? real(global.timeline_state.ms_ahead)  : 4000;
             var _set_mode = variable_global_exists("playback_context")
@@ -8726,7 +9060,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
     // Scrolling beat ticks
     var _overlay_playhead_ms = variable_struct_exists(global.timeline_state, "playhead_ms")
-        ? real(global.timeline_state.playhead_ms)
+        ? max(0, real(global.timeline_state.playhead_ms) + visual_cal_ms)
         : 0;
     gv_draw_beat_lane(x1, beat_y1, x2, beat_y2, _overlay_playhead_ms);
 
