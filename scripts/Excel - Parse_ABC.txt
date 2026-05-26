@@ -2984,6 +2984,18 @@ Public Sub ExportTuneAll()
     Application.StatusBar = "Step 4/4 - Rendering score images..."
     Call ExportMeasureImages(scoreSnippetsFile, scoreDir, 800)
 
+    ' ---- Step 4b: Render optional per-part score image bundles ----
+    Dim scoreGroupsJSON As String
+    scoreGroupsJSON = BuildScoreImageGroupsJSON(ws, abcContent, tuneDir, scoreDir, tuneName)
+    If Trim$(scoreGroupsJSON) <> "" Then
+        Dim scoreGroupsFile As String
+        scoreGroupsFile = tuneDir & tuneName & ".score_groups.json"
+        ff = FreeFile
+        Open scoreGroupsFile For Output As #ff
+        Print #ff, scoreGroupsJSON
+        Close #ff
+    End If
+
     Application.StatusBar = False
     MsgBox "All done!" & vbCrLf & vbCrLf & _
            "JSON:   " & jsonFile & vbCrLf & _
@@ -3002,6 +3014,84 @@ Private Function BuildScoreSnippetsJSON(ws As Worksheet, ByVal fullABC As String
     Else
         BuildScoreSnippetsJSON = BuildSnippetBundleJSON(ExtractABCHeaderBlock(fullABC), ExtractABCBodyBlock(fullABC), "")
     End If
+End Function
+
+Private Function BuildScoreImageGroupsJSON(ws As Worksheet, ByVal fullABC As String, ByVal tuneDir As String, ByVal scoreDir As String, ByVal tuneName As String) As String
+    If Not ABCHasVoiceHeaders(fullABC) Then
+        BuildScoreImageGroupsJSON = ""
+        Exit Function
+    End If
+
+    Dim header As String
+    header = ExtractABCHeaderBlock(fullABC)
+
+    Dim json As String
+    Dim firstGroup As Boolean
+    json = "{" & vbCrLf
+    json = json & "  ""groups"": [" & vbCrLf
+    firstGroup = True
+
+    Dim channel As Long
+    For channel = 2 To 5
+        Dim voiceIdx As String
+        voiceIdx = CStr(channel - 1)
+
+        Dim voiceBody As String
+        voiceBody = PrepareABCForVoice(fullABC, voiceIdx)
+        If Trim$(voiceBody) = "" Then GoTo NextGroupChannel
+
+        Dim groupName As String
+        groupName = "part" & CStr(channel)
+
+        Dim groupSnippetsJSON As String
+        groupSnippetsJSON = BuildSnippetBundleJSON(header, voiceBody, groupName)
+        If Trim$(groupSnippetsJSON) = "" Then GoTo NextGroupChannel
+
+        Dim groupDir As String
+        groupDir = scoreDir & "\" & groupName
+        If Dir(groupDir, vbDirectory) = "" Then MkDir groupDir
+
+        Dim groupSnippetsFile As String
+        groupSnippetsFile = tuneDir & tuneName & ".score_" & groupName & ".json"
+        Dim ff As Integer
+        ff = FreeFile
+        Open groupSnippetsFile For Output As #ff
+        Print #ff, groupSnippetsJSON
+        Close #ff
+
+        Call ExportMeasureImages(groupSnippetsFile, groupDir, 800)
+
+        If Not firstGroup Then json = json & "," & vbCrLf
+        firstGroup = False
+        json = json & "    {" & vbCrLf
+        json = json & "      ""group"": """ & EscapeJSON(groupName) & """," & vbCrLf
+        json = json & "      ""part_channel"": " & CStr(channel) & "," & vbCrLf
+        json = json & "      ""part_label"": ""P" & CStr(channel - 1) & """," & vbCrLf
+        json = json & "      ""subdir"": """ & EscapeJSON(groupName) & """" & vbCrLf
+        json = json & "    }"
+
+NextGroupChannel:
+    Next channel
+
+    json = json & vbCrLf & "  ]" & vbCrLf & "}"
+    BuildScoreImageGroupsJSON = json
+End Function
+
+Private Function ABCHasVoiceHeaders(ByVal abcText As String) As Boolean
+    Dim normalized As String
+    normalized = Replace(abcText, vbCrLf, vbLf)
+    normalized = Replace(normalized, vbCr, vbLf)
+
+    Dim lines() As String
+    lines = Split(normalized, vbLf)
+
+    Dim i As Long
+    For i = LBound(lines) To UBound(lines)
+        If IsVoiceHeaderLine(lines(i)) Then
+            ABCHasVoiceHeaders = True
+            Exit Function
+        End If
+    Next i
 End Function
 
 Private Function BuildTransitionScoreSnippetsJSON(ws As Worksheet, ByVal fullABC As String) As String

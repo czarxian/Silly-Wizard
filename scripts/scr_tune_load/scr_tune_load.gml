@@ -281,7 +281,91 @@ function scr_score_manifest_read(_filename) {
         }
     }
 
+    if (last_slash2 > 0) {
+        var _groups_path = tune_dir + _tune_base + ".score_groups.json";
+        var _gf = file_text_open_read(_groups_path);
+        if (_gf >= 0) {
+            var _graw = "";
+            while (!file_text_eof(_gf)) {
+                _graw += file_text_read_string(_gf);
+                file_text_readln(_gf);
+            }
+            file_text_close(_gf);
+            var _groups_manifest = json_parse(_graw);
+            if (is_struct(_groups_manifest)) {
+                if (variable_struct_exists(_groups_manifest, "groups") && is_array(_groups_manifest.groups)) {
+                    manifest.groups = _groups_manifest.groups;
+                }
+                if (variable_struct_exists(_groups_manifest, "part_groups") && is_array(_groups_manifest.part_groups)) {
+                    manifest.part_groups = _groups_manifest.part_groups;
+                }
+            }
+        }
+    }
+
     return manifest;
+}
+
+/// @function scr_score_manifest_get_group_list(_manifest)
+/// @description Return the first available group array from a score manifest, supporting both `groups` and `part_groups`.
+/// @param {struct|undefined} _manifest Score manifest struct
+/// @returns {array} Group array or [] when none are present
+function scr_score_manifest_get_group_list(_manifest) {
+    if (!is_struct(_manifest)) return [];
+    if (variable_struct_exists(_manifest, "groups") && is_array(variable_struct_get(_manifest, "groups"))) return variable_struct_get(_manifest, "groups");
+    if (variable_struct_exists(_manifest, "part_groups") && is_array(variable_struct_get(_manifest, "part_groups"))) return variable_struct_get(_manifest, "part_groups");
+    return [];
+}
+
+/// @function scr_score_manifest_select_group(_manifest, _part_channel)
+/// @description Resolve a selected-part score group from a manifest, or return the legacy manifest when no groups are available.
+/// @param {struct|undefined} _manifest Score manifest struct
+/// @param {real} _part_channel Selected player MIDI channel
+/// @returns {struct|undefined} Selected group struct or original manifest when no groups exist
+function scr_score_manifest_select_group(_manifest, _part_channel) {
+    if (!is_struct(_manifest)) return undefined;
+
+    var _groups = scr_score_manifest_get_group_list(_manifest);
+    if (array_length(_groups) <= 0) return _manifest;
+
+    var _target_channel = floor(real(_part_channel));
+    if (_target_channel < 0) {
+        _target_channel = floor(real(scr_tune_picker_get_selected_part_channel()));
+    }
+
+    var _fallback = undefined;
+    var _selected = undefined;
+    for (var _gi = 0; _gi < array_length(_groups); _gi++) {
+        var _group = _groups[_gi];
+        if (!is_struct(_group)) continue;
+        if (is_undefined(_fallback)) _fallback = _group;
+
+        var _group_channel = -1;
+        if (variable_struct_exists(_group, "part_channel")) {
+            _group_channel = floor(real(_group.part_channel));
+        } else if (variable_struct_exists(_group, "channel")) {
+            _group_channel = floor(real(_group.channel));
+        }
+
+        if (_group_channel == _target_channel) {
+            _selected = _group;
+            break;
+        }
+    }
+
+    if (!is_struct(_selected)) _selected = _fallback;
+    if (!is_struct(_selected)) return _manifest;
+
+    var _merged = variable_clone(_manifest);
+    var _copy_fields = ["group", "part_channel", "part_label", "subdir", "images", "playback_to_image", "image_meta", "measure_map", "snippet_durations", "snippets", "has_pickup", "beats_per_measure", "units_per_measure", "pickup_image_index", "transition_images"];
+    for (var _fi = 0; _fi < array_length(_copy_fields); _fi++) {
+        var _key = _copy_fields[_fi];
+        if (variable_struct_exists(_selected, _key)) {
+            variable_struct_set(_merged, _key, variable_struct_get(_selected, _key));
+        }
+    }
+    _merged.selected_group = _selected;
+    return _merged;
 }
 
 /// @function scr_score_manifest_normalize_image_meta(_image_meta, _beats_per_measure)
@@ -362,6 +446,49 @@ function scr_score_sprites_load(_filename, _manifest) {
         show_debug_message("scr_score_sprites_load: no manifest at " + manifest_path);
         return;
     }
+
+        var root_manifest = manifest;
+        var selected_group = scr_score_manifest_select_group(manifest, scr_tune_picker_get_selected_part_channel());
+        if (is_struct(selected_group) && variable_struct_exists(selected_group, "subdir")) {
+            var group_subdir = string(variable_struct_get(selected_group, "subdir"));
+            if (string_length(group_subdir) > 0) {
+                if (string_copy(group_subdir, string_length(group_subdir), 1) != "/") group_subdir += "/";
+                var group_manifest_path = score_dir + group_subdir + "score_images.json";
+                var _group_f = file_text_open_read(group_manifest_path);
+                if (_group_f >= 0) {
+                    var _group_raw = "";
+                    while (!file_text_eof(_group_f)) {
+                        _group_raw += file_text_read_string(_group_f);
+                        file_text_readln(_group_f);
+                    }
+                    file_text_close(_group_f);
+                    var _group_manifest = json_parse(_group_raw);
+                    if (is_struct(_group_manifest)) {
+                        manifest = _group_manifest;
+                        var _merge_fields = ["has_pickup", "snippets", "snippet_durations", "units_per_measure", "beats_per_measure"];
+                        for (var _mfi = 0; _mfi < array_length(_merge_fields); _mfi++) {
+                            var _mkey = _merge_fields[_mfi];
+                            if (variable_struct_exists(root_manifest, _mkey) && !variable_struct_exists(manifest, _mkey)) {
+                                variable_struct_set(manifest, _mkey, variable_struct_get(root_manifest, _mkey));
+                            }
+                        }
+                        score_dir += group_subdir;
+                    }
+                }
+            }
+        }
+
+        // Re-apply selected group metadata over the loaded manifest so the loader keeps
+        // the selected channel/subdir even when the group score_images.json is sparse.
+        if (is_struct(selected_group)) {
+            var _group_fields = ["group", "part_channel", "part_label", "subdir"];
+            for (var _gfi = 0; _gfi < array_length(_group_fields); _gfi++) {
+                var _gkey = _group_fields[_gfi];
+                if (variable_struct_exists(selected_group, _gkey)) {
+                    variable_struct_set(manifest, _gkey, variable_struct_get(selected_group, _gkey));
+                }
+            }
+        }
 
     var images = manifest.images;
     for (var i = 0; i < array_length(images); i++) {
@@ -596,4 +723,21 @@ function scr_score_group_bundle_load(_transition_filename, _group_manifest, _cou
         count_measures: max(0, real(_count_measures)),
         pickup_image_index: real(_group_manifest[$ "pickup_image_index"] ?? -1)
     };
+}
+
+/// @function scr_score_sprites_reload_current_tune()
+/// @description Reload score sprites for the currently loaded tune using the active selected player part channel.
+/// @returns {bool} True if a current tune was found and reloaded.
+/// @reads global.tune, global.tune.tune_data.filename, global.tune.tune_data.score_manifest
+/// @writes global.score_lane_sprites, global.score_playback_map, global.score_measure_map, global.score_lane_meta, global.score_transition_images, global.score_snippet_durations, global.score_has_pickup
+function scr_score_sprites_reload_current_tune() {
+    if (!variable_global_exists("tune") || !instance_exists(global.tune)) return false;
+    var _tune_data = variable_instance_get(global.tune, "tune_data");
+    if (!is_struct(_tune_data)) return false;
+
+    var _filename = string(_tune_data[$ "filename"] ?? "");
+    if (_filename == "") return false;
+
+    scr_score_sprites_load(_filename, _tune_data[$ "score_manifest"] ?? undefined);
+    return true;
 }

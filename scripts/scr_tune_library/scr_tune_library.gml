@@ -296,6 +296,14 @@ function scr_tune_picker_set_selected_part_channel(_entry, _channel = -1)
 
     scr_tune_picker_set_instance_var(picker, "selected_part_channel", part_channel);
     global.selected_player_tune_channel = part_channel;
+
+    // Keep the active score image window aligned with the selected part whenever a loaded tune is available.
+    if (variable_global_exists("tune") && instance_exists(global.tune)) {
+        var _tune_data = variable_instance_get(global.tune, "tune_data");
+        if (is_struct(_tune_data) && string(_tune_data[$ "filename"] ?? "") != "") {
+            scr_score_sprites_reload_current_tune();
+        }
+    }
     return true;
 }
 
