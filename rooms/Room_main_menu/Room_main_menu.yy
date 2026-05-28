@@ -140,6 +140,10 @@
     {"name":"setting_field_cal_input","path":"roomui/RoomUI/RoomUI.yy",},
     {"name":"calibration_input_right_button","path":"roomui/RoomUI/RoomUI.yy",},
     {"name":"calibration_input_right_button_10","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"gameinfo_timeline_visibility_anchor","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"setting_Lbutton_tune_root","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"setting_field_tune_root","path":"roomui/RoomUI/RoomUI.yy",},
+    {"name":"setting_Rbutton_tune_root","path":"roomui/RoomUI/RoomUI.yy",},
   ],
   "isDnd":false,
   "layers":[

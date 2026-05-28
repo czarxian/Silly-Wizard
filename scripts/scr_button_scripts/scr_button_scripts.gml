@@ -56,6 +56,8 @@
 			case 35: scr_calibration_save_profile(ctx); break;
 			case 36: scr_calibration_toggle_advanced(ctx); break;
 			case 37: scr_calibration_apply_profile(ctx); break;
+			case 38: scr_settings_data_root_set(ctx); break;
+			case 39: scr_settings_data_root_reset_auto(ctx); break;
 			// Compatibility aliases for calibration controls if RoomUI script indices drift.
 			case 78: scr_calibration_test_preview(ctx); break;
 			case 92: scr_calibration_mode_change(ctx); break;
@@ -606,15 +608,24 @@
 	/// @description Emit BPM diagnostics to Output and ALWAYS to dedicated bpm_trace.log file (independent of Logs toggle).
 	/// @param {string} _line Text line to log
 	/// @reads none
-	/// @writes file at bpm_trace.log (append)
+	/// @writes file at <primary_data_root>/debug/bpm_trace.log (append)
 	/// @objects none
 	/// @callers scr_tune_bpm_change, scr_button_prepare_single_tune_playback_events, start_play
 	function scr_button_bpm_debug_log(_line) {
 		var _msg = string(_line);
 		show_debug_message(_msg);
 
-		// ALWAYS write to dedicated BPM trace file (absolute path in AppData)
-		var _log_path = "C:\\Users\\xian\\AppData\\Local\\Silly_Wizard\\bpm_trace.log";
+		// ALWAYS write to dedicated BPM trace file in runtime-relative debug folder.
+		var _log_dir = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+			? scr_data_paths_get_category_root("debug")
+			: "datafiles/debug/";
+		if (string_copy(_log_dir, string_length(_log_dir), 1) == "/") {
+			_log_dir = string_copy(_log_dir, 1, string_length(_log_dir) - 1);
+		}
+		if (!directory_exists(_log_dir)) {
+			directory_create(_log_dir);
+		}
+		var _log_path = _log_dir + "/bpm_trace.log";
 		var _f = file_text_open_append(_log_path);
 		if (_f != -1) {
 			file_text_write_string(_f, _msg + "\n");
@@ -1492,6 +1503,7 @@
 			
 			metronome_update_pattern_list(time_sig);
 			scr_button_calibration_refresh_ui();
+			scr_settings_refresh_data_root_field();
 		}
 
 		if (layer_name == "calibration_window_layer") {
@@ -1702,6 +1714,150 @@
 		global.timeline_cfg.score_lane_debug_file_log = logs_enabled;
 
 		show_debug_message("[SETTINGS] Logs " + (logs_enabled ? "ON" : "OFF"));
+	}
+
+	/// @function scr_settings_refresh_data_root_field()
+	/// @description Refresh the settings field text for primary data root mode (AUTO/CUSTOM) and current resolved root.
+	/// @reads global.primary_data_root_override
+	/// @writes obj_field_base.field_value/field_contents for setting_field_tune_root
+	/// @objects obj_field_base
+	/// @callers scr_open_window, scr_settings_data_root_set, scr_settings_data_root_reset_auto
+	function scr_settings_refresh_data_root_field() {
+		var field = scr_button_find_field_by_ui_name("setting_field_tune_root");
+		if (!instance_exists(field)) return;
+
+		var override_root = "";
+		if (variable_global_exists("primary_data_root_override")) {
+			override_root = scr_tune_library_normalize_root(global.primary_data_root_override);
+		}
+
+		var resolved_root = script_exists(asset_get_index("scr_data_paths_get_primary_root"))
+			? scr_data_paths_get_primary_root()
+			: "datafiles/";
+
+		var contents = (override_root != "")
+			? ("CUSTOM: " + override_root)
+			: ("AUTO: " + resolved_root);
+
+		scr_button_field_set(field, "field_min_value", 0);
+		scr_button_field_set(field, "field_max_value", 0);
+		scr_button_field_set(field, "field_value", 0);
+		scr_button_field_set(field, "field_contents", contents);
+	}
+
+	/// @function scr_settings_data_root_set(_ctx)
+	/// @description Set a custom primary data root (folder path prompt with optional file-picker assist), persist to runtime_paths JSON, and regenerate the tune library.
+	/// @param _ctx Button context
+	/// @reads global.primary_data_root_override
+	/// @writes global.primary_data_root_override, runtime_paths.json mirrors, global.tune_library
+	/// @objects obj_field_base
+	/// @callers scr_handle_button_click (button 38)
+	function scr_settings_data_root_set(_ctx = noone) {
+		var seed = "";
+		if (variable_global_exists("primary_data_root_override")) {
+			seed = scr_tune_library_normalize_root(global.primary_data_root_override);
+		}
+		if (seed == "" && script_exists(asset_get_index("scr_data_paths_get_primary_root"))) {
+			seed = scr_data_paths_get_primary_root();
+		}
+
+		var picked = "";
+		var picker_filter = "All files (*.*)|*.*";
+
+		// Primary UX: direct folder path entry (root settings should not require selecting a file).
+		var raw = get_string("Primary data root folder path", seed);
+		raw = string(raw);
+
+		// Optional assist: if left blank, allow picking any file under the desired root.
+		if (string_trim(raw) == "") {
+			if (seed != "" && directory_exists(seed)) {
+				picked = get_open_filename(picker_filter, seed + "pick_any_file.tmp");
+			}
+			if (string_trim(string(picked)) == "") {
+				picked = get_open_filename(picker_filter, "");
+			}
+			raw = string(picked);
+		}
+		raw = string(raw);
+		if (string_trim(raw) == "") return;
+
+		var root = scr_tune_library_normalize_root(raw);
+		if (root != "" && !directory_exists(root) && file_exists(root)) {
+			root = scr_tune_library_normalize_root(scr_tune_library_get_parent_dir(root));
+		}
+
+		// Accept either direct data root (.../datafiles/) or project root (.../) containing datafiles/tunes.
+		if (root != "" && !directory_exists(root + "tunes/") && directory_exists(root + "datafiles/tunes/")) {
+			root = scr_tune_library_normalize_root(root + "datafiles/");
+		}
+
+		if (root == "") return;
+		if (!directory_exists(root)) {
+			show_message("Could not access selected folder:\n" + root);
+			return;
+		}
+
+		var tunes_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+			? scr_tune_library_normalize_root(root + "tunes/")
+			: (root + "tunes/");
+
+		if (!directory_exists(tunes_root)) {
+			show_debug_message("[SETTINGS] Data root rejected (missing /tunes folder): " + root);
+			show_message("Could not find a tunes folder under:\n" + root + "\n\nPick your primary data root (the folder that contains tunes, sets, config, debug, performances).\nIf you selected the project root, pick the datafiles folder instead.");
+			return;
+		}
+		if (!scr_tune_library_root_has_json_content(tunes_root)) {
+			show_debug_message("[SETTINGS] Data root accepted but /tunes has no tune JSON yet: " + root);
+		}
+
+		global.primary_data_root_override = root;
+		global.tune_library_root_override = root + "tunes/";
+		if (script_exists(asset_get_index("scr_data_paths_save_primary_root_to_config"))) {
+			scr_data_paths_save_primary_root_to_config(root);
+		} else if (script_exists(asset_get_index("scr_tune_library_save_root_override_to_config"))) {
+			scr_tune_library_save_root_override_to_config(root + "tunes/");
+		}
+
+		scr_regenerate_tune_library();
+		scr_settings_refresh_data_root_field();
+		show_debug_message("[SETTINGS] Primary data root set: " + root);
+	}
+
+	/// @function scr_settings_data_root_reset_auto(_ctx)
+	/// @description Clear custom primary data root override, persist AUTO mode to runtime_paths JSON, and regenerate the tune library.
+	/// @param _ctx Button context
+	/// @writes global.primary_data_root_override, runtime_paths.json mirrors, global.tune_library
+	/// @callers scr_handle_button_click (button 39)
+	function scr_settings_data_root_reset_auto(_ctx = noone) {
+		global.primary_data_root_override = "";
+		global.tune_library_root_override = "";
+		if (script_exists(asset_get_index("scr_data_paths_save_primary_root_to_config"))) {
+			scr_data_paths_save_primary_root_to_config("");
+		} else if (script_exists(asset_get_index("scr_tune_library_save_root_override_to_config"))) {
+			scr_tune_library_save_root_override_to_config("");
+		}
+
+		scr_regenerate_tune_library();
+		scr_settings_refresh_data_root_field();
+		show_debug_message("[SETTINGS] Primary data root reset to AUTO");
+	}
+
+	/// @function scr_settings_refresh_tune_root_field()
+	/// @description Backward-compatible alias.
+	function scr_settings_refresh_tune_root_field() {
+		scr_settings_refresh_data_root_field();
+	}
+
+	/// @function scr_settings_tune_root_set(_ctx)
+	/// @description Backward-compatible alias.
+	function scr_settings_tune_root_set(_ctx = noone) {
+		scr_settings_data_root_set(_ctx);
+	}
+
+	/// @function scr_settings_tune_root_reset_auto(_ctx)
+	/// @description Backward-compatible alias.
+	function scr_settings_tune_root_reset_auto(_ctx = noone) {
+		scr_settings_data_root_reset_auto(_ctx);
 	}
 
 	//CASE 32 - Manual calibration offset nudge (+/- 1ms) for audio/visual fields
@@ -2111,6 +2267,13 @@
 			if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
 				scoring_player_settings_save_for_player();
 			}
+			if (!scr_button_is_set_mode()) {
+				var save_override_script = asset_get_index("scoring_tune_override_save_current");
+				if (script_exists(save_override_script)) {
+					var override_filename = scr_button_get_single_tune_override_target_filename();
+					script_execute(save_override_script, override_filename);
+				}
+			}
 			show_debug_message("Notebeam zoom step: " + string(steps));
 		}
 	}
@@ -2239,7 +2402,12 @@
 		}
 
 		var deleted_summaries = 0;
-		var perf_root = "datafiles/performances";
+		var perf_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+			? scr_data_paths_get_category_root("performances")
+			: "datafiles/performances/";
+		if (string_copy(perf_root, string_length(perf_root), 1) == "/") {
+			perf_root = string_copy(perf_root, 1, string_length(perf_root) - 1);
+		}
 
 		// --- 1. Delete player's summary JSON files from all tune folders ---
 		if (directory_exists(perf_root)) {
@@ -2377,7 +2545,9 @@
 			array_push(candidates, library_root + _filename);
 		}
 		array_push(candidates, "tunes/" + _filename);
-		array_push(candidates, "datafiles/tunes/" + _filename);
+		array_push(candidates, (script_exists(asset_get_index("scr_data_paths_get_category_root"))
+			? scr_data_paths_get_category_root("tunes")
+			: "datafiles/tunes/") + _filename);
 		return candidates;
 	}
 
@@ -2936,8 +3106,12 @@
 	/// @objects obj_tune_picker (refreshes visible rows)
 	/// @callers scr_handle_button_click (button 12)
 	function scr_regenerate_tune_library(){
-		// Sandbox disabled — scan project datafiles directly
-		scr_build_tune_library("C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/");
+		var _tune_root = script_exists(asset_get_index("scr_tune_library_get_runtime_root"))
+			? scr_tune_library_get_runtime_root()
+			: (script_exists(asset_get_index("scr_data_paths_get_category_root"))
+				? scr_data_paths_get_category_root("tunes")
+				: "datafiles/tunes/");
+		scr_build_tune_library(_tune_root);
 		var library = scr_load_tune_library();
 		global.tune_library = library;
 		var picker = instance_find(obj_tune_picker, 0);
@@ -2961,11 +3135,14 @@
 	/// @callers scr_handle_button_click (button 13)
 	function export_event_history() {
 		var export_info = event_history_get_export_info();
-		if (!directory_exists(export_info.folder)) {
-			directory_create(export_info.folder);
+		var export_folder = string(scr_button_struct_get(export_info, "folder", ""));
+		var export_csv_path = string(scr_button_struct_get(export_info, "csv_path", ""));
+		var export_summary_path = string(scr_button_struct_get(export_info, "summary_path", ""));
+		if (export_folder != "" && !directory_exists(export_folder)) {
+			directory_create(export_folder);
 		}
-	    event_history_export_csv(export_info.csv_path);
-		event_history_export_summary_json(export_info.summary_path, export_info);
+	    event_history_export_csv(export_csv_path);
+		event_history_export_summary_json(export_summary_path, export_info);
 		if (is_undefined(event_history_export_loop_session_json) == false) {
 			event_history_export_loop_session_json(export_info);
 		}

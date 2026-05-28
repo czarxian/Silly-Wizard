@@ -1232,8 +1232,11 @@ function tune_export_playable_events_csv(_playable_array, _tune_filename) {
 	}
 	filename = "playable_events_" + filename + ".csv";
 	
-	// Save to datafiles folder using relative path (GameMaker sandboxing restriction)
-	var filepath = "datafiles/" + filename;
+	// Save under the primary runtime data root.
+	var data_root = script_exists(asset_get_index("scr_data_paths_get_primary_root"))
+		? scr_data_paths_get_primary_root()
+		: "datafiles/";
+	var filepath = data_root + filename;
 	
 	// Open file for writing
 	var file = file_text_open_write(filepath);

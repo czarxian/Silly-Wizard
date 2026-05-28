@@ -15,6 +15,12 @@ if (gv_is_gameviz_anchor(id)) {
 	exit;
 }
 
+if (variable_instance_exists(id, "ui_name")
+	&& string(variable_instance_get(id, "ui_name")) == "gameinfo_timeline_visibility_anchor") {
+	gv_handle_gameinfo_timeline_visibility_click(_mx_gui, _my_gui, bbox_left, bbox_top, bbox_right, bbox_bottom);
+	exit;
+}
+
 if (gv_is_notebeam_anchor(id)) {
 	gv_handle_notebeam_click(_mx_gui, _my_gui, bbox_left, bbox_top, bbox_right, bbox_bottom);
 	exit;

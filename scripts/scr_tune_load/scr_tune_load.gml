@@ -253,11 +253,12 @@ function scr_score_manifest_read(_filename) {
     // score_images.json has no pickup awareness; the snippets bundle does.
     var base_name = "";
     var last_slash2 = 0;
+    var _tune_base = "";
     for (var _c2 = 1; _c2 <= string_length(_filename); _c2++) {
         if (string_copy(_filename, _c2, 1) == "/") last_slash2 = _c2;
     }
     if (last_slash2 > 0) {
-        var _tune_base = string_copy(_filename, last_slash2 + 1, string_length(_filename) - last_slash2);
+        _tune_base = string_copy(_filename, last_slash2 + 1, string_length(_filename) - last_slash2);
         _tune_base = string_replace(_tune_base, ".json", "");
         var _snippets_path = tune_dir + _tune_base + ".score_snippets.json";
         var _sf = file_text_open_read(_snippets_path);

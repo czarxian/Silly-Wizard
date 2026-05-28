@@ -50,14 +50,16 @@ function scoring_get_selected_part_key() {
 }
 
 /// @function scoring_calibration_debug_log(_line)
-/// @description Write calibration diagnostic to calibration_debug.log file in datafiles/debug.
+/// @description Write calibration diagnostic to calibration_debug.log file in primary data root debug folder.
 /// @param {string} _line Text line to log
 function scoring_calibration_debug_log(_line) {
     var _msg = string(_line);
     show_debug_message("[CALIB_LOG] " + _msg);  // Always show in output for visibility
     
-    // Write to relative path (GameMaker resolves relative to working_directory which is C:\Users\xian\AppData\Local\Silly_Wizard\)
-    var _log_path = "datafiles/debug/calibration_debug.log";
+    var _debug_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("debug")
+        : "datafiles/debug/";
+    var _log_path = _debug_root + "calibration_debug.log";
     var _f = file_text_open_append(_log_path);
     if (_f != -1) {
         file_text_write_string(_f, _msg + "\n");
@@ -981,12 +983,13 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
     var _is_set = variable_global_exists("playback_context")
         && is_struct(global.playback_context)
         && string(global.playback_context[$ "mode"] ?? "") == "set";
+    var _score_by_seg = [];
 
     if (_is_set) {
         var _segs = global.playback_context[$ "segments"];
         if (!is_array(_segs)) _segs = [];
         var _seg_count = array_length(_segs);
-        var _score_by_seg = array_create(_seg_count, undefined);
+        _score_by_seg = array_create(_seg_count, undefined);
         var _seg_score_cache = variable_global_exists("score_segments_sprites")
             ? global.score_segments_sprites
             : [];
@@ -1821,7 +1824,13 @@ function scoring_profile_get_player_id(_player_id = undefined) {
 /// @description Return the root config directory path ("datafiles/config").
 /// @returns {string}  Root folder path
 function scoring_profile_get_root_folder() {
-    return "datafiles/config";
+    var config_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("config")
+        : "datafiles/config/";
+    if (string_copy(config_root, string_length(config_root), 1) == "/") {
+        config_root = string_copy(config_root, 1, string_length(config_root) - 1);
+    }
+    return config_root;
 }
 
 /// @function scoring_profile_get_player_folder(_player_id)
@@ -2352,7 +2361,9 @@ function scoring_tune_overrides_save_for_player(_player_id = undefined) {
             tune_key: key,
             bpm: real(ov[$ "bpm"] ?? 120),
             swing_mult: real(ov[$ "swing_mult"] ?? 0),
-            gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0)
+            gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0),
+            notebeam_measures_ahead: real(ov[$ "notebeam_measures_ahead"] ?? 2.0),
+            notebeam_measures_behind: real(ov[$ "notebeam_measures_behind"] ?? 1.0)
         });
     }
 
@@ -2393,7 +2404,9 @@ function scoring_tune_overrides_load_for_player(_player_id = undefined) {
             store[$ key] = {
                 bpm: real(ov[$ "bpm"] ?? 120),
                 swing_mult: real(ov[$ "swing_mult"] ?? 0),
-                gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0)
+                gracenote_override_ms: real(ov[$ "gracenote_override_ms"] ?? 0),
+                notebeam_measures_ahead: real(ov[$ "notebeam_measures_ahead"] ?? 2.0),
+                notebeam_measures_behind: real(ov[$ "notebeam_measures_behind"] ?? 1.0)
             };
         }
     }
@@ -2403,11 +2416,11 @@ function scoring_tune_overrides_load_for_player(_player_id = undefined) {
 }
 
 /// @function scoring_tune_override_apply_current(_tune_filename)
-/// @description Apply the stored per-tune override (bpm/swing/gracenote) for the given tune to runtime globals.
+/// @description Apply the stored per-tune override (bpm/swing/gracenote/notebeam zoom) for the given tune to runtime globals.
 /// @param {string} [_tune_filename]  Tune path; falls back to current tune
 /// @returns {bool}  true if override found and applied, false if not found
 /// @reads   global.player_tune_overrides (via get_store)
-/// @writes  global.current_tune_filename, global.current_bpm, global.swing_mult, global.gracenote_override_ms
+/// @writes  global.current_tune_filename, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.timeline_cfg.measures_ahead/measures_behind
 function scoring_tune_override_apply_current(_tune_filename = undefined) {
     var key = scoring_tune_override_key(_tune_filename);
     if (key == "") return false;
@@ -2424,14 +2437,32 @@ function scoring_tune_override_apply_current(_tune_filename = undefined) {
     if (variable_struct_exists(ov, "swing_mult")) global.swing_mult = real(ov[$ "swing_mult"]);
     if (variable_struct_exists(ov, "gracenote_override_ms")) global.gracenote_override_ms = real(ov[$ "gracenote_override_ms"]);
 
+    var _ensure_cfg_idx = asset_get_index("gv_ensure_timeline_cfg_defaults");
+    if (script_exists(_ensure_cfg_idx)) {
+        var _cfg = script_execute(_ensure_cfg_idx);
+        if (is_struct(_cfg)) {
+            if (variable_struct_exists(ov, "notebeam_measures_ahead")) {
+                variable_struct_set(_cfg, "measures_ahead", max(0.25, real(ov[$ "notebeam_measures_ahead"])));
+            }
+            if (variable_struct_exists(ov, "notebeam_measures_behind")) {
+                variable_struct_set(_cfg, "measures_behind", max(0.25, real(ov[$ "notebeam_measures_behind"])));
+            }
+        }
+    }
+
+    var _sync_zoom_idx = asset_get_index("gv_notebeam_sync_window_from_cfg");
+    if (script_exists(_sync_zoom_idx)) {
+        script_execute(_sync_zoom_idx);
+    }
+
     return true;
 }
 
 /// @function scoring_tune_override_save_current(_tune_filename)
-/// @description Save current runtime bpm/swing/gracenote globals into the tune override store and write to disk.
+/// @description Save current runtime bpm/swing/gracenote/notebeam zoom globals into the tune override store and write to disk.
 /// @param {string} [_tune_filename]  Tune path; falls back to current tune
 /// @returns {bool}  true if saved successfully
-/// @reads   global.current_bpm, global.swing_mult, global.gracenote_override_ms
+/// @reads   global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.timeline_cfg.measures_ahead/measures_behind
 /// @writes  global.current_tune_filename, global.player_tune_overrides (via store)
 function scoring_tune_override_save_current(_tune_filename = undefined) {
     var key = scoring_tune_override_key(_tune_filename);
@@ -2440,10 +2471,15 @@ function scoring_tune_override_save_current(_tune_filename = undefined) {
     global.current_tune_filename = key;
 
     var store = scoring_tune_overrides_get_store();
+    var _cfg = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg))
+        ? global.timeline_cfg
+        : {};
     store[$ key] = {
         bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 120,
         swing_mult: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
-        gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0
+        gracenote_override_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
+        notebeam_measures_ahead: variable_struct_exists(_cfg, "measures_ahead") ? real(_cfg[$ "measures_ahead"]) : 2.0,
+        notebeam_measures_behind: variable_struct_exists(_cfg, "measures_behind") ? real(_cfg[$ "measures_behind"]) : 1.0
     };
     global.player_tune_overrides = store;
     return scoring_tune_overrides_save_for_player();

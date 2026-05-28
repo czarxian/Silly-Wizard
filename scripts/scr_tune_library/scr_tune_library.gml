@@ -5,6 +5,374 @@
 
 // Script assets have changed for v2.3.0 see
 // https://help.yoyogames.com/hc/en-us/articles/360005277377 for more information
+/// @function scr_tune_library_get_runtime_root()
+/// @description Resolve tune-library root for scan/load. Uses optional global override first, then runtime candidates.
+/// @returns {string} Root folder path ending with '/'
+/// @reads   global.primary_data_root_override
+/// @writes  none
+/// @objects none
+/// @callers scr_load_tune_library, obj_game_controller Create_0, scr_button_scripts
+function scr_tune_library_normalize_root(_root)
+{
+    var root = string(_root ?? "");
+    root = string_trim(root);
+    root = string_replace_all(root, "\\", "/");
+    if (string_length(root) <= 0) return "";
+    if (string_copy(root, string_length(root), 1) != "/") {
+        root += "/";
+    }
+    return root;
+}
+
+/// @function scr_data_paths_get_primary_root()
+/// @description Resolve the canonical runtime data root. Uses optional override, then auto candidates.
+/// @returns {string} Root folder path ending with '/'
+/// @reads global.primary_data_root_override, global.tune_library_root_override
+/// @writes none
+/// @objects none
+/// @callers scr_tune_library_get_runtime_root, scr_data_paths_get_category_root, path consumers
+function scr_data_paths_get_primary_root()
+{
+    var candidates = array_create(0);
+
+    if (variable_global_exists("primary_data_root_override")) {
+        var primary_override = scr_tune_library_normalize_root(global.primary_data_root_override);
+        if (primary_override != "") array_push(candidates, primary_override);
+    }
+
+    // Backward compatibility for existing config saves.
+    if (variable_global_exists("tune_library_root_override")) {
+        var legacy_override = scr_tune_library_normalize_root(global.tune_library_root_override);
+        if (legacy_override != "") {
+            if (string_pos("/tunes/", legacy_override) > 0) {
+                legacy_override = scr_tune_library_normalize_root(string_replace(legacy_override, "/tunes/", "/"));
+            }
+            array_push(candidates, legacy_override);
+        }
+    }
+
+    array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root(program_directory + "datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root(working_directory + "datafiles/"));
+
+    for (var i = 0; i < array_length(candidates); i++) {
+        var root = candidates[i];
+        if (root == "") continue;
+
+        if (directory_exists(root)) {
+            return root;
+        }
+
+        var alt_root = string_replace_all(root, "/", "\\");
+        if (directory_exists(alt_root)) {
+            return scr_tune_library_normalize_root(alt_root);
+        }
+    }
+
+    var fallback = scr_tune_library_normalize_root("datafiles/");
+    if (fallback == "") fallback = "datafiles/";
+    return fallback;
+}
+
+/// @function scr_data_paths_get_category_root(_category)
+/// @description Resolve category folder under the primary data root.
+/// @param {string} _category Folder name under root (e.g. "tunes", "sets", "config", "debug", "performances")
+/// @returns {string} Category folder path ending with '/'
+function scr_data_paths_get_category_root(_category)
+{
+    var category = string_lower(string_trim(string(_category ?? "")));
+    if (category == "") return scr_data_paths_get_primary_root();
+    return scr_tune_library_normalize_root(scr_data_paths_get_primary_root() + category + "/");
+}
+
+/// @function scr_data_paths_resolve_datafiles_path(_path)
+/// @description Resolve legacy datafiles-relative path to the primary data root.
+/// @param {string} _path Path that may begin with datafiles/
+/// @returns {string} Absolute/relative path resolved against primary data root
+function scr_data_paths_resolve_datafiles_path(_path)
+{
+    var p = string(_path ?? "");
+    p = string_replace_all(p, "\\", "/");
+    var lower = string_lower(p);
+    if (string_pos("datafiles/", lower) == 1) {
+        var suffix = string_copy(p, 11, string_length(p) - 10);
+        return scr_data_paths_get_primary_root() + suffix;
+    }
+    return p;
+}
+
+function scr_tune_library_root_has_json_content(_root)
+{
+    if (_root == "") return false;
+    var scan_root = _root;
+    if (!directory_exists(scan_root)) {
+        var alt_root = string_replace_all(scan_root, "/", "\\");
+        if (directory_exists(alt_root)) {
+            scan_root = alt_root;
+        } else {
+            return false;
+        }
+    }
+
+    if (file_exists(scan_root + "tune_library.json")) return true;
+
+    var f = file_find_first(scan_root + "*.json", 0);
+    if (f != "") {
+        while (f != "") {
+            var lower = string_lower(string(f));
+            if (lower != "tune_library.json"
+                && string_pos(".score_snippets.json", lower) <= 0
+                && string_pos(".score_groups.json", lower) <= 0
+                && string_pos(".score_part", lower) <= 0) {
+                file_find_close();
+                return true;
+            }
+            f = file_find_next();
+        }
+        file_find_close();
+    }
+
+    var subdirs = array_create(0);
+    var d = file_find_first(scan_root + "*", fa_directory);
+    if (d != "") {
+        while (d != "") {
+            if (string_copy(d, 1, 1) != ".") {
+                var sub = scan_root + d;
+                if (directory_exists(sub)) {
+                    if (string_copy(sub, string_length(sub), 1) != "/") sub += "/";
+                    array_push(subdirs, sub);
+                }
+            }
+            d = file_find_next();
+        }
+        file_find_close();
+    }
+
+    for (var i = 0; i < array_length(subdirs); i++) {
+        var sf = file_find_first(subdirs[i] + "*.json", 0);
+        if (sf != "") {
+            while (sf != "") {
+                var sl = string_lower(string(sf));
+                if (sl != "tune_library.json"
+                    && string_pos(".score_snippets.json", sl) <= 0
+                    && string_pos(".score_groups.json", sl) <= 0
+                    && string_pos(".score_part", sl) <= 0) {
+                    file_find_close();
+                    return true;
+                }
+                sf = file_find_next();
+            }
+            file_find_close();
+        }
+    }
+
+    return false;
+}
+
+/// @function scr_tune_library_load_root_override_from_config()
+/// @description Load optional primary data root override from JSON config. Supported keys: primary_data_root_override, tune_library_root_override, or paths.* versions.
+/// @returns {string} Normalized root path ending with '/', or "" when unset/unreadable
+/// @reads   datafiles/config/runtime_paths.json, datafiles/runtime_paths.json, runtime_paths.json
+/// @writes  none
+/// @objects none
+/// @callers obj_game_controller Create_0
+function scr_data_paths_load_primary_root_from_config()
+{
+    var candidates = array_create(0);
+    array_push(candidates, "datafiles/config/runtime_paths.json");
+    array_push(candidates, "datafiles/runtime_paths.json");
+    array_push(candidates, "runtime_paths.json");
+    array_push(candidates, program_directory + "runtime_paths.json");
+    array_push(candidates, program_directory + "datafiles/config/runtime_paths.json");
+    array_push(candidates, working_directory + "runtime_paths.json");
+    array_push(candidates, working_directory + "datafiles/runtime_paths.json");
+    array_push(candidates, working_directory + "datafiles/config/runtime_paths.json");
+
+    for (var i = 0; i < array_length(candidates); i++) {
+        var p = string(candidates[i]);
+        if (!file_exists(p)) continue;
+
+        var f = file_text_open_read(p);
+        if (f < 0) continue;
+
+        var raw = "";
+        while (!file_text_eof(f)) {
+            raw += file_text_read_string(f);
+            file_text_readln(f);
+        }
+        file_text_close(f);
+
+        if (string_trim(raw) == "") continue;
+
+        var parsed = 0;
+        try {
+            parsed = json_parse(raw);
+        } catch (e) {
+            show_debug_message("scr_tune_library_load_root_override_from_config: invalid JSON in " + p + " (" + string(e) + ")");
+            continue;
+        }
+
+        if (!is_struct(parsed)) continue;
+
+        var root = "";
+        if (variable_struct_exists(parsed, "primary_data_root_override")) {
+            root = string(variable_struct_get(parsed, "primary_data_root_override"));
+        } else if (variable_struct_exists(parsed, "tune_library_root_override")) {
+            root = string(variable_struct_get(parsed, "tune_library_root_override"));
+            if (string_pos("/tunes/", root) > 0) {
+                root = string_replace(root, "/tunes/", "/");
+            }
+        } else if (variable_struct_exists(parsed, "paths")) {
+            var paths = variable_struct_get(parsed, "paths");
+            if (is_struct(paths) && variable_struct_exists(paths, "primary_data_root_override")) {
+                root = string(variable_struct_get(paths, "primary_data_root_override"));
+            } else if (is_struct(paths) && variable_struct_exists(paths, "tune_library_root_override")) {
+                root = string(variable_struct_get(paths, "tune_library_root_override"));
+                if (string_pos("/tunes/", root) > 0) {
+                    root = string_replace(root, "/tunes/", "/");
+                }
+            }
+        }
+
+        root = scr_tune_library_normalize_root(root);
+        if (root != "") {
+            show_debug_message("scr_data_paths_load_primary_root_from_config: using " + root + " from " + p);
+            return root;
+        }
+    }
+
+    return "";
+}
+
+/// @function scr_tune_library_load_root_override_from_config()
+/// @description Backward-compatible alias for legacy callers.
+/// @returns {string} Normalized primary data root ending with '/'
+function scr_tune_library_load_root_override_from_config()
+{
+    return scr_data_paths_load_primary_root_from_config();
+}
+
+/// @function scr_tune_library_get_parent_dir(_path)
+/// @description Return the parent directory for a path, normalized to '/'.
+/// @param {string} _path File or folder path.
+/// @returns {string} Parent directory ending with '/', or "" when unavailable.
+function scr_tune_library_get_parent_dir(_path)
+{
+    var path = string(_path ?? "");
+    path = string_replace_all(path, "\\", "/");
+    if (string_length(path) <= 0) return "";
+
+    var last = 0;
+    for (var i = 1; i <= string_length(path); i++) {
+        if (string_copy(path, i, 1) == "/") last = i;
+    }
+
+    if (last <= 0) return "";
+    return string_copy(path, 1, last);
+}
+
+/// @function scr_tune_library_ensure_parent_dir(_filepath)
+/// @description Ensure all parent directories for a filepath exist.
+/// @param {string} _filepath Target filepath.
+/// @returns {bool} True when the parent directory exists or was created.
+function scr_tune_library_ensure_parent_dir(_filepath)
+{
+    var dirpath = scr_tune_library_get_parent_dir(_filepath);
+    if (dirpath == "") return false;
+
+    if (directory_exists(dirpath)) return true;
+
+    var current = "";
+    for (var i = 1; i <= string_length(dirpath); i++) {
+        var ch = string_copy(dirpath, i, 1);
+        current += ch;
+        if (ch != "/") continue;
+
+        if (string_length(current) <= 0) continue;
+        if (string_length(current) == 3 && string_copy(current, 2, 2) == ":/") continue;
+        if (!directory_exists(current)) {
+            directory_create(current);
+        }
+    }
+
+    return directory_exists(dirpath);
+}
+
+/// @function scr_data_paths_save_primary_root_to_config(_root)
+/// @description Persist primary data root override to runtime path config mirrors used by runtime lookup.
+/// @param {string} _root Override root folder (use "" to clear override)
+/// @returns {bool} True when at least one config file write succeeded.
+/// @reads none
+/// @writes datafiles/config/runtime_paths.json, datafiles/runtime_paths.json, runtime_paths.json
+/// @objects none
+/// @callers scr_settings_data_root_set, scr_settings_data_root_reset_auto
+function scr_data_paths_save_primary_root_to_config(_root)
+{
+    var normalized = scr_tune_library_normalize_root(_root);
+    var payload = {
+        primary_data_root_override: normalized,
+        // Keep legacy key while transition is in progress.
+        tune_library_root_override: (normalized != "") ? (normalized + "tunes/") : ""
+    };
+    var raw = json_stringify(payload);
+
+    var paths = [
+        "datafiles/config/runtime_paths.json",
+        "datafiles/runtime_paths.json",
+        "runtime_paths.json"
+    ];
+
+    var wrote_any = false;
+    for (var i = 0; i < array_length(paths); i++) {
+        var p = string(paths[i]);
+        scr_tune_library_ensure_parent_dir(p);
+
+        var f = file_text_open_write(p);
+        if (f < 0) {
+            show_debug_message("scr_data_paths_save_primary_root_to_config: could not write " + p);
+            continue;
+        }
+
+        file_text_write_string(f, raw);
+        file_text_close(f);
+        wrote_any = true;
+    }
+
+    if (!wrote_any) {
+        show_debug_message("scr_data_paths_save_primary_root_to_config: no config targets were writable");
+    }
+
+    return wrote_any;
+}
+
+/// @function scr_tune_library_save_root_override_to_config(_root)
+/// @description Backward-compatible alias for legacy callers.
+/// @param {string} _root Override root folder
+/// @returns {bool} True when write succeeded to any mirror
+function scr_tune_library_save_root_override_to_config(_root)
+{
+    return scr_data_paths_save_primary_root_to_config(_root);
+}
+
+function scr_tune_library_get_runtime_root()
+{
+    var candidates = array_create(0);
+    array_push(candidates, scr_data_paths_get_category_root("tunes"));
+    array_push(candidates, scr_tune_library_normalize_root("tunes/"));
+
+    for (var i = 0; i < array_length(candidates); i++) {
+        var root = candidates[i];
+        if (scr_tune_library_root_has_json_content(root)) {
+            return root;
+        }
+    }
+
+    var fallback = scr_data_paths_get_category_root("tunes");
+    if (fallback == "") fallback = "datafiles/tunes/";
+
+    return fallback;
+}
+
 /// @function scr_load_tune_library()
 /// @description Load tune_library.json from disk. Triggers scr_build_tune_library if player_part_channels metadata is missing. Merges play history stats into each entry.
 /// @returns {struct}  Library struct: {tunes: [], root: string}; empty fallback on failure
@@ -14,9 +382,15 @@
 /// @callers obj_game_controller Create_0 (via scr_build_tune_library), scr_button_scripts
 function scr_load_tune_library()
 {
+    var runtime_root = scr_tune_library_get_runtime_root();
     var candidates = array_create(0);
-    array_push(candidates, "C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/tune_library.json");
-    array_push(candidates, "datafiles/tunes/tune_library.json"); // fallback for non-dev / packaged build
+    array_push(candidates, runtime_root + "tune_library.json");
+    var default_tunes_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("tunes")
+        : "datafiles/tunes/";
+    if (runtime_root != default_tunes_root) {
+        array_push(candidates, default_tunes_root + "tune_library.json"); // packaged/runtime fallback
+    }
 
     for (var i = 0; i < array_length(candidates); i++)
     {
@@ -76,7 +450,7 @@ function scr_load_tune_library()
     }
 
     show_debug_message("ERROR: Could not load tune library.");
-    return { tunes: [], root: "tunes/" };
+    return { tunes: [], root: runtime_root };
 }
 
 /// @function scr_tune_picker_get_tune_id(_entry)
@@ -2644,7 +3018,14 @@ function scr_tune_scan_dir(_folder)
                     var entry_lower = string_lower(entry);
                     var ext = string_lower(string_copy(entry, string_length(entry) - 4, 5));
                     var is_score_snippets = string_pos(".score_snippets.json", entry_lower) > 0;
-                    if (ext == ".json" && entry != "tune_library.json" && entry != "score_images.json" && !is_score_snippets) {
+                    var is_score_groups = string_pos(".score_groups.json", entry_lower) > 0;
+                    var is_score_part = string_pos(".score_part", entry_lower) > 0;
+                    if (ext == ".json"
+                        && entry != "tune_library.json"
+                        && entry != "score_images.json"
+                        && !is_score_snippets
+                        && !is_score_groups
+                        && !is_score_part) {
                         show_debug_message("  found tune: " + fp);
                         array_push(found, fp);
                     }
@@ -3052,7 +3433,7 @@ function scr_set_builder_save(_name)
     var slug = scr_set_slugify(name);
     if (string_length(slug) <= 0) slug = "unnamed_set";
 
-    var folder   = "datafiles/sets/";
+    var folder   = scr_data_paths_get_category_root("sets");
     var filepath = folder + slug + ".json";
 
     // Check for existing file; require explicit confirm before overwriting
@@ -3601,7 +3982,7 @@ function scr_set_builder_handle_click_right(_gui_x, _gui_y)
 function scr_set_builder_scan_saved_sets()
 {
     var picker = scr_set_builder_get_picker();
-    var folder = "datafiles/sets/";
+    var folder = scr_data_paths_get_category_root("sets");
     var result = [];
 
     if (directory_exists(folder)) {

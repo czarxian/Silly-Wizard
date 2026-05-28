@@ -1143,6 +1143,104 @@ Coverage map for requested features
 - Transition tunes (`Dalnahasaig to Strathan Reel` etc.) — `has_pickup` interaction with prior_replace/bridge/follow_replace snippet groups not yet validated.
 - Pickup tunes that are not the first tune in a set — `score_segments_sprites[si].has_pickup` must be confirmed correct for each segment; mid-set restore path (`gv_restore_score_segment_cache`) must be exercised.
 
+### Implementation Update (2026-05-26, Dreams Reprise grouped score export + picker sidecar filtering) — COMPLETE
+
+**Root issues addressed:**
+- Grouped score-image sidecar export for harmony parts was coupled to `V:` header presence in combined ABC, so some tunes did not emit per-part score bundles.
+- Tune library scanner treated generated score sidecars as playable tune JSONs, producing duplicate picker entries with incorrect metadata/part controls.
+
+**Fixes applied:**
+- **VBA (`scripts/Excel - Parse_ABC.txt`):** `BuildScoreImageGroupsJSON` now builds per-part score bundles directly from parts-table rows instead of requiring `V:` headers in merged ABC content.
+- **VBA (`scripts/Excel - Parse_ABC.txt`):** Added `ResolveScoreGroupPartChannel` mapping `melody -> 2`, `harmony1 -> 3`, `harmony2 -> 4`, `harmony3 -> 5` for deterministic per-part export routing.
+- **GML (`scripts/scr_tune_library/scr_tune_library.gml`):** `scr_tune_scan_dir` now excludes score sidecar files `*.score_groups.json` and `*.score_part*.json` in addition to existing `*.score_snippets.json` exclusion.
+- **Index cleanup:** Removed stale sidecar entries from `datafiles/tunes/tune_library.json` so existing duplicate picker rows disappear immediately.
+
+**Verification status:**
+- Export artifacts for Dreams Reprise are present as expected (`.score_groups.json` plus per-part score subfolders/manifests).
+- Tune picker now resolves Dreams Reprise as a single canonical entry (no extra sidecar-derived rows).
+- Visual check passed: score images look correct after re-export.
+- Scoring behavior remains a runtime playthrough validation item.
+
+**Next-session QA focus:**
+- Playthrough sweep for scoring regressions (single tunes + sets).
+- Existing pending pickup validations above remain in scope.
+
+### Implementation Update (2026-05-28, timeline score-lane visibility toggle in game info window) — COMPLETE
+
+**Goal:**
+- Add a game-info-window control to hide timeline score images while keeping beat/measure marker lanes active.
+- Keep control non-interactive during live playback to avoid runtime input overhead and accidental state changes.
+
+**Changes applied:**
+- **GML (`scripts/scr_game_viz/scr_game_viz.gml`):** Added `global.timeline_cfg.timeline_score_visibility_mode` default (`0=score+markers`, `1=markers-only`) in `gv_ensure_timeline_cfg_defaults()`.
+- **GML (`scripts/scr_game_viz/scr_game_viz.gml`):** Added helper/getter/cycle functions and new UI handlers:
+  - `gv_get_timeline_score_visibility_mode()`
+  - `gv_should_draw_timeline_score_images()`
+  - `gv_cycle_timeline_score_visibility_mode()`
+  - `gv_draw_gameinfo_timeline_visibility_panel(...)`
+  - `gv_handle_gameinfo_timeline_visibility_click(...)`
+- **GML (`scripts/scr_game_viz/scr_game_viz.gml`):** Gated score-image rendering in `gv_draw_timeline_canvas_overlay(...)` using `gv_should_draw_timeline_score_images()`, preserving beat-lane guides/markers and now-line behavior.
+- **RoomUI (`roomui/RoomUI/RoomUI.yy`):** Added `gameinfo_timeline_visibility_anchor` instance under `fp_gameinfo_window -> fp_window_body`.
+- **Input/draw routing (`objects/obj_field_base/Draw_0.gml`, `objects/obj_field_base/Mouse_7.gml`):** Wired draw and click handling for the new anchor.
+
+**Behavior contract:**
+- Button is enabled before playback and in post-play review mode.
+- Button is disabled during live playback.
+- Score images can be hidden without affecting beat/measure marker rendering.
+
+### Implementation Update (2026-05-28, Phase 1 per-player per-tune notebeam zoom persistence) — COMPLETE
+
+**Goal:**
+- Persist and restore notebeam zoom per player per tune for single-tune mode, reusing existing `tune_overrides.json` flow.
+- Explicitly leave set mode unchanged in Phase 1.
+
+**Changes applied:**
+- **GML (`scripts/scr_scoring/scr_scoring.gml`):** Extended tune override payload read/write to include:
+  - `notebeam_measures_ahead`
+  - `notebeam_measures_behind`
+- **GML (`scripts/scr_scoring/scr_scoring.gml`):** `scoring_tune_override_apply_current(...)` now applies notebeam zoom fields into `global.timeline_cfg` and syncs timeline window via `gv_notebeam_sync_window_from_cfg()`.
+- **GML (`scripts/scr_scoring/scr_scoring.gml`):** `scoring_tune_override_save_current(...)` now captures current `global.timeline_cfg.measures_ahead/measures_behind` into tune overrides.
+- **GML (`scripts/scr_button_scripts/scr_button_scripts.gml`):** `scr_notebeam_zoom_change(...)` now saves tune overrides after zoom changes when not in set mode.
+
+**Behavior contract:**
+- Single tune mode:
+  - Zoom changes are saved per tune for the active player.
+  - Loading the same tune for that player restores last saved zoom.
+- Set mode:
+  - No new per-tune zoom save/apply behavior added in this phase.
+
+### Implementation Plan (2026-05-28, beta EXE readiness for zipped-folder distribution)
+
+**Distribution decision:**
+- Beta will be distributed as a zipped Windows build folder (Steam-compatible packaging workflow).
+
+**Primary release blocker identified:**
+- Runtime path handling still contains developer-machine absolute paths in startup/rebuild/load/log call sites.
+
+**Plan of record:**
+- Added dedicated execution doc: `BETA_RELEASE_PLAN.md`.
+- Execute in this order:
+  1. Path hardening (remove hardcoded dev absolute paths; keep resolver/fallback behavior)
+  2. Packaging validation from zipped build on a clean machine/profile
+  3. QA gate pass (pending scoring/pickup/transition validations)
+  4. RC metadata polish + beta packaging notes
+
+**Start-now task list:**
+- Replace startup hardcoded tune root with resolver path.
+- Replace manual regenerate hardcoded tune root with resolver path.
+- Remove hardcoded absolute tune_library candidate in loader.
+- Replace hardcoded absolute `bpm_trace.log` location with resolver path.
+- Run zipped-folder smoke test end-to-end.
+
+**Status update (2026-05-28):**
+- Completed: first four path-hardening items above (startup, regenerate, loader candidate, bpm trace path).
+- Next gate: build + zipped-folder smoke test on clean profile/machine.
+
+**Follow-up fix (2026-05-28):**
+- Added `global.tune_library_root_override` (default blank) as a single explicit path override knob for dev/compiler runs.
+- Updated `scr_tune_library_get_runtime_root()` to auto-select the first usable root from override + runtime candidates (`datafiles`, `program_directory`, `working_directory`, `tunes`).
+- Purpose: preserve machine-agnostic beta behavior while restoring tune visibility when runtime-relative roots are empty in IDE runs.
+
 ### Implementation Update (2026-05-04, Option 2 fallback boundary lead-in) — COMPLETE
 
 **Phase 1 & 2 (Cases 1 & 3) DONE:**

@@ -252,6 +252,15 @@ if (ui_name_value == "gameviz_canvas_anchor") {
 	exit;
 }
 
+if (ui_name_value == "gameinfo_timeline_visibility_anchor") {
+	if (sprite_index == noone) {
+		sprite_index = spr_field_item;
+		mask_index = spr_field_item;
+	}
+	gv_draw_gameinfo_timeline_visibility_panel(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	exit;
+}
+
 if (ui_name_value == "gameviz_structure_anchor") {
 	var _anchor_t0_us = get_timer();
 	var _show_loop_structure = variable_global_exists("loop_mode_enabled") && global.loop_mode_enabled;

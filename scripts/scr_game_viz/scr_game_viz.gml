@@ -666,6 +666,10 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "scoring_panel_visible")) {
         variable_struct_set(global.timeline_cfg, "scoring_panel_visible", true);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "timeline_score_visibility_mode")) {
+        // 0 = score + markers, 1 = markers only
+        variable_struct_set(global.timeline_cfg, "timeline_score_visibility_mode", 0);
+    }
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_diag_enabled")) {
             variable_struct_set(global.timeline_cfg, "notebeam_diag_enabled", true);
     }
@@ -1004,6 +1008,129 @@ function gv_get_tune_other_parts_alpha() {
     var cfg = gv_ensure_timeline_cfg_defaults();
     if (!variable_struct_exists(cfg, "tune_other_parts_alpha")) return 0.18;
     return clamp(real(cfg.tune_other_parts_alpha), 0.02, 1);
+}
+
+/// @function gv_get_timeline_score_visibility_mode()
+/// @description Return the timeline score-lane visibility mode.
+/// @returns {real} 0 = score + markers, 1 = markers only.
+/// @reads  global.timeline_cfg.timeline_score_visibility_mode
+function gv_get_timeline_score_visibility_mode() {
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var mode = variable_struct_exists(cfg, "timeline_score_visibility_mode")
+        ? floor(real(variable_struct_get(cfg, "timeline_score_visibility_mode")))
+        : 0;
+    if (mode < 0 || mode > 1) mode = 0;
+    return mode;
+}
+
+/// @function gv_should_draw_timeline_score_images()
+/// @description Return true when timeline score images should be drawn.
+/// @returns {bool}
+/// @reads  global.timeline_cfg.timeline_score_visibility_mode
+function gv_should_draw_timeline_score_images() {
+    return gv_get_timeline_score_visibility_mode() == 0;
+}
+
+/// @function gv_cycle_timeline_score_visibility_mode()
+/// @description Toggle timeline score visibility between score+markers and markers-only.
+/// @returns {real} New mode value.
+/// @writes global.timeline_cfg.timeline_score_visibility_mode
+function gv_cycle_timeline_score_visibility_mode() {
+    var cfg = gv_ensure_timeline_cfg_defaults();
+    var cur_mode = gv_get_timeline_score_visibility_mode();
+    var next_mode = (cur_mode == 0) ? 1 : 0;
+    variable_struct_set(cfg, "timeline_score_visibility_mode", next_mode);
+    return next_mode;
+}
+
+/// @function gv_draw_gameinfo_timeline_visibility_panel(_x1, _y1, _x2, _y2)
+/// @description Draw the timeline visibility toggle in the game-info window.
+/// @param {real} _x1 Left edge.
+/// @param {real} _y1 Top edge.
+/// @param {real} _x2 Right edge.
+/// @param {real} _y2 Bottom edge.
+/// @reads  global.timeline_cfg, global.timeline_state
+function gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2) {
+    // Reserve a 2x2 layout footprint and use the top-left cell for this button.
+    var pad = 6;
+    var gap = 6;
+    var left = _x1 + pad;
+    var top = _y1 + pad;
+    var right = _x2 - pad;
+    var bottom = _y2 - pad;
+
+    if (right <= left) right = left + 1;
+    if (bottom <= top) bottom = top + 1;
+
+    var avail_w = right - left;
+    var avail_h = bottom - top;
+    var tile_w = max(1, floor((avail_w - gap) * 0.5));
+    var tile_h = max(1, floor((avail_h - gap) * 0.5));
+
+    return [left, top, left + tile_w, top + tile_h];
+}
+
+function gv_draw_gameinfo_timeline_visibility_panel(_x1, _y1, _x2, _y2) {
+    var rect = gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2);
+
+    var mode = gv_get_timeline_score_visibility_mode();
+    var score_images_visible = (mode == 0);
+    var can_interact = gv_gameviz_controls_can_interact();
+    var label = score_images_visible ? "Score" : "Marker";
+
+    draw_set_font(fnt_setting);
+
+    var x1 = rect[0];
+    var y1 = rect[1];
+    var x2 = rect[2];
+    var y2 = rect[3];
+
+    if (!can_interact) {
+        draw_set_colour(make_colour_rgb(42, 42, 42));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(88, 88, 88));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(make_colour_rgb(150, 150, 150));
+    } else if (score_images_visible) {
+        draw_set_colour(make_colour_rgb(66, 66, 66));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(190, 190, 190));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(make_colour_rgb(214, 214, 214));
+    } else {
+        draw_set_colour(make_colour_rgb(52, 52, 52));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(170, 170, 170));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(make_colour_rgb(206, 206, 206));
+    }
+
+    draw_set_halign(fa_center);
+    draw_set_valign(fa_middle);
+    draw_text((x1 + x2) * 0.5, (y1 + y2) * 0.5, label);
+    draw_set_halign(fa_left);
+    draw_set_valign(fa_top);
+}
+
+/// @function gv_handle_gameinfo_timeline_visibility_click(_mx, _my, _x1, _y1, _x2, _y2)
+/// @description Handle click for the game-info timeline visibility toggle.
+/// @param {real} _mx Mouse X.
+/// @param {real} _my Mouse Y.
+/// @param {real} _x1 Left edge.
+/// @param {real} _y1 Top edge.
+/// @param {real} _x2 Right edge.
+/// @param {real} _y2 Bottom edge.
+/// @returns {bool} True if click was consumed.
+/// @reads  global.timeline_state
+/// @writes global.timeline_cfg.timeline_score_visibility_mode
+function gv_handle_gameinfo_timeline_visibility_click(_mx, _my, _x1, _y1, _x2, _y2) {
+    var rect = gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2);
+
+    if (!gv_gameviz_point_in_rect(_mx, _my, rect)) return false;
+    if (!gv_gameviz_controls_can_interact()) return false;
+
+    gv_cycle_timeline_score_visibility_mode();
+    return true;
 }
 
 /// @function gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2)
@@ -8177,7 +8304,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
     // Score images: re-enabled with geometry metadata support (Milestone D-1, B-4)
     // Keep this scoped to active playback; beat lane still draws below even when inactive.
-    if (is_active && staff_h > 8) {
+    if (is_active && staff_h > 8 && gv_should_draw_timeline_score_images()) {
         // Score background
         draw_set_alpha(1);
         draw_set_color(make_color_rgb(80, 80, 80));

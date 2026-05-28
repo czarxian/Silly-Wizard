@@ -33,8 +33,30 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
 }
 
 //Create Globals
-	// Sandbox disabled — scan project datafiles directly so new exports are always found without GMS registration
-	scr_build_tune_library("C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/tunes/");
+	// Optional primary data root override loaded from JSON config (runtime_paths.json).
+	// Leave unset/blank in config to use auto-detection/runtime defaults.
+	if (!variable_global_exists("primary_data_root_override")) {
+		var _cfg_root_override = "";
+		if (script_exists(asset_get_index("scr_data_paths_load_primary_root_from_config"))) {
+			_cfg_root_override = scr_data_paths_load_primary_root_from_config();
+		} else if (script_exists(asset_get_index("scr_tune_library_load_root_override_from_config"))) {
+			_cfg_root_override = scr_tune_library_load_root_override_from_config();
+		}
+		global.primary_data_root_override = _cfg_root_override;
+	}
+
+	// Legacy mirror while migration is in progress.
+	if (!variable_global_exists("tune_library_root_override")) {
+		global.tune_library_root_override = (global.primary_data_root_override != "")
+			? (global.primary_data_root_override + "tunes/")
+			: "";
+	}
+
+	// Build tune library using runtime-resolved root (supports zipped/package distribution).
+	var _tune_root = script_exists(asset_get_index("scr_tune_library_get_runtime_root"))
+		? scr_tune_library_get_runtime_root()
+		: "datafiles/tunes/";
+	scr_build_tune_library(_tune_root);
 	global.emb_library = load_embellishment_library("embellishments.json");
 
 	// Initialize game visualization controls

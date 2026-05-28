@@ -3017,13 +3017,46 @@ Private Function BuildScoreSnippetsJSON(ws As Worksheet, ByVal fullABC As String
 End Function
 
 Private Function BuildScoreImageGroupsJSON(ws As Worksheet, ByVal fullABC As String, ByVal tuneDir As String, ByVal scoreDir As String, ByVal tuneName As String) As String
-    If Not ABCHasVoiceHeaders(fullABC) Then
-        BuildScoreImageGroupsJSON = ""
-        Exit Function
-    End If
-
     Dim header As String
     header = ExtractABCHeaderBlock(fullABC)
+
+    ' Build per-channel ABC directly from parts-table rows so grouped export
+    ' does not depend on V: voice headers being present in the combined ABC.
+    Dim bodyPart2 As String
+    Dim bodyPart3 As String
+    Dim bodyPart4 As String
+    Dim bodyPart5 As String
+    bodyPart2 = ""
+    bodyPart3 = ""
+    bodyPart4 = ""
+    bodyPart5 = ""
+
+    Dim r As Long
+    For r = PART_TABLE_FIRST_ROW To PART_TABLE_MAX_ROW
+        Dim partType As String
+        Dim abcText As String
+        Dim channelFromPart As Long
+
+        partType = LCase$(Trim$(CStr(ws.Cells(r, PART_TABLE_TYPE_COL).Value)))
+        channelFromPart = ResolveScoreGroupPartChannel(partType)
+        If channelFromPart = 0 Then GoTo NextGroupPartRow
+
+        abcText = Trim$(CStr(ws.Cells(r, PART_TABLE_ABC_COL).Value))
+        If abcText = "" Then GoTo NextGroupPartRow
+
+        Select Case channelFromPart
+            Case 2
+                bodyPart2 = AppendABCBodyLine(bodyPart2, abcText)
+            Case 3
+                bodyPart3 = AppendABCBodyLine(bodyPart3, abcText)
+            Case 4
+                bodyPart4 = AppendABCBodyLine(bodyPart4, abcText)
+            Case 5
+                bodyPart5 = AppendABCBodyLine(bodyPart5, abcText)
+        End Select
+
+NextGroupPartRow:
+    Next r
 
     Dim json As String
     Dim firstGroup As Boolean
@@ -3033,11 +3066,19 @@ Private Function BuildScoreImageGroupsJSON(ws As Worksheet, ByVal fullABC As Str
 
     Dim channel As Long
     For channel = 2 To 5
-        Dim voiceIdx As String
-        voiceIdx = CStr(channel - 1)
-
         Dim voiceBody As String
-        voiceBody = PrepareABCForVoice(fullABC, voiceIdx)
+        Select Case channel
+            Case 2
+                voiceBody = bodyPart2
+            Case 3
+                voiceBody = bodyPart3
+            Case 4
+                voiceBody = bodyPart4
+            Case 5
+                voiceBody = bodyPart5
+            Case Else
+                voiceBody = ""
+        End Select
         If Trim$(voiceBody) = "" Then GoTo NextGroupChannel
 
         Dim groupName As String
@@ -3075,6 +3116,21 @@ NextGroupChannel:
 
     json = json & vbCrLf & "  ]" & vbCrLf & "}"
     BuildScoreImageGroupsJSON = json
+End Function
+
+Private Function ResolveScoreGroupPartChannel(ByVal partType As String) As Long
+    Select Case LCase$(Trim$(partType))
+        Case "melody"
+            ResolveScoreGroupPartChannel = 2
+        Case "harmony1"
+            ResolveScoreGroupPartChannel = 3
+        Case "harmony2"
+            ResolveScoreGroupPartChannel = 4
+        Case "harmony3"
+            ResolveScoreGroupPartChannel = 5
+        Case Else
+            ResolveScoreGroupPartChannel = 0
+    End Select
 End Function
 
 Private Function ABCHasVoiceHeaders(ByVal abcText As String) As Boolean

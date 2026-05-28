@@ -202,6 +202,9 @@ function event_history_normalize_tune_filename(_filename_or_path) {
     path = string_replace_all(path, "\\", "/");
     var lower = string_lower(path);
     var markers = ["datafiles/tunes/", "tunes/"];
+    if (script_exists(asset_get_index("scr_data_paths_get_category_root"))) {
+        array_push(markers, string_lower(scr_data_paths_get_category_root("tunes")));
+    }
 
     for (var i = 0; i < array_length(markers); i++) {
         var marker = markers[i];
@@ -249,7 +252,10 @@ function event_history_format_play_date(_stamp) {
 /// @function event_history_get_tune_history_index_path()
 /// @description Path for the persistent tune-library history index.
 function event_history_get_tune_history_index_path() {
-    return "datafiles/performances/tune_history_index.json";
+    var perf_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    return perf_root + "tune_history_index.json";
 }
 
 /// @function event_history_default_tune_history_index()
@@ -307,7 +313,12 @@ function event_history_load_tune_history_index() {
 function event_history_store_tune_history_index(_index) {
     if (!is_struct(_index)) return false;
 
-    var folder = "datafiles/performances";
+    var folder = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    if (string_copy(folder, string_length(folder), 1) == "/") {
+        folder = string_copy(folder, 1, string_length(folder) - 1);
+    }
     if (!directory_exists(folder)) {
         directory_create(folder);
     }
@@ -434,7 +445,10 @@ function event_history_get_export_info(_timestamp = "") {
         timestamp = event_history_format_timestamp();
     }
 
-    var folder = "datafiles/performances/" + clean_tune;
+    var perf_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    var folder = perf_root + clean_tune;
     var base_name = clean_tune + "_" + timestamp + "_" + string(bpm) + "_" + swing + "_" + string(grace_override_ms);
 
     return {
@@ -771,8 +785,14 @@ function event_history_build_structure_debug_snapshot(_entry_limit = 80, _beat_l
 /// @callers scr_button_scripts or scr_tune_scripts (end-of-tune export)
 function event_history_export_summary_json(_filename_or_path, _export_info = undefined) {
     var filepath = _filename_or_path;
-    if (string_pos("datafiles/", filepath) != 1) {
-        filepath = "datafiles/" + filepath;
+    if (script_exists(asset_get_index("scr_data_paths_resolve_datafiles_path"))) {
+        filepath = scr_data_paths_resolve_datafiles_path(filepath);
+    }
+    if (string_pos("datafiles/", filepath) != 1 && string_pos("/", filepath) == 0) {
+        var base_root = script_exists(asset_get_index("scr_data_paths_get_primary_root"))
+            ? scr_data_paths_get_primary_root()
+            : "datafiles/";
+        filepath = base_root + filepath;
     }
 
     var export_info = is_struct(_export_info)
@@ -1093,7 +1113,10 @@ function event_history_load_recent_summaries(_clean_tune, _bpm, _swing, _max_cou
         return results;
     }
 
-    var folder = "datafiles/performances/" + clean_tune;
+    var perf_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    var folder = perf_root + clean_tune;
     if (!directory_exists(folder)) {
         return results;
     }
@@ -1249,8 +1272,14 @@ function event_history_enrich(_events) {
 
 function event_history_export_csv(_filename_or_path) {
     var filepath = _filename_or_path;
-    if (string_pos("datafiles/", filepath) != 1) {
-        filepath = "datafiles/" + filepath;
+    if (script_exists(asset_get_index("scr_data_paths_resolve_datafiles_path"))) {
+        filepath = scr_data_paths_resolve_datafiles_path(filepath);
+    }
+    if (string_pos("datafiles/", filepath) != 1 && string_pos("/", filepath) == 0) {
+        var base_root = script_exists(asset_get_index("scr_data_paths_get_primary_root"))
+            ? scr_data_paths_get_primary_root()
+            : "datafiles/";
+        filepath = base_root + filepath;
     }
     var file = file_text_open_write(filepath);
     
