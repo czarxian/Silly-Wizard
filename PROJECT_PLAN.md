@@ -1326,6 +1326,10 @@ Coverage map for requested features
 - Updated `scr_tune_library_get_runtime_root()` to auto-select the first usable root from override + runtime candidates (`datafiles`, `program_directory`, `working_directory`, `tunes`).
 - Purpose: preserve machine-agnostic beta behavior while restoring tune visibility when runtime-relative roots are empty in IDE runs.
 
+**Superseded by split-root refactor (2026-05-30):**
+- Path resolution now separates content root (`tunes`) from runtime-writable user-data root (`sets/config/debug/performances`).
+- Canonical runtime config is now `working_directory + datafiles/config/runtime_paths.json` (legacy files are fallback read-only).
+
 ### Implementation Update (2026-05-04, Option 2 fallback boundary lead-in) — COMPLETE
 
 **Phase 1 & 2 (Cases 1 & 3) DONE:**

@@ -69,6 +69,16 @@ if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
 			: "";
 	}
 
+	// Diagnostic: print resolved content/user-data roots at boot to verify IDE vs packaged behavior.
+	var _resolved_user_root = script_exists(asset_get_index("scr_data_paths_get_user_data_root"))
+		? scr_data_paths_get_user_data_root()
+		: "datafiles/";
+	var _resolved_content_root = script_exists(asset_get_index("scr_data_paths_get_content_root"))
+		? scr_data_paths_get_content_root()
+		: _resolved_user_root;
+	show_debug_message("[PATHS] user_data_root=" + _resolved_user_root);
+	show_debug_message("[PATHS] content_root=" + _resolved_content_root);
+
 	// Build tune library using runtime-resolved root (supports zipped/package distribution).
 	var _tune_root = script_exists(asset_get_index("scr_tune_library_get_runtime_root"))
 		? scr_tune_library_get_runtime_root()

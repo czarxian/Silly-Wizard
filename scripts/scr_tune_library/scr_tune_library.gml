@@ -125,6 +125,7 @@ function scr_data_paths_get_category_root(_category)
     var category = string_lower(string_trim(string(_category ?? "")));
     if (category == "") return scr_data_paths_get_user_data_root();
 
+    // Tunes are content-rooted; all other categories are runtime-writable user-data paths.
     if (category == "tunes") {
         return scr_tune_library_normalize_root(scr_data_paths_get_content_root() + "tunes/");
     }
