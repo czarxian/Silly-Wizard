@@ -1682,6 +1682,155 @@ function gv_gameviz_draw_toggle_button(_rect, _label, _selected, _enabled = true
     draw_set_valign(fa_top);
 }
 
+/// @function gv_perf_summary_struct_get(_s, _k, _default)
+/// @description Safely read a dynamic field from a struct.
+/// @param {struct} _s Source struct
+/// @param {string} _k Field key
+/// @param _default Fallback value
+/// @returns Field value or _default
+function gv_perf_summary_struct_get(_s, _k, _default = undefined) {
+    if (!is_struct(_s)) return _default;
+    if (!variable_struct_exists(_s, _k)) return _default;
+    return variable_struct_get(_s, _k);
+}
+
+/// @function gv_perf_summary_get_latest(_force_refresh)
+/// @description Load/cache the latest compact performance run summary from run_summaries.jsonl.
+/// @param {bool} _force_refresh True to bypass cache and reread disk
+/// @returns {struct|undefined} Latest summary object, or undefined when unavailable
+function gv_perf_summary_get_latest(_force_refresh = false) {
+    static cache = {
+        loaded: false,
+        last_read_ms: -1000000000,
+        summary: undefined
+    };
+
+    var now_ms = timing_get_engine_now_ms();
+    if (!_force_refresh && cache.loaded && (now_ms - cache.last_read_ms) < 750) {
+        return cache.summary;
+    }
+
+    var perf_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    if (string_copy(perf_root, string_length(perf_root), 1) != "/") {
+        perf_root += "/";
+    }
+
+    var path = perf_root + "run_summaries.jsonl";
+    cache.loaded = true;
+    cache.last_read_ms = now_ms;
+    cache.summary = undefined;
+    if (!file_exists(path)) {
+        return undefined;
+    }
+
+    var f = file_text_open_read(path);
+    if (f < 0) {
+        return undefined;
+    }
+
+    var last_line = "";
+    while (!file_text_eof(f)) {
+        var line = string_trim(file_text_readln(f));
+        if (line != "") last_line = line;
+    }
+    file_text_close(f);
+
+    if (last_line == "") {
+        return undefined;
+    }
+
+    try {
+        var parsed = json_parse(last_line);
+        if (is_struct(parsed)) {
+            cache.summary = parsed;
+            return cache.summary;
+        }
+    } catch (e) {
+        show_debug_message("[PERF_SUMMARY] Could not parse last JSONL line: " + string(e));
+    }
+
+    return undefined;
+}
+
+/// @function gv_perf_summary_is_warn(_summary)
+/// @description Classify latest run summary using conservative warning thresholds.
+/// @param {struct} _summary Run summary struct
+/// @returns {bool} True when any metric exceeds warn threshold
+function gv_perf_summary_is_warn(_summary) {
+    if (!is_struct(_summary)) return false;
+
+    var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
+    var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
+    var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
+    var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
+    var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
+
+    var warn_ctrl_p95_ms = 6.0;
+    var warn_sched_p95_ms = 6.0;
+    var warn_spikes = 1;
+    return (ctrl_p95 >= warn_ctrl_p95_ms)
+        || (sched_p95 >= warn_sched_p95_ms)
+        || (spikes >= warn_spikes);
+}
+
+/// @function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled)
+/// @description Draw a compact "Last Run" performance tile.
+/// @param {array} _rect [x1,y1,x2,y2]
+/// @param {struct|undefined} _summary Latest run summary
+/// @param {bool} _enabled Whether tile should render as active
+function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
+    var x1 = _rect[0];
+    var y1 = _rect[1];
+    var x2 = _rect[2];
+    var y2 = _rect[3];
+
+    var has_summary = is_struct(_summary);
+    var warn = has_summary && gv_perf_summary_is_warn(_summary);
+
+    if (!_enabled || !has_summary) {
+        draw_set_colour(make_colour_rgb(28, 28, 28));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(c_dkgray);
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(c_gray);
+    } else if (warn) {
+        draw_set_colour(make_colour_rgb(92, 34, 34));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(220, 130, 130));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(c_white);
+    } else {
+        draw_set_colour(make_colour_rgb(34, 84, 44));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(145, 214, 160));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(c_white);
+    }
+
+    var line1 = "Perf: N/A";
+    var line2 = "No run summary";
+    if (has_summary) {
+        var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
+        var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
+        var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
+        var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
+        var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
+        line1 = warn ? "Perf: WARN" : "Perf: OK";
+        line2 = "c95 " + string_format(ctrl_p95, 0, 2)
+            + " s95 " + string_format(sched_p95, 0, 2)
+            + " sp " + string(spikes);
+    }
+
+    draw_set_halign(fa_center);
+    draw_set_valign(fa_middle);
+    draw_text_transformed((x1 + x2) * 0.5, y1 + max(6, floor((y2 - y1) * 0.34)), line1, 0.8, 0.8, 0);
+    draw_text_transformed((x1 + x2) * 0.5, y1 + max(10, floor((y2 - y1) * 0.68)), line2, 0.62, 0.62, 0);
+    draw_set_halign(fa_left);
+    draw_set_valign(fa_top);
+}
+
 /// @function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2)
 /// @description Draw the gameviz controls buttons panel (ghost-mode toggle, overlay-mode, judges) within the given rect.
 /// @param {real} _x1  Left edge.
@@ -1721,6 +1870,10 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
             var _ls_visible  = (_ls_layer_id != -1) && layer_get_visible(_ls_layer_id);
             gv_gameviz_draw_toggle_button(layout.btn_slot4, "Loop Scores", _ls_visible, true);
         }
+
+        // Phase 1 perf tile: show latest compact run summary status.
+        var perf_summary = gv_perf_summary_get_latest(false);
+        gv_gameviz_draw_perf_summary_button(layout.btn_slot5, perf_summary, true);
     }
 }
 
@@ -1773,6 +1926,14 @@ function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
         if (!variable_struct_exists(global.timeline_state, "loop_iteration_scores")
             || array_length(global.timeline_state[$ "loop_iteration_scores"]) == 0) return false;
         scr_toggle_loop_score_overview();
+        return true;
+    }
+
+    if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_slot5)) {
+        if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+        if (!variable_struct_exists(global.timeline_state, "playback_complete")
+            || !global.timeline_state.playback_complete) return false;
+        gv_perf_summary_get_latest(true);
         return true;
     }
 
