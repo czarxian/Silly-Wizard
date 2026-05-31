@@ -1781,6 +1781,136 @@ function timing_calibration_capture_jitter_summary() {
     return state.jitter_summary;
 }
 
+/// @function perf_run_summary_get_performances_root()
+/// @description Resolve and ensure the performances folder used for compact run summaries.
+/// @returns {string} Folder path ending with '/'
+/// @reads none
+/// @writes filesystem (creates performances directory when missing)
+/// @callers perf_run_summary_append_latest
+function perf_run_summary_get_performances_root() {
+    var root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("performances")
+        : "datafiles/performances/";
+    if (string_copy(root, string_length(root), 1) != "/") {
+        root += "/";
+    }
+    if (!directory_exists(root)) {
+        directory_create(root);
+    }
+    return root;
+}
+
+/// @function perf_run_summary_append_latest(_jitter_summary)
+/// @description Append one compact JSONL summary line for the latest run to performances/run_summaries.jsonl.
+/// @param {struct} _jitter_summary Optional jitter summary; falls back to global.timing_calibration.jitter_summary
+/// @returns {bool} True when a summary line was appended
+/// @reads global.playback_context, global.current_tune_name, global.playback_run_id, global.tune_start_real, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.perf_run_last_elapsed_ms, global.perf_run_last_groups_total, global.perf_run_last_events_total, global.rt_budget_sched_spike_count, global.timing_calibration
+/// @writes datafiles/performances/run_summaries.jsonl, global.perf_run_summary_last_written_play_id
+/// @objects none
+/// @callers tune_cleanup_after_finish
+function perf_run_summary_append_latest(_jitter_summary = undefined) {
+    var now_dt = date_current_datetime();
+
+    var play_id = -1;
+    if (variable_global_exists("playback_run_id")) {
+        play_id = floor(real(global.playback_run_id));
+    }
+    if (play_id < 0 && variable_global_exists("tune_start_real")) {
+        play_id = floor(real(global.tune_start_real));
+    }
+
+    if (play_id >= 0
+        && variable_global_exists("perf_run_summary_last_written_play_id")
+        && floor(real(global.perf_run_summary_last_written_play_id)) == play_id) {
+        return false;
+    }
+
+    var mode = "single";
+    var display_title = variable_global_exists("current_tune_name")
+        ? string(global.current_tune_name)
+        : "unknown";
+    var segment_count = 0;
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        mode = string(global.playback_context[$ "mode"] ?? "single");
+        display_title = string(global.playback_context[$ "display_title"] ?? display_title);
+        var segs = global.playback_context[$ "segments"];
+        if (is_array(segs)) {
+            segment_count = array_length(segs);
+        }
+    }
+
+    var jitter = _jitter_summary;
+    if (!is_struct(jitter)
+        && variable_global_exists("timing_calibration")
+        && is_struct(global.timing_calibration)
+        && variable_struct_exists(global.timing_calibration, "jitter_summary")
+        && is_struct(global.timing_calibration.jitter_summary)) {
+        jitter = global.timing_calibration.jitter_summary;
+    }
+    if (!is_struct(jitter)) {
+        jitter = {
+            scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            controller_step_interval_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            midi_process_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
+            draw_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 }
+        };
+    }
+
+    var elapsed_ms = variable_global_exists("perf_run_last_elapsed_ms")
+        ? real(global.perf_run_last_elapsed_ms)
+        : 0;
+    var groups_total = variable_global_exists("perf_run_last_groups_total")
+        ? floor(real(global.perf_run_last_groups_total))
+        : 0;
+    var events_total = variable_global_exists("perf_run_last_events_total")
+        ? floor(real(global.perf_run_last_events_total))
+        : 0;
+    var spike_count = variable_global_exists("rt_budget_sched_spike_count")
+        ? floor(real(global.rt_budget_sched_spike_count))
+        : 0;
+
+    var out = {
+        ts_local: date_datetime_string(now_dt),
+        play_id: play_id,
+        mode: mode,
+        title: display_title,
+        segments: segment_count,
+        bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 0,
+        swing: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
+        grace_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
+        elapsed_ms: elapsed_ms,
+        groups_total: groups_total,
+        events_total: events_total,
+        spike_count: spike_count,
+        scheduler_late_ms: jitter.scheduler_late_ms,
+        controller_step_interval_ms: jitter.controller_step_interval_ms,
+        midi_process_ms: jitter.midi_process_ms,
+        draw_ms: jitter.draw_ms
+    };
+
+    var path = perf_run_summary_get_performances_root() + "run_summaries.jsonl";
+    var f = file_text_open_append(path);
+    if (f < 0) {
+        show_debug_message("[PERF_SUMMARY] Could not open run summaries file: " + path);
+        return false;
+    }
+
+    file_text_write_string(f, json_stringify(out));
+    file_text_writeln(f);
+    file_text_close(f);
+
+    if (play_id >= 0) {
+        global.perf_run_summary_last_written_play_id = play_id;
+    }
+
+    show_debug_message("[PERF_SUMMARY] Appended play_id=" + string(play_id)
+        + " mode=" + mode
+        + " elapsed_ms=" + string_format(elapsed_ms, 0, 3)
+        + " spikes=" + string(spike_count));
+
+    return true;
+}
+
 
 
 /// @function midi_to_letter(_midi_note)
@@ -2109,6 +2239,10 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
         + " active_seg=" + string(active_seg)
         + " measure=" + string(measure));
 
+    if (!variable_global_exists("rt_budget_sched_spike_count")) {
+        global.rt_budget_sched_spike_count = 0;
+    }
+    global.rt_budget_sched_spike_count = floor(real(global.rt_budget_sched_spike_count)) + 1;
     global.rt_budget_sched_spike_last_log_ms = now_ms;
 }
 
@@ -3150,6 +3284,12 @@ function tune_start(_tune_events) {
         show_debug_message("WARNING: No tune event groups to schedule.");
         return false;
     }
+
+    // Reset compact run-summary state for this playback.
+    global.perf_run_last_elapsed_ms = 0;
+    global.perf_run_last_groups_total = array_length(global.tune_event_groups);
+    global.perf_run_last_events_total = array_length(_tune_events);
+    global.rt_budget_sched_spike_count = 0;
     
     // Cache tune filename for event logging (avoid repeated lookups)
     global.current_tune_name = obj_tune.tune_data.filename ?? "unknown";
@@ -3456,6 +3596,8 @@ function script_tune_callback_batched() {
         var finish_cfg_grace_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0;
         var finish_cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
         var finish_play_id_ms = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
+        global.perf_run_last_elapsed_ms = real(expected_elapsed);
+        global.perf_run_last_groups_total = array_length(global.tune_event_groups);
         perf_diag_emit("[PLAY_PHASE] PLAY_STOP tune=" + finish_tune_name
             + " play_id=" + string(finish_play_id_ms)
             + " bpm=" + string_format(finish_cfg_bpm, 0, 3)
@@ -3647,6 +3789,8 @@ event_history_add({
         var finish_cfg_grace_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0;
         var finish_cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
         var finish_play_id_ms = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
+        global.perf_run_last_elapsed_ms = real(expected_elapsed);
+        global.perf_run_last_events_total = array_length(global.tune_events);
         perf_diag_emit("[PLAY_PHASE] PLAY_STOP tune=" + finish_tune_name
             + " play_id=" + string(finish_play_id_ms)
             + " bpm=" + string_format(finish_cfg_bpm, 0, 3)
@@ -3709,7 +3853,8 @@ function schedule_tune_cleanup(_delay_ms) {
 /// @writes global.timing_calibration.jitter_summary
 
 function tune_cleanup_after_finish() {
-    timing_calibration_capture_jitter_summary();
+    var jitter_summary = timing_calibration_capture_jitter_summary();
+    perf_run_summary_append_latest(jitter_summary);
     MIDI_send_off();  // Stop all notes on all channels
     MIDI_stop_checking_messages_and_errors();  // Stop MIDI input checking and close devices
     show_debug_message("âœ“ Tune cleanup complete");

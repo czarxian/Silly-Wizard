@@ -42,6 +42,12 @@ This ensures deterministic, real‑time playback with no per‑frame computation
 - Settings UI labels/messages were updated so "data root" controls tune content root semantics.
 - Goal: keep compiler testing and packaged exe behavior aligned while preserving writable runtime data paths.
 
+### Compact Performance Run Summaries (2026-05-30)
+- Added automatic post-run summary append at cleanup (`tune_cleanup_after_finish`) after jitter snapshot capture.
+- New output file: `datafiles/performances/run_summaries.jsonl` (one JSON object per run).
+- Summary fields include: `play_id`, mode/title, elapsed, groups/events totals, scheduler spike count, and jitter summaries (`scheduler_late_ms`, `controller_step_interval_ms`, `midi_process_ms`, `draw_ms`).
+- Purpose: remove routine dependency on manual PowerShell parsing for quick performance validation.
+
 ### Calibration Phase 1 Rollback & Stabilization (2026-05-17)
 **Status**: ✅ Complete — Game fully playable with multi-tune sets.
 
