@@ -237,9 +237,15 @@
 		if (delta == 0) return false;
 
 		var offsets = timing_calibration_get_current_offsets();
-		var audio_ms = real(offsets.audio_output_offset_ms ?? 0);
-		var visual_ms = real(offsets.visual_alignment_offset_ms ?? 0);
-		var input_ms = real(offsets.input_capture_offset_ms ?? 0);
+		var audio_ms = variable_struct_exists(offsets, "audio_output_offset_ms")
+			? real(variable_struct_get(offsets, "audio_output_offset_ms"))
+			: 0;
+		var visual_ms = variable_struct_exists(offsets, "visual_alignment_offset_ms")
+			? real(variable_struct_get(offsets, "visual_alignment_offset_ms"))
+			: 0;
+		var input_ms = variable_struct_exists(offsets, "input_capture_offset_ms")
+			? real(variable_struct_get(offsets, "input_capture_offset_ms"))
+			: 0;
 
 		if (ui_name == "setting_field_cal_audio") {
 			audio_ms += delta;
@@ -613,24 +619,7 @@
 	/// @callers scr_tune_bpm_change, scr_button_prepare_single_tune_playback_events, start_play
 	function scr_button_bpm_debug_log(_line) {
 		var _msg = string(_line);
-		show_debug_message(_msg);
-
-		// ALWAYS write to dedicated BPM trace file in runtime-relative debug folder.
-		var _log_dir = script_exists(asset_get_index("scr_data_paths_get_category_root"))
-			? scr_data_paths_get_category_root("debug")
-			: "datafiles/debug/";
-		if (string_copy(_log_dir, string_length(_log_dir), 1) == "/") {
-			_log_dir = string_copy(_log_dir, 1, string_length(_log_dir) - 1);
-		}
-		if (!directory_exists(_log_dir)) {
-			directory_create(_log_dir);
-		}
-		var _log_path = _log_dir + "/bpm_trace.log";
-		var _f = file_text_open_append(_log_path);
-		if (_f != -1) {
-			file_text_write_string(_f, _msg + "\n");
-			file_text_close(_f);
-		}
+		diag_log_append_line(_msg, "bpm_trace.log", true);
 	}
 
 	/// @function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel)

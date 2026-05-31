@@ -1793,6 +1793,325 @@ function midi_to_letter(_midi_note, _channel = -1) {
     return chanter_midi_to_display(_midi_note, _channel, global.MIDI_chanter ?? "default");
 }
 
+/// @function diag_log_get_debug_root()
+/// @description Resolve and ensure the runtime debug directory, always returning a trailing slash path.
+/// @returns {string} Debug directory path ending with '/'
+/// @reads none
+/// @writes filesystem (creates debug directory when missing)
+/// @callers diag_log_append_line, perf_diag_emit
+function diag_log_get_debug_root() {
+    var log_dir = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("debug")
+        : "datafiles/debug/";
+    if (string_copy(log_dir, string_length(log_dir), 1) != "/") {
+        log_dir += "/";
+    }
+    if (!directory_exists(log_dir)) {
+        directory_create(log_dir);
+    }
+    return log_dir;
+}
+
+/// @function diag_log_detect_channel(_file_name)
+/// @description Infer a diagnostic channel label from a target log filename.
+/// @param {string} _file_name Log filename
+/// @returns {string} Channel label (`perf`, `bpm`, `calibration`, or `generic`)
+/// @reads none
+/// @writes none
+/// @callers diag_log_build_record
+function diag_log_detect_channel(_file_name) {
+    var lower_name = string_lower(string(_file_name));
+    if (string_pos("perf", lower_name) > 0) return "perf";
+    if (string_pos("bpm", lower_name) > 0) return "bpm";
+    if (string_pos("calibration", lower_name) > 0) return "calibration";
+    return "generic";
+}
+
+/// @function diag_log_detect_event(_msg)
+/// @description Classify a diagnostic message with a coarse event tag to simplify filtering.
+/// @param {string} _msg Diagnostic message text
+/// @returns {string} Event tag
+/// @reads none
+/// @writes none
+/// @callers diag_log_build_record
+function diag_log_detect_event(_msg) {
+    var msg = string(_msg);
+    if (string_pos("[PLAY_PHASE] PLAY_START", msg) > 0) return "play_start";
+    if (string_pos("[PLAY_PHASE] PLAY_STOP", msg) > 0) return "play_stop";
+    if (string_pos("[RT_BUDGET]", msg) > 0) return "rt_budget";
+    if (string_pos("[START-PLAY", msg) > 0) return "start_play";
+    if (string_pos("[BPM-", msg) > 0) return "bpm_change";
+    if (string_pos("[CALIB", msg) > 0 || string_pos("[JUDGE_", msg) > 0 || string_pos("[HYDRATE", msg) > 0) return "calibration";
+    return "message";
+}
+
+/// @function diag_log_build_record(_line, _file_name)
+/// @description Build a structured JSONL-ready record for diagnostics.
+/// @param {string} _line Raw message text
+/// @param {string} _file_name Target filename used for channel inference
+/// @returns {struct} Structured diagnostic record
+/// @reads global.current_tune_name, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.playback_run_id
+/// @writes none
+/// @callers diag_log_append_line
+function diag_log_build_record(_line, _file_name) {
+    var msg = string(_line);
+    var now_dt = date_current_datetime();
+    var record = {
+        ts_local: date_datetime_string(now_dt),
+        engine_ms: timing_get_engine_now_ms(),
+        channel: diag_log_detect_channel(_file_name),
+        event: diag_log_detect_event(msg),
+        message: msg
+    };
+
+    if (variable_global_exists("current_tune_name")) {
+        record.tune = string(global.current_tune_name ?? "");
+    }
+    if (variable_global_exists("current_bpm")) {
+        record.bpm = real(global.current_bpm ?? 0);
+    }
+    if (variable_global_exists("gracenote_override_ms")) {
+        record.grace_ms = real(global.gracenote_override_ms ?? 0);
+    }
+    if (variable_global_exists("swing_mult")) {
+        record.swing = string(global.swing_mult ?? 0);
+    }
+    if (variable_global_exists("playback_run_id")) {
+        record.play_id = floor(real(variable_global_get("playback_run_id") ?? -1));
+    }
+
+    return record;
+}
+
+/// @function diag_log_get_max_lines()
+/// @description Resolve the maximum retained JSONL lines per diagnostic file before rollover.
+/// @returns {real} Maximum lines per active log file
+/// @reads global.DIAG_LOG_MAX_LINES
+/// @writes none
+/// @callers diag_log_rotate_if_needed
+function diag_log_get_max_lines() {
+    if (variable_global_exists("DIAG_LOG_MAX_LINES")) {
+        return max(100, floor(real(variable_global_get("DIAG_LOG_MAX_LINES") ?? 5000)));
+    }
+    return 5000;
+}
+
+/// @function diag_log_get_max_backups()
+/// @description Resolve the number of rotated backup files to retain per diagnostic log.
+/// @returns {real} Number of backup generations to keep
+/// @reads global.DIAG_LOG_MAX_BACKUPS
+/// @writes none
+/// @callers diag_log_rotate_if_needed
+function diag_log_get_max_backups() {
+    if (variable_global_exists("DIAG_LOG_MAX_BACKUPS")) {
+        return max(0, floor(real(variable_global_get("DIAG_LOG_MAX_BACKUPS") ?? 3)));
+    }
+    return 3;
+}
+
+/// @function diag_log_count_lines_upto(_path, _stop_after)
+/// @description Count lines in a text file, stopping early once `_stop_after` is exceeded.
+/// @param {string} _path Text file path
+/// @param {real} _stop_after Early-stop threshold
+/// @returns {real} Counted lines (may stop at `_stop_after + 1`)
+/// @reads none
+/// @writes none
+/// @callers diag_log_rotate_if_needed
+function diag_log_count_lines_upto(_path, _stop_after) {
+    if (!file_exists(_path)) return 0;
+
+    var h = file_text_open_read(_path);
+    if (h == -1) return 0;
+
+    var threshold = max(1, floor(real(_stop_after)));
+    var n = 0;
+    while (!file_text_eof(h)) {
+        file_text_readln(h);
+        n += 1;
+        if (n > threshold) break;
+    }
+    file_text_close(h);
+    return n;
+}
+
+/// @function diag_log_rotate_if_needed(_log_path)
+/// @description Rotate a diagnostic log into numbered backups when retained line count exceeds threshold.
+/// @param {string} _log_path Absolute or working-directory relative log path
+/// @returns {bool} True when rollover occurred
+/// @reads global.DIAG_LOG_MAX_LINES, global.DIAG_LOG_MAX_BACKUPS
+/// @writes diagnostic log files (`.1`, `.2`, ... backups)
+/// @callers diag_log_append_line
+function diag_log_rotate_if_needed(_log_path) {
+    var path = string(_log_path);
+    if (path == "" || !file_exists(path)) return false;
+
+    var max_lines = diag_log_get_max_lines();
+    var line_count = diag_log_count_lines_upto(path, max_lines);
+    if (line_count <= max_lines) return false;
+
+    var backup_count = diag_log_get_max_backups();
+    if (backup_count <= 0) {
+        file_delete(path);
+        return true;
+    }
+
+    var oldest = path + "." + string(backup_count);
+    if (file_exists(oldest)) {
+        file_delete(oldest);
+    }
+
+    for (var i = backup_count - 1; i >= 1; i--) {
+        var src = path + "." + string(i);
+        if (!file_exists(src)) continue;
+
+        var dst = path + "." + string(i + 1);
+        if (file_exists(dst)) {
+            file_delete(dst);
+        }
+        file_rename(src, dst);
+    }
+
+    var first_backup = path + ".1";
+    if (file_exists(first_backup)) {
+        file_delete(first_backup);
+    }
+    file_rename(path, first_backup);
+    return true;
+}
+
+/// @function diag_log_append_line(_line, _file_name, _mirror_output, _output_prefix)
+/// @description Shared append writer for diagnostics; writes one JSONL record per line and optionally mirrors raw text to Output.
+/// @param {string} _line Line text to write
+/// @param {string} _file_name File name under debug root (ignored when empty)
+/// @param {bool} _mirror_output Whether to also emit to Output window
+/// @param {string} _output_prefix Prefix used only for Output window display
+/// @returns {bool} True when write attempted successfully
+/// @reads none
+/// @writes file at <primary_data_root>/debug/<_file_name>
+/// @callers perf_diag_emit, scr_button_bpm_debug_log, scoring_calibration_debug_log
+function diag_log_append_line(_line, _file_name, _mirror_output = false, _output_prefix = "") {
+    var msg = string(_line);
+    if (msg == "") return false;
+
+    if (_mirror_output) {
+        show_debug_message(string(_output_prefix) + msg);
+    }
+
+    var file_name = string(_file_name);
+    if (file_name == "") return false;
+
+    var record = diag_log_build_record(msg, file_name);
+    var json_line = json_stringify(record);
+
+    var log_path = diag_log_get_debug_root() + file_name;
+    diag_log_rotate_if_needed(log_path);
+    var f = file_text_open_append(log_path);
+    if (f == -1) return false;
+
+    file_text_write_string(f, json_line);
+    file_text_writeln(f);
+    file_text_close(f);
+    return true;
+}
+
+/// @function perf_diag_emit(_line)
+/// @description Append performance diagnostics to a log file and optionally mirror them to the Output window.
+/// @param _line Diagnostic line text
+/// @reads global.PERF_DIAG_LOG_PATH, global.PERF_DIAG_OUTPUT_WINDOW_ENABLED
+/// @writes file at PERF_DIAG_LOG_PATH or <primary_data_root>/debug/perf_benchmark.log
+/// @callers tune_rt_budget_diag_record_scheduler_late_ms, tune_rt_budget_diag_record_scheduler_group, tune_rt_budget_diag_record_controller_step_ms, tune_rt_budget_diag_record_midi_step_ms, tune_rt_budget_diag_record_draw_ms, tune_rt_budget_diag_record_draw_interval_ms, tune_rt_budget_diag_record_anchor_draw_ms, tune_rt_budget_diag_record_controller_step_interval_ms, tune_rt_budget_diag_record_scheduler_step_pump, MIDI_timing_diag_record_poll_delay
+function perf_diag_emit(_line) {
+    var msg = string(_line);
+    if (msg == "") return;
+
+    var mirror_output = variable_global_exists("PERF_DIAG_OUTPUT_WINDOW_ENABLED")
+        && bool(global.PERF_DIAG_OUTPUT_WINDOW_ENABLED);
+
+    var log_path = variable_global_exists("PERF_DIAG_LOG_PATH")
+        ? string(global.PERF_DIAG_LOG_PATH)
+        : "";
+    if (log_path != "") {
+        if (mirror_output) show_debug_message(msg);
+        var perf_record = diag_log_build_record(msg, "perf_benchmark.log");
+        var perf_json_line = json_stringify(perf_record);
+        diag_log_rotate_if_needed(log_path);
+        var f = file_text_open_append(log_path);
+        if (f != -1) {
+            file_text_write_string(f, perf_json_line);
+            file_text_writeln(f);
+            file_text_close(f);
+        }
+        return;
+    }
+
+    diag_log_append_line(msg, "perf_benchmark.log", mirror_output);
+}
+
+/// @function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _scheduled_elapsed)
+/// @description Emit a contextual scheduler spike trace when late_ms exceeds threshold (cooldown-limited).
+/// @param _late_ms Current scheduler lateness in ms
+/// @param _real_elapsed Real elapsed ms since tune start
+/// @param _scheduled_elapsed Scheduled elapsed ms for current group
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.tune_group_index, global.tune_event_groups, global.tune_deferred_queue, global.tune_deferred_head, global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP, global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US, global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS, global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS, global.playback_context, global.timeline_state
+/// @writes global.rt_budget_sched_spike_last_log_ms
+/// @callers script_tune_callback_batched
+function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _scheduled_elapsed) {
+    if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+
+    var startup_spike_grace_ms = max(0, real(global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS ?? 0));
+    if (real(_real_elapsed) <= startup_spike_grace_ms) return;
+
+    var late_ms = real(_late_ms);
+    var spike_threshold_ms = 20;
+    if (late_ms < spike_threshold_ms) return;
+
+    var now_ms = timing_get_engine_now_ms();
+    var cooldown_ms = 400;
+    var last_log_ms = variable_global_exists("rt_budget_sched_spike_last_log_ms")
+        ? real(global.rt_budget_sched_spike_last_log_ms)
+        : -1000000000;
+    if ((now_ms - last_log_ms) < cooldown_ms) return;
+
+    var groups_total = (variable_global_exists("tune_event_groups") && is_array(global.tune_event_groups))
+        ? array_length(global.tune_event_groups)
+        : 0;
+    var group_idx = variable_global_exists("tune_group_index")
+        ? floor(real(global.tune_group_index))
+        : -1;
+
+    var deferred_pending = 0;
+    if (variable_global_exists("tune_deferred_queue") && is_array(global.tune_deferred_queue)) {
+        var qn = array_length(global.tune_deferred_queue);
+        var qh = variable_global_exists("tune_deferred_head") ? floor(real(global.tune_deferred_head)) : 0;
+        qh = clamp(qh, 0, qn);
+        deferred_pending = max(0, qn - qh);
+    }
+
+    var active_seg = -1;
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        active_seg = floor(real(global.playback_context[$ "active_segment"] ?? -1));
+    }
+
+    var measure = -1;
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        measure = floor(real(global.timeline_state.current_measure ?? -1));
+    }
+
+    perf_diag_emit("[SCHED_SPIKE] late_ms=" + string_format(late_ms, 0, 3)
+        + " real_ms=" + string_format(real(_real_elapsed), 0, 3)
+        + " sched_ms=" + string_format(real(_scheduled_elapsed), 0, 3)
+        + " group_idx=" + string(group_idx)
+        + " groups_total=" + string(groups_total)
+        + " deferred_pending=" + string(deferred_pending)
+        + " max_groups_step=" + string(max(1, floor(real(global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP ?? 32))))
+        + " step_budget_us=" + string_format(max(100, real(global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US ?? 1000)), 0, 0)
+        + " lookahead_ms=" + string_format(max(0, real(global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS ?? 0)), 0, 3)
+        + " active_seg=" + string(active_seg)
+        + " measure=" + string(measure));
+
+    global.rt_budget_sched_spike_last_log_ms = now_ms;
+}
+
 /// @function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms)
 /// @description Record a scheduler-late sample to the ring buffer; logs a summary every RT_BUDGET_DIAG_LOG_INTERVAL_MS.
 /// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
@@ -1847,7 +2166,7 @@ function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
     var p95 = vals[i95];
     var p99 = vals[i99];
 
-    show_debug_message("[RT_BUDGET] scheduler_late_ms p50=" + string_format(p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] scheduler_late_ms p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
         + " n=" + string(count));
@@ -1949,7 +2268,7 @@ function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _mi
     var proc_per_event_us = (sum_proc * 1000) / max(1, sum_events);
     var send_per_event_us = (sum_send_ms * 1000) / max(1, sum_send_count);
 
-    show_debug_message("[RT_BUDGET] scheduler_group_proc_ms p50=" + string_format(proc_p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] scheduler_group_proc_ms p50=" + string_format(proc_p50, 0, 3)
         + " p95=" + string_format(proc_p95, 0, 3)
         + " p99=" + string_format(proc_p99, 0, 3)
         + " avg=" + string_format(proc_avg, 0, 3)
@@ -2024,7 +2343,7 @@ function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
     var pmax = vals[count - 1];
     var avg = sum_vals / max(1, count);
 
-    show_debug_message("[RT_BUDGET] controller_step_ms p50=" + string_format(p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] controller_step_ms p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
         + " max=" + string_format(pmax, 0, 3)
@@ -2032,6 +2351,103 @@ function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
         + " n=" + string(count));
 
     global.rt_budget_controller_step_last_log_ms = now_ms;
+}
+
+/// @function tune_rt_budget_diag_record_controller_phase_ms(_phase_kind, _phase_ms)
+/// @description Record per-phase controller-step durations (scheduler/timeline/deferred) into keyed rolling stats.
+/// @param {string} _phase_kind Stable phase key.
+/// @param {real} _phase_ms Measured phase duration in milliseconds.
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_controller_phase_stats
+/// @callers obj_game_controller Step event
+function tune_rt_budget_diag_record_controller_phase_ms(_phase_kind, _phase_ms) {
+    if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+
+    var now_ms = timing_get_engine_now_ms();
+    var warmup_ms = variable_global_exists("RT_BUDGET_SCHED_WARMUP_MS")
+        ? max(0, real(global.RT_BUDGET_SCHED_WARMUP_MS))
+        : 1000;
+    if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
+        var since_start_ms = now_ms - real(global.tune_start_real);
+        if (since_start_ms < warmup_ms) return;
+    }
+
+    var kind = string(_phase_kind ?? "unknown");
+    if (string_length(kind) <= 0) kind = "unknown";
+
+    if (!variable_global_exists("rt_budget_controller_phase_stats") || !is_struct(global.rt_budget_controller_phase_stats)) {
+        global.rt_budget_controller_phase_stats = {};
+    }
+
+    var stats = variable_struct_exists(global.rt_budget_controller_phase_stats, kind)
+        ? global.rt_budget_controller_phase_stats[$ kind]
+        : {
+            buf: array_create(128, 0),
+            head: 0,
+            count: 0,
+            last_log_ms: now_ms
+        };
+
+    if (!is_struct(stats) || !variable_struct_exists(stats, "buf") || !is_array(stats.buf)) {
+        stats = {
+            buf: array_create(128, 0),
+            head: 0,
+            count: 0,
+            last_log_ms: now_ms
+        };
+    }
+
+    var buf = stats.buf;
+    var n_buf = array_length(buf);
+    if (n_buf <= 0) return;
+
+    var head = floor(real(stats.head ?? 0));
+    head = ((head mod n_buf) + n_buf) mod n_buf;
+    buf[head] = max(0, real(_phase_ms));
+
+    stats.buf = buf;
+    stats.head = (head + 1) mod n_buf;
+    stats.count = min(n_buf, floor(real(stats.count ?? 0)) + 1);
+
+    var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
+    if ((now_ms - real(stats.last_log_ms ?? 0)) < interval_ms) {
+        global.rt_budget_controller_phase_stats[$ kind] = stats;
+        return;
+    }
+
+    var count = floor(real(stats.count ?? 0));
+    if (count < 16) {
+        global.rt_budget_controller_phase_stats[$ kind] = stats;
+        return;
+    }
+
+    var vals = array_create(count, 0);
+    var sum_vals = 0;
+    for (var i = 0; i < count; i++) {
+        vals[i] = real(buf[i]);
+        sum_vals += vals[i];
+    }
+    array_sort(vals, true);
+
+    var i50 = floor((count - 1) * 0.50);
+    var i95 = floor((count - 1) * 0.95);
+    var i99 = floor((count - 1) * 0.99);
+    var p50 = vals[i50];
+    var p95 = vals[i95];
+    var p99 = vals[i99];
+    var pmax = vals[count - 1];
+    var avg = sum_vals / max(1, count);
+
+    perf_diag_emit("[RT_BUDGET] controller_phase_ms kind=" + kind
+        + " p50=" + string_format(p50, 0, 3)
+        + " p95=" + string_format(p95, 0, 3)
+        + " p99=" + string_format(p99, 0, 3)
+        + " max=" + string_format(pmax, 0, 3)
+        + " avg=" + string_format(avg, 0, 3)
+        + " n=" + string(count));
+
+    stats.last_log_ms = now_ms;
+    global.rt_budget_controller_phase_stats[$ kind] = stats;
 }
 
 /// @function tune_rt_budget_diag_record_midi_step_ms(_step_ms)
@@ -2085,7 +2501,7 @@ function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
     var pmax = vals[count - 1];
     var avg = sum_vals / max(1, count);
 
-    show_debug_message("[RT_BUDGET] midi_process_ms p50=" + string_format(p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] midi_process_ms p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
         + " max=" + string_format(pmax, 0, 3)
@@ -2146,7 +2562,7 @@ function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     var pmax = vals[count - 1];
     var avg = sum_vals / max(1, count);
 
-    show_debug_message("[RT_BUDGET] draw_ms p50=" + string_format(p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] draw_ms p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
         + " max=" + string_format(pmax, 0, 3)
@@ -2156,12 +2572,83 @@ function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     global.rt_budget_draw_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_record_draw_interval_ms(_draw_dt_ms)
+/// @description Record time between draw passes (frame pacing/jitter), with playback warmup guard.
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
+/// @writes global.rt_budget_draw_dt_buf/head/count/last_log_ms
+function tune_rt_budget_diag_record_draw_interval_ms(_draw_dt_ms) {
+    if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL") && !global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL) return;
+    if (_draw_dt_ms <= 0) return;
+
+    var now_ms = timing_get_engine_now_ms();
+    var warmup_ms = variable_global_exists("RT_BUDGET_SCHED_WARMUP_MS")
+        ? max(0, real(global.RT_BUDGET_SCHED_WARMUP_MS))
+        : 1000;
+    if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
+        var since_start_ms = now_ms - real(global.tune_start_real);
+        if (since_start_ms < warmup_ms) return;
+    }
+
+    if (!variable_global_exists("rt_budget_draw_dt_buf") || !is_array(global.rt_budget_draw_dt_buf)) {
+        global.rt_budget_draw_dt_buf = array_create(256, 0);
+        global.rt_budget_draw_dt_head = 0;
+        global.rt_budget_draw_dt_count = 0;
+        global.rt_budget_draw_dt_last_log_ms = now_ms;
+    }
+
+    var buf = global.rt_budget_draw_dt_buf;
+    var n_buf = array_length(buf);
+    if (n_buf <= 0) return;
+
+    var head = floor(real(global.rt_budget_draw_dt_head ?? 0));
+    head = ((head mod n_buf) + n_buf) mod n_buf;
+    buf[head] = max(0, real(_draw_dt_ms));
+
+    global.rt_budget_draw_dt_buf = buf;
+    global.rt_budget_draw_dt_head = (head + 1) mod n_buf;
+    global.rt_budget_draw_dt_count = min(n_buf, floor(real(global.rt_budget_draw_dt_count ?? 0)) + 1);
+
+    var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
+    if ((now_ms - real(global.rt_budget_draw_dt_last_log_ms ?? 0)) < interval_ms) return;
+
+    var count = floor(real(global.rt_budget_draw_dt_count ?? 0));
+    if (count < 16) return;
+
+    var vals = array_create(count, 0);
+    var sum_vals = 0;
+    for (var i = 0; i < count; i++) {
+        vals[i] = real(buf[i]);
+        sum_vals += vals[i];
+    }
+    array_sort(vals, true);
+
+    var i50 = floor((count - 1) * 0.50);
+    var i95 = floor((count - 1) * 0.95);
+    var i99 = floor((count - 1) * 0.99);
+    var p50 = vals[i50];
+    var p95 = vals[i95];
+    var p99 = vals[i99];
+    var pmax = vals[count - 1];
+    var avg = sum_vals / max(1, count);
+
+    perf_diag_emit("[RT_BUDGET] draw_interval_ms p50=" + string_format(p50, 0, 3)
+        + " p95=" + string_format(p95, 0, 3)
+        + " p99=" + string_format(p99, 0, 3)
+        + " max=" + string_format(pmax, 0, 3)
+        + " avg=" + string_format(avg, 0, 3)
+        + " n=" + string(count));
+
+    global.rt_budget_draw_dt_last_log_ms = now_ms;
+}
+
 /// @function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms)
 /// @description Accumulate per-anchor draw time into a keyed stats struct (no warmup guard).
 /// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS
 /// @writes global.rt_budget_anchor_draw_stats (keyed by _anchor_kind string)
 function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW") && !global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW) return;
 
     var kind = string(_anchor_kind ?? "unknown");
     if (string_length(kind) <= 0) kind = "unknown";
@@ -2230,7 +2717,7 @@ function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
     var pmax = vals[count - 1];
     var avg = sum_vals / max(1, count);
 
-    show_debug_message("[RT_BUDGET] anchor_draw_ms kind=" + kind
+    perf_diag_emit("[RT_BUDGET] anchor_draw_ms kind=" + kind
         + " p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
@@ -2301,7 +2788,7 @@ function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms) {
     var pmax = vals[count - 1];
     var avg = sum_vals / max(1, count);
 
-    show_debug_message("[RT_BUDGET] controller_step_interval_ms p50=" + string_format(p50, 0, 3)
+    perf_diag_emit("[RT_BUDGET] controller_step_interval_ms p50=" + string_format(p50, 0, 3)
         + " p95=" + string_format(p95, 0, 3)
         + " p99=" + string_format(p99, 0, 3)
         + " max=" + string_format(pmax, 0, 3)
@@ -2376,7 +2863,7 @@ function tune_rt_budget_diag_record_scheduler_step_pump(_dispatched, _max_overdu
     var i95 = floor((count - 1) * 0.95);
     var i99 = floor((count - 1) * 0.99);
 
-    show_debug_message("[RT_BUDGET] scheduler_step_pump dispatched p50=" + string_format(dispatch_vals[i50], 0, 0)
+    perf_diag_emit("[RT_BUDGET] scheduler_step_pump dispatched p50=" + string_format(dispatch_vals[i50], 0, 0)
         + " p95=" + string_format(dispatch_vals[i95], 0, 0)
         + " p99=" + string_format(dispatch_vals[i99], 0, 0)
         + " | overdue_ms p50=" + string_format(overdue_vals[i50], 0, 3)
@@ -2681,19 +3168,28 @@ function tune_start(_tune_events) {
         global.PLAYBACK_SCHEDULER_MODE = "timesource";
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
-        global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0.0;
+        global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 1.0;
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
-        global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 8;
+        global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 12;
     }
     if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
-        global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1000;
+        global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1500;
+    }
+    if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS")) {
+        global.PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS = 4.0;
+    }
+    if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS")) {
+        global.PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS = 40.0;
+    }
+    if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS")) {
+        global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS = 200.0;
     }
     if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP")) {
-        global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP = 128;
+        global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP = 192;
     }
     if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
-        global.PLAYBACK_DEFERRED_MAX_BUDGET_US = 1200;
+        global.PLAYBACK_DEFERRED_MAX_BUDGET_US = 1800;
     }
     global.tune_deferred_queue = [];
     global.tune_deferred_head = 0;
@@ -2702,8 +3198,27 @@ function tune_start(_tune_events) {
     global.tune_scheduler_mode_step = use_step_scheduler;
     global.tune_scheduler_active = true;
 
-    // Anchor real playback start before timer begins
-    global.tune_start_real = timing_get_engine_now_ms();
+    var startup_arm_delay_ms = (!use_step_scheduler)
+        ? max(0, real(global.PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS ?? 0))
+        : 0;
+
+    // Anchor playback start with optional timesource startup delay to avoid first-group startup stalls.
+    global.tune_start_real = timing_get_engine_now_ms() + startup_arm_delay_ms;
+    var play_id_ms = floor(real(global.tune_start_real));
+
+    var tune_name = string(variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown");
+    var cfg_bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
+    var cfg_grace_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0;
+    var cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
+    var scheduler_mode_label = "timesource";
+    if (use_step_scheduler) scheduler_mode_label = "step";
+    perf_diag_emit("[PLAY_PHASE] PLAY_START tune=" + tune_name
+        + " play_id=" + string(play_id_ms)
+        + " bpm=" + string_format(cfg_bpm, 0, 3)
+        + " grace_ms=" + string_format(cfg_grace_ms, 0, 3)
+        + " swing=" + string_format(cfg_swing, 0, 3)
+        + " scheduler_mode=" + scheduler_mode_label
+        + " groups_total=" + string(array_length(global.tune_event_groups)));
 
     var audio_sched_offset_ms = 0;
     if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
@@ -2713,7 +3228,8 @@ function tune_start(_tune_events) {
     }
     var first_due_ms = real(global.tune_event_groups[0].time ?? 0) + audio_sched_offset_ms;
     first_due_ms = max(0.001, first_due_ms);
-    show_debug_message("delta_ms " + string(first_due_ms)); //For testing only
+    var first_timer_due_ms = first_due_ms + startup_arm_delay_ms;
+    show_debug_message("delta_ms " + string(first_timer_due_ms)); //For testing only
     if (use_step_scheduler) {
         global.tune_timer = noone;
         tune_scheduler_step_tick();
@@ -2729,12 +3245,14 @@ function tune_start(_tune_events) {
             time_source_expire_after
         );
 
-        if (first_due_ms <= 0.001) {
+        var startup_elapsed_ms = timing_get_engine_now_ms() - global.tune_start_real;
+        var startup_drain_ms = max(0, real(global.PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS ?? 0));
+        if (first_timer_due_ms <= startup_elapsed_ms + startup_drain_ms) {
             script_tune_callback_batched();
         } else {
             time_source_reconfigure(
                 global.tune_timer,
-                first_due_ms / 1000,
+                first_timer_due_ms / 1000,
                 time_source_units_seconds,
                 script_tune_callback_batched,
                 [],
@@ -2773,6 +3291,7 @@ function script_tune_callback_batched() {
     }
     var scheduled_elapsed = expected_elapsed + audio_sched_offset_ms;
     tune_rt_budget_diag_record_scheduler_late_ms(real_elapsed - scheduled_elapsed);
+    tune_rt_budget_diag_trace_scheduler_spike(real_elapsed - scheduled_elapsed, real_elapsed, scheduled_elapsed);
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.last_dispatched_expected_ms = real(expected_elapsed);
     }
@@ -2932,6 +3451,18 @@ function script_tune_callback_batched() {
             && variable_global_exists("tune_timer") && global.tune_timer != noone) {
             time_source_stop(global.tune_timer);
         }
+        var finish_tune_name = string(variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown");
+        var finish_cfg_bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
+        var finish_cfg_grace_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0;
+        var finish_cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
+        var finish_play_id_ms = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
+        perf_diag_emit("[PLAY_PHASE] PLAY_STOP tune=" + finish_tune_name
+            + " play_id=" + string(finish_play_id_ms)
+            + " bpm=" + string_format(finish_cfg_bpm, 0, 3)
+            + " grace_ms=" + string_format(finish_cfg_grace_ms, 0, 3)
+            + " swing=" + string_format(finish_cfg_swing, 0, 3)
+            + " elapsed_ms=" + string_format(real(expected_elapsed), 0, 3)
+            + " groups_total=" + string(array_length(global.tune_event_groups)));
         global.tune_scheduler_active = false;
         tune_scheduler_flush_deferred_all();
         gv_on_tune_playback_finished(expected_elapsed);
@@ -3111,6 +3642,18 @@ event_history_add({
 
     // If no more events, stop
     if (global.tune_index >= array_length(global.tune_events)) {
+        var finish_tune_name = string(variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown");
+        var finish_cfg_bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
+        var finish_cfg_grace_ms = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0;
+        var finish_cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
+        var finish_play_id_ms = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
+        perf_diag_emit("[PLAY_PHASE] PLAY_STOP tune=" + finish_tune_name
+            + " play_id=" + string(finish_play_id_ms)
+            + " bpm=" + string_format(finish_cfg_bpm, 0, 3)
+            + " grace_ms=" + string_format(finish_cfg_grace_ms, 0, 3)
+            + " swing=" + string_format(finish_cfg_swing, 0, 3)
+            + " elapsed_ms=" + string_format(real(expected_elapsed), 0, 3)
+            + " events_total=" + string(array_length(global.tune_events)));
         time_source_stop(global.tune_timer);
         gv_on_tune_playback_finished(expected_elapsed);
         // Schedule cleanup one beat later (600ms at moderate tempo)

@@ -52,19 +52,12 @@ function scoring_get_selected_part_key() {
 /// @function scoring_calibration_debug_log(_line)
 /// @description Write calibration diagnostic to calibration_debug.log file in primary data root debug folder.
 /// @param {string} _line Text line to log
+/// @reads none
+/// @writes file at <primary_data_root>/debug/calibration_debug.log (append)
+/// @callers scoring_* calibration helpers and tune calibration profile routines
 function scoring_calibration_debug_log(_line) {
     var _msg = string(_line);
-    show_debug_message("[CALIB_LOG] " + _msg);  // Always show in output for visibility
-    
-    var _debug_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
-        ? scr_data_paths_get_category_root("debug")
-        : "datafiles/debug/";
-    var _log_path = _debug_root + "calibration_debug.log";
-    var _f = file_text_open_append(_log_path);
-    if (_f != -1) {
-        file_text_write_string(_f, _msg + "\n");
-        file_text_close(_f);
-    }
+    diag_log_append_line(_msg, "calibration_debug.log", true, "[CALIB_LOG] ");
 }
 
 /// @function scoring_get_context_key(_tune_id, _player_id, _bpm, _swing, _part_key)

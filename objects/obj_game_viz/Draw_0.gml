@@ -1,6 +1,14 @@
 /// @description Timeline initial draw pass (planned row + now bar)
 
 var _draw_t0_us = get_timer();
+var _draw_start_ms = timing_get_engine_now_ms();
+if ((!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL") || global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL)
+	&& variable_global_exists("rt_budget_draw_prev_start_ms")) {
+	tune_rt_budget_diag_record_draw_interval_ms(
+		_draw_start_ms - real(global.rt_budget_draw_prev_start_ms)
+	);
+}
+global.rt_budget_draw_prev_start_ms = _draw_start_ms;
 if (variable_global_exists("GV_ANCHOR_RENDER_ONLY") && global.GV_ANCHOR_RENDER_ONLY) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
 if (variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW") && global.DIAG_DISABLE_TIMELINE_DRAW) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }
 if (!variable_global_exists("timeline_cfg") || !is_struct(global.timeline_cfg)) { tune_rt_budget_diag_record_draw_ms((get_timer() - _draw_t0_us) / 1000); exit; }

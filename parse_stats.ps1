@@ -1,49 +1,89 @@
-﻿$path = "c:\Users\xian\AppData\Roaming\Code\User\workspaceStorage\c8306b1f9f71e521abcb633b0df0b7df\GitHub.copilot-chat\transcripts\ecb54cd1-c587-4e2c-a3ec-bee1fbd9c4e9.jsonl"
-$lines = Get-Content $path
-$results = @()
-foreach ($line in $lines) {
-    if ($line -like "*MIDI loopback complete*") {
-        $truncated = if ($line.Length -gt 220) { $line.Substring(0, 220) } else { $line }
-        $offset = $null
-        $jitter = $null
-        if ($line -match "offset_ms[=:]\s*([-+]?\d*\.?\d+)") { $offset = [double]$Matches[1] }
-        if ($line -match "jitter_ms[=:]\s*([-+]?\d*\.?\d+)") { $jitter = [double]$Matches[1] }
-        if ($offset -ne $null -and $jitter -ne $null) {
-            $results += [PSCustomObject]@{
-                Line = $truncated
-                Offset = $offset
-                Jitter = $jitter
+﻿param(
+    [string]$LogPath = "datafiles/debug/perf_benchmark.log",
+    [int]$RunCount = 2
+)
+
+if (-not (Test-Path $LogPath)) {
+    Write-Output "Log file not found: $LogPath"
+    exit 1
+}
+
+$raw = Get-Content $LogPath
+$events = @()
+for ($i = 0; $i -lt $raw.Count; $i++) {
+    try {
+        $obj = $raw[$i] | ConvertFrom-Json
+        $obj | Add-Member -NotePropertyName line -NotePropertyValue ($i + 1)
+        $events += $obj
+    }
+    catch {
+    }
+}
+
+$completedRuns = @()
+$current = $null
+
+foreach ($e in $events) {
+    if ($e.event -eq "play_start") {
+        $current = [ordered]@{
+            start = $e
+            stop = $null
+            metrics = @{}
+            startLine = $e.line
+            stopLine = $null
+        }
+        continue
+    }
+
+    if ($e.event -eq "play_stop" -and $null -ne $current) {
+        $current.stop = $e
+        $current.stopLine = $e.line
+        $completedRuns += [pscustomobject]$current
+        $current = $null
+        continue
+    }
+
+    if ($e.event -eq "rt_budget" -and $null -ne $current) {
+        $msg = [string]$e.message
+        if ($msg -match '^\[RT_BUDGET\] ([^ ]+) ') {
+            $key = $matches[1]
+            if ($msg -match 'kind=([^ ]+)') {
+                $key = "$key/$($matches[1])"
             }
+            $current.metrics[$key] = $msg
         }
     }
 }
-function Get-Median($values) {
-    if ($values.Count -eq 0) { return $null }
-    $sorted = $values | Sort-Object
-    $count = $sorted.Count
-    if ($count % 2 -eq 1) { return $sorted[[math]::Floor($count / 2)] }
-    else { return ($sorted[$count / 2 - 1] + $sorted[$count / 2]) / 2 }
+
+if ($completedRuns.Count -eq 0) {
+    Write-Output "No complete play runs found in $LogPath"
+    exit 0
 }
-if ($results.Count -gt 0) {
-    $results | ForEach-Object { $_.Line }
-    Write-Output "---"
-    Write-Output "Count: $($results.Count)"
-    $offsets = $results.Offset
-    $jitters = $results.Jitter
-    $offStats = $offsets | Measure-Object -Average -Minimum -Maximum
-    $jitStats = $jitters | Measure-Object -Average -Minimum -Maximum
-    $offMedian = Get-Median $offsets
-    $jitMedian = Get-Median $jitters
-    Write-Output "Offset Statistics:"
-    Write-Output "  Mean:   $($offStats.Average)"
-    Write-Output "  Median: $offMedian"
-    Write-Output "  Min:    $($offStats.Minimum)"
-    Write-Output "  Maximum: $($offStats.Maximum)"
-    Write-Output "Jitter Statistics:"
-    Write-Output "  Mean:   $($jitStats.Average)"
-    Write-Output "  Median: $jitMedian"
-    Write-Output "  Min:    $($jitStats.Minimum)"
-    Write-Output "  Maximum: $($jitStats.Maximum)"
-} else {
-    Write-Output "No matching lines found."
+
+$pickCount = [Math]::Max(1, [Math]::Min($RunCount, $completedRuns.Count))
+$selected = $completedRuns | Select-Object -Last $pickCount
+
+$targetKeys = @(
+    "controller_step_interval_ms",
+    "draw_interval_ms",
+    "scheduler_late_ms",
+    "anchor_draw_ms/timeline",
+    "anchor_draw_ms/timeline_base",
+    "anchor_draw_ms/timeline_base_refresh",
+    "anchor_draw_ms/timeline_overlay",
+    "controller_phase_ms/scheduler_tick",
+    "controller_phase_ms/timeline_tick",
+    "controller_phase_ms/deferred_tick"
+)
+
+foreach ($run in $selected) {
+    Write-Output ("RUN lines {0}-{1} | {2} -> {3}" -f $run.startLine, $run.stopLine, $run.start.ts_local, $run.stop.ts_local)
+
+    foreach ($key in $targetKeys) {
+        if ($run.metrics.ContainsKey($key)) {
+            Write-Output $run.metrics[$key]
+        }
+    }
+
+    Write-Output ""
 }

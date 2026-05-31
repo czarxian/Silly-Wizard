@@ -19,6 +19,9 @@ if (!variable_global_exists("EVENT_HISTORY_ENABLED")) {
 if (!variable_global_exists("EVENT_HISTORY_AUTO_EXPORT")) {
     global.EVENT_HISTORY_AUTO_EXPORT = true;
 }
+if (!variable_global_exists("EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS")) {
+    global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS = true;
+}
 if (!variable_global_exists("EVENT_HISTORY_EXPORTED")) {
     global.EVENT_HISTORY_EXPORTED = false;
 }
@@ -27,6 +30,15 @@ if (!variable_global_exists("EVENT_HISTORY_LIBRARY_UPDATED")) {
 }
 if (!variable_global_exists("current_player_id")) {
     global.current_player_id = "player_1";
+}
+if (!variable_global_exists("PERF_BENCHMARK_POWER_MODE_LABEL")) {
+    global.PERF_BENCHMARK_POWER_MODE_LABEL = "unspecified";
+}
+if (!variable_global_exists("PERF_BENCHMARK_MIDI_ACTIVITY_LABEL")) {
+    global.PERF_BENCHMARK_MIDI_ACTIVITY_LABEL = "unknown";
+}
+if (!variable_global_exists("PERF_BENCHMARK_NOTES")) {
+    global.PERF_BENCHMARK_NOTES = "";
 }
 
 /// @function event_history_add(_event_struct)
@@ -413,7 +425,7 @@ function event_history_get_export_score(_export_info = undefined) {
 
 /// @function event_history_get_export_info(_timestamp)
 /// @description Build shared metadata for CSV and summary exports.
-/// @reads global.current_tune_name, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.current_player_id
+/// @reads global.current_tune_name, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.current_player_id, global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS, global.PERF_BENCHMARK_POWER_MODE_LABEL, global.PERF_BENCHMARK_MIDI_ACTIVITY_LABEL, global.PERF_BENCHMARK_NOTES
 /// @callers event_history_export_csv, event_history_export_summary_json, event_history_export_loop_session_json
 function event_history_get_export_info(_timestamp = "") {
     var tune_name = variable_global_exists("current_tune_name")
@@ -450,6 +462,18 @@ function event_history_get_export_info(_timestamp = "") {
         : "datafiles/performances/";
     var folder = perf_root + clean_tune;
     var base_name = clean_tune + "_" + timestamp + "_" + string(bpm) + "_" + swing + "_" + string(grace_override_ms);
+    var export_include_game_events = variable_global_exists("EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS")
+        ? (global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS == true)
+        : true;
+    var benchmark_power_mode_label = variable_global_exists("PERF_BENCHMARK_POWER_MODE_LABEL")
+        ? string(global.PERF_BENCHMARK_POWER_MODE_LABEL)
+        : "unspecified";
+    var benchmark_midi_activity_label = variable_global_exists("PERF_BENCHMARK_MIDI_ACTIVITY_LABEL")
+        ? string(global.PERF_BENCHMARK_MIDI_ACTIVITY_LABEL)
+        : "unknown";
+    var benchmark_notes = variable_global_exists("PERF_BENCHMARK_NOTES")
+        ? string(global.PERF_BENCHMARK_NOTES)
+        : "";
 
     return {
         tune_name: tune_name,
@@ -463,6 +487,15 @@ function event_history_get_export_info(_timestamp = "") {
         bpm: bpm,
         swing: swing,
         grace_override_ms: grace_override_ms,
+        export_include_game_events: export_include_game_events,
+        benchmark_power_mode_label: benchmark_power_mode_label,
+        benchmark_midi_activity_label: benchmark_midi_activity_label,
+        benchmark_notes: benchmark_notes,
+        midi_input_device_name: variable_global_exists("midi_input_device_name") ? string(global.midi_input_device_name) : "not selected",
+        midi_output_device_name: variable_global_exists("midi_output_device_name") ? string(global.midi_output_device_name) : "not selected",
+        midi_output_drum_device_name: variable_global_exists("midi_output_drum_name") ? string(global.midi_output_drum_name) : "not selected",
+        playback_scheduler_mode: variable_global_exists("PLAYBACK_SCHEDULER_MODE") ? string(global.PLAYBACK_SCHEDULER_MODE) : "timesource",
+        game_step_fps: variable_global_exists("GAME_STEP_FPS") ? real(global.GAME_STEP_FPS) : 0,
         folder: folder,
         base_name: base_name,
         csv_path: folder + "/" + base_name + ".csv",
@@ -878,6 +911,19 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         score_offset_ms: score_offset_ms,
         player_spans: player_spans
     };
+    variable_struct_set(payload, "export_filter", {
+        include_game_events: event_history_struct_get(export_info, "export_include_game_events", true)
+    });
+    variable_struct_set(payload, "benchmark_context", {
+        power_mode_label: event_history_struct_get(export_info, "benchmark_power_mode_label", "unspecified"),
+        midi_activity_label: event_history_struct_get(export_info, "benchmark_midi_activity_label", "unknown"),
+        notes: event_history_struct_get(export_info, "benchmark_notes", ""),
+        midi_input_device_name: event_history_struct_get(export_info, "midi_input_device_name", "not selected"),
+        midi_output_device_name: event_history_struct_get(export_info, "midi_output_device_name", "not selected"),
+        midi_output_drum_device_name: event_history_struct_get(export_info, "midi_output_drum_device_name", "not selected"),
+        playback_scheduler_mode: event_history_struct_get(export_info, "playback_scheduler_mode", "timesource"),
+        game_step_fps: event_history_struct_get(export_info, "game_step_fps", 0)
+    });
     variable_struct_set(payload, "has_player_spans", has_player_spans);
     variable_struct_set(payload, "debug_structure", event_history_build_structure_debug_snapshot(120, 200));
     variable_struct_set(payload, "has_timing_sample_game", has_timing_sample_game);
@@ -1267,7 +1313,7 @@ function event_history_enrich(_events) {
 /// @description Write entire event history to a CSV file.
 /// @param _filename_or_path Filename ("event_history.csv") or full path ("datafiles/...")
 /// @returns (none)
-/// @reads global.EVENT_HISTORY
+/// @reads global.EVENT_HISTORY, global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS
 /// @callers scr_button_scripts (end-of-tune export)
 
 function event_history_export_csv(_filename_or_path) {
@@ -1293,6 +1339,9 @@ function event_history_export_csv(_filename_or_path) {
     // Enrich events before export (derive note_letter, forward-fill measure/beat)
     var export_events = event_history_enrich(global.EVENT_HISTORY);
     var event_count = array_length(export_events);
+    var export_info = event_history_get_export_info();
+    var include_game_events = event_history_struct_get(export_info, "export_include_game_events", true);
+    var exported_count = 0;
     
     // Find the first note_on from the game channel (channel 2 for chanter)
     // This is the actual start of the tune being performed
@@ -1329,6 +1378,11 @@ function event_history_export_csv(_filename_or_path) {
     
     for (var i = start_index; i < event_count; i++) {
         var ev = export_events[i];
+
+        var ev_source = struct_get(ev, "source") ?? "";
+        if (!include_game_events && ev_source == "game") {
+            continue;
+        }
         
         // Skip count-in markers (negative measures only)
         var measure = struct_get(ev, "measure");
@@ -1341,7 +1395,6 @@ function event_history_export_csv(_filename_or_path) {
         var beat = struct_get(ev, "beat");
         var beat_fraction = struct_get(ev, "beat_fraction");
         var ev_type = struct_get(ev, "event_type");
-        var ev_source = struct_get(ev, "source");
         var note_midi = struct_get(ev, "note_midi");
         var note_letter = struct_get(ev, "note_letter");
         var velocity = struct_get(ev, "velocity");
@@ -1388,10 +1441,11 @@ function event_history_export_csv(_filename_or_path) {
             + string(score_offset_ms);
         
         file_text_write_string(file, line + "\n");
+        exported_count += 1;
     }
     
     file_text_close(file);
-    show_debug_message("✓ Exported " + string(event_count) + " events to: " + filepath);
+    show_debug_message("✓ Exported " + string(exported_count) + " events to: " + filepath + " (include_game_events=" + string(include_game_events) + ")");
 }
 
 /// @function event_history_create_event(...)

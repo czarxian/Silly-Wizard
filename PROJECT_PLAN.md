@@ -75,6 +75,81 @@ Validation targets:
 - Aros Park loop with internal pickup at loop start: no stretched pickup image and stable playhead wrap.
 - No behavior change to repeat count, blank measure insertion, or jump-to-selection semantics.
 
+### Working Plan: Scheduler/Controller Jitter + Score Image Layout (2026-05-28)
+
+Goal:
+- Reduce `scheduler_late_ms` and `controller_step_interval_ms` by removing avoidable live timeline work.
+- Treat score image stretch/placement as the primary rendering hotspot in that path.
+
+Plan:
+1. Confirm the cost split
+  - Recheck active-playback timing for scheduler, controller step, and timeline draw.
+  - Keep cleanup/export spikes separate from the playback baseline.
+
+2. Precompute score image layout
+  - Move stable score-image placement math out of the frame loop.
+  - Cache per-segment measure positions, widths, and clip bounds where possible.
+
+3. Snap zoom to presets
+  - Limit notebeam zoom to a fixed set of levels instead of a continuous range.
+  - Use each zoom preset as a cache key for layout and placement tables.
+
+4. Keep live work minimal
+  - Leave playhead-relative offsets and current segment selection live.
+  - Preserve pickup handling, measure numbering, and set-mode behavior.
+
+5. Validate against playback metrics
+  - Compare before/after active-playback runs for `scheduler_late_ms` and `controller_step_interval_ms`.
+  - Accept the change only if layout simplification improves timing without visual regressions.
+
+Success criteria:
+- Score-image layout uses cached geometry whenever the preset zoom and segment are unchanged.
+- Active playback remains visually correct for pickups, transitions, and set segments.
+- Scheduler/controller jitter improves or stays flat under the same tune and driver conditions.
+
+Progress update (2026-05-28, continued):
+- Implemented single-tune score-lane layout caching in `gv_draw_timeline_canvas_overlay` keyed by zoom/window/event/map/duration state to avoid rebuilding measure-start layout every frame.
+- Added cache reset on timeline bind (`gv_bind_timeline_on_tune_start`) to prevent cross-run stale layout reuse.
+- Follow-up visual stabilization: added render-only score-lane monotonic playhead clamp (configurable) so tiny backward timing corrections do not produce 1px reverse image jumps.
+- Tightened the monotonic clamp after QA feedback: default backstep hold window increased to 250 ms (reset 250 ms) so moderate scheduler corrections are also visually held.
+- Log comparison (play_id 30923 -> 27389) showed no improvement in visual symptom and worse scheduler/controller envelope in the latest run, indicating the artifact is likely not just tiny playhead backsteps.
+- Adjusted score-lane draw to disable pixel snapping by default (`score_lane_snap_pixels=false`) so clip rounding does not introduce 1px back-forth jitter at measure boundaries.
+- Latest rerun (same issue reported) confirms the symptom persists even with subpixel snapping and monotonic clamp changes.
+- Added targeted score-lane jitter diagnostics that emit `[SCORE_JITTER]` entries when playhead advances but sampled score image X moves backward beyond threshold; writes to `score_lane_jitter.log` for direct correlation with visual artifacts.
+- Rerouted `[SCORE_JITTER]` diagnostics to `perf_diag_emit(...)` so events are guaranteed to land in `perf_benchmark.log` (same channel as RT_BUDGET), avoiding path ambiguity from runtime working directory differences.
+- Fixed jitter detector direction check: it was incorrectly looking for forward X movement (`dx > threshold`) instead of backward movement (`dx < -threshold`), which explains missing events despite visible backsteps.
+- New run captured `[SCORE_JITTER]`, but it fired continuously during normal lane drift; refined detector to learn baseline drift direction after warmup and only emit on sign reversals above threshold.
+- Reversal-only run produced no events; applied direct render stabilization by snapping near-boundary clip edges with a small epsilon and clamping near-zero/near-full source part bounds to reduce seam toggle backsteps (symptom cadence matched boundary crossings).
+- Latest run still showed no reversal events; added seam continuity snapping between adjacent measures (per projection band `k`) so `_px1` inherits prior measure `_px2` when boundary times are contiguous and pixel delta is tiny, eliminating 1px boundary oscillation sources.
+- User clarified jitter magnitude is uncertain (not necessarily 1px). Expanded diagnostics to emit `[SCORE_JUMP]` for abrupt per-frame delta changes (`ddx`) with boundary proximity context (`near_boundary`, `dist_start`, `dist_end`) so seam-vs-nonseam cause can be determined from logs without fixed-pixel assumptions.
+- Latest run showed `[SCORE_JUMP]` only during startup and not near boundaries, indicating left-edge proxy sampling noise. Added now-line-relative telemetry `[SCORE_NOW_JUMP]` (source-space dx/ddx at the fixed now-line intersection) to directly measure the visual stream the player perceives, with backward/same-sprite and boundary context.
+- User reported visuals looked worse after instrumentation phase. Set `score_lane_jitter_diag_enabled`, `score_lane_jump_diag_enabled`, and `score_lane_now_jump_diag_enabled` defaults to `false` and disabled seam-snap experiment by default to restore a low-overhead baseline before further visual tuning.
+- Applied score-lane-only forward spike limiter on render playhead: keep monotonic backstep hold, but cap large forward `playhead_ms` jumps per draw using elapsed wall-clock (`current_time`) budget. This should hide scheduler/step burst jitter in score image motion without changing beat lane timing.
+- Root-cause fix confirmed by playback test: map score-lane timing to exported per-image content window (`content_left_px`/`content_right_px`) instead of the full sprite width. This removed the apparent traveling jump and improved image presentation, indicating variable whitespace/content bounds across measures were causing the discontinuity.
+- Cleanup pass removed the temporary jitter diagnostics, seam snapping, and score-lane playhead smoothing experiments from runtime flow so the fix is now minimal: keep cached layout + content-window mapping, drop the failed mitigations.
+- End-of-day perf assessment after the smooth build: latest complete playback windows (Jig of Slurs 106, play_id 19939 at 10:01 and play_id 15230 at 10:09) show only noise-scale movement versus each other, not a meaningful runtime win. Latest playback-only window landed around `controller_step_interval_ms p50=4 p95=5 p99=9 avg=4.176`, `scheduler_late_ms p50=2.336 p95=3.415 p99=8.525`, `anchor_draw_ms kind=timeline avg=2.620`, `draw_ms avg=0.001`, `midi_process_ms avg=0.085`.
+- Conclusion: the score-lane issue was a correctness problem, not the main performance bottleneck. Active-playback cost is still dominated by the timeline/controller path, and current playback remains materially above the older 2-3 ms controller baseline captured below.
+- Next restart target: instrument controller step and timeline update/draw phases one level deeper, then evaluate timeline/tune-structure caching or partial redraw opportunities. Do not reopen score-lane content-window work unless new evidence points back there.
+- Implemented deeper controller-step instrumentation: new `[RT_BUDGET] controller_phase_ms kind=...` metrics for `scheduler_tick`, `timeline_tick`, and `deferred_tick` sampled in `obj_game_controller` Step via `tune_rt_budget_diag_record_controller_phase_ms(...)`.
+- Removed redundant fallback `gv_timeline_step_tick()` call from timeline-anchor draw suppression path (`obj_field_base` Draw); controller step is now the sole tick owner in all runtime paths.
+- Latest complete rerun after restart (5/29 19:45, lines 1591-2052) confirms cadence jitter remains (`controller_step_interval_ms p99=21 max=47`, `scheduler_late_ms p95=12.151 p99=30.528`) while controller phase work is tiny (`controller_phase_ms timeline_tick avg=0.075 max=0.114`, scheduler/deferred near zero). This points to frame/scheduling stalls outside controller step work.
+- Added timeline anchor subphase diagnostics in `obj_field_base` Draw: `anchor_draw_ms kind=timeline_base`, `timeline_base_refresh`, and `timeline_overlay`, while preserving existing total `kind=timeline`, to isolate whether residual cost/jitter is base render vs per-frame overlay.
+- Added draw pacing telemetry: `obj_game_viz` Draw now records draw-to-draw cadence via `tune_rt_budget_diag_record_draw_interval_ms(...)` and emits `[RT_BUDGET] draw_interval_ms` so frame jitter can be compared directly against `controller_step_interval_ms` and scheduler lateness.
+- Replaced legacy ad-hoc parser with reusable `parse_stats.ps1` run-pair summarizer (defaults to `datafiles/debug/perf_benchmark.log`) that prints the last N complete runs and key RT metrics including controller phases and new timeline subphase keys.
+- Follow-up after 5/30 jitter report: switched diagnostics to lightweight defaults in `obj_game_viz` Create (`notebeam_diag_enabled=false`, `RT_BUDGET_DIAG_LOG_INTERVAL_MS=2000`, and heavy channels off by default: `RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW=false`, `RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL=false`, `RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES=false`). Added function-level guards so anchor/draw-interval metrics only run when explicitly enabled.
+- Added targeted scheduler spike tracing in `script_tune_callback_batched`: when lateness crosses threshold, emit cooldown-limited `[SCHED_SPIKE]` with contextual fields (`group_idx`, `deferred_pending`, `max_groups_step`, `step_budget_us`, `lookahead_ms`, `active_seg`, `measure`) so scheduler-tail moments can be correlated to queue pressure and segment transitions without full heavy profiling.
+- Stage A runtime decimation pass: timeline overlay in `obj_field_base` now redraws into a cached overlay surface at configurable cadence (`GV_TIMELINE_OVERLAY_REFRESH_MS`, default 11 ms) and blits every frame, reducing per-frame overlay rebuild cost while preserving smooth presentation.
+- Stage A input gating: `gv_timeline_step_tick()` now skips review click handling during active playback (wheel pan remains review-only), reducing unnecessary per-step input work in live play.
+- Stage A diagnostics safety: scheduler-focus mode no longer force-enables notebeam diagnostics in `obj_game_viz` Create, preventing instrumentation overhead from re-entering normal perf runs.
+- Stage B scheduler resilience tuning (conservative defaults): `PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS=1.0`, `PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP=12`, `PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US=1500`, `PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP=192`, `PLAYBACK_DEFERRED_MAX_BUDGET_US=1800`. Goal: reduce scheduler tail spikes under transient frame stalls while preserving timing fidelity.
+- Stage C startup drain: `PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS=4.0` and an inline first-callback catch-up in timesource mode when the first group is already within startup slack. Goal: remove the recurring first-group late burst without changing steady-state pump behavior.
+- Stage D startup-only controls: added `PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS=40.0` (timesource first-arm delay with re-anchored `tune_start_real`) and `PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS=200.0` (ignore startup spike traces near tune start). Goal: reduce startup first-group stalls and keep diagnostics focused on steady-state issues.
+- Next capture target: run the same Jig of Slurs 106 playback and compare `anchor_draw_ms kind=timeline_overlay` vs `timeline_base_refresh` and total `timeline`; if overlay dominates, optimize overlay path first (incremental/quantized now-line tick draws before broader timeline refactors).
+
+Immediate validation target:
+- Replay the same Jig of Slurs 106/0 run and confirm whether the twice-per-measure micro backward image step is gone or materially reduced.
+- If micro-jitter remains, instrument score-lane draw logs for frame-to-frame playhead delta and per-measure x delta to isolate whether the artifact is timing backstep vs clip-rounding seam.
+
 
 
 ## ⚡ 1-Minute UI Pre-Run Checklist
@@ -1710,3 +1785,70 @@ Before declaring a refactor done:
 - Requires MIDI loopback or external hardware
 
 **Recommendation**: Start with **Option A**, move to **Option B** if needed.
+
+---
+
+## Experimental Branch Plan - Minimal Live Processing (2026-05-28)
+
+**Branch:** `experiment/minimal-live-processing-phase1`
+
+### Goal
+- Reduce live-play processing load while preserving timing accuracy and score correctness.
+- Keep planned tune events available for scoring until loop-iteration dependencies are replaced.
+- Provide objective, repeatable benchmark evidence before any live-ingest suppression.
+
+### Phase Gates
+
+#### Phase 1 (implemented on branch)
+- Add export-time filter only:
+  - `global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS` (default `true`)
+  - When `false`, CSV export excludes `source="game"` rows.
+- Keep live `EVENT_HISTORY` ingestion unchanged (no scoring risk).
+- Add benchmark context metadata to export summaries via `event_history_get_export_info()`:
+  - MIDI input/output device names
+  - scheduler mode and game step fps
+  - manual labels for power mode and MIDI activity level
+
+#### Phase 2 (blocked by dependency)
+- Optional future suppression of live planned-event writes (`source="game"`) only after loop scoring no longer derives iteration windows from `EVENT_HISTORY` game rows.
+- Must replace iteration window derivation with scheduler-native/segment timeline windows first.
+
+### Objective Benchmark Protocol (2x2x2 matrix)
+
+Run each condition with same tune/tempo profile and collect p50/p95/p99/max metrics.
+
+Factors:
+- Audio interface: `onboard` vs `external`
+- Power mode: `balanced` vs `high_performance`
+- MIDI activity: `idle` vs `active_input`
+
+Metrics:
+- scheduler lateness (`scheduler_late_ms`)
+- controller step interval (`controller_step_interval_ms`)
+- MIDI process time (`midi_process_ms`)
+- MIDI poll skew/delay diagnostics (`raw_skew_ms`, poll delay)
+
+Run tagging fields:
+- `global.PERF_BENCHMARK_POWER_MODE_LABEL`
+- `global.PERF_BENCHMARK_MIDI_ACTIVITY_LABEL`
+- `global.PERF_BENCHMARK_NOTES`
+
+Acceptance guidance for Phase 1->2 decision:
+- No regression in p95/p99 scheduler lateness under matched conditions.
+- No regression in score output consistency across repeated runs.
+- Export payloads include sufficient run context for cross-condition comparison.
+
+### Live-Work Migration Map (what moved where)
+
+- Planned-event visibility for external analysis:
+  - Before: always exported in CSV.
+  - Phase 1: export-selectable via `EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS`.
+  - Live logging remains on for correctness.
+
+- Environmental test context:
+  - Before: implicit/manual notes outside files.
+  - Phase 1: captured in summary `benchmark_context` metadata.
+
+- Live-path removal policy:
+  - Do not remove a live-path item until there is a pre-play or post-play replacement with equivalent correctness guarantees.
+

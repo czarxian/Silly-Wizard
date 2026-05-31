@@ -23,13 +23,30 @@ if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
 	global.PLAYBACK_SCHEDULER_MODE = "timesource";
 }
 if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
-	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 0.0;
+	// Small lookahead lets the step scheduler dispatch near-due groups before
+	// they become visibly late under occasional frame stalls.
+	global.PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS = 1.0;
 }
 if (!variable_global_exists("PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP")) {
-	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 8;
+	global.PLAYBACK_SCHEDULER_MAX_GROUPS_PER_STEP = 12;
 }
 if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US")) {
-	global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1000;
+	global.PLAYBACK_SCHEDULER_STEP_MAX_PUMP_US = 1500;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS")) {
+	global.PLAYBACK_SCHEDULER_STARTUP_DRAIN_MS = 4.0;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS")) {
+	global.PLAYBACK_SCHEDULER_STARTUP_ARM_DELAY_MS = 40.0;
+}
+if (!variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS")) {
+	global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS = 200.0;
+}
+if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP")) {
+	global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP = 192;
+}
+if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
+	global.PLAYBACK_DEFERRED_MAX_BUDGET_US = 1800;
 }
 
 //Create Globals

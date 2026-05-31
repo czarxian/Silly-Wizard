@@ -12,20 +12,32 @@ if ((!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL") || global.R
 global.rt_budget_controller_step_prev_start_ms = _controller_step_start_ms;
 
 // Step-driven playback scheduler mode dispatches all due tune event groups here.
+var _phase_t0_us = get_timer();
 tune_scheduler_step_tick();
+if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
+	tune_rt_budget_diag_record_controller_phase_ms("scheduler_tick", (get_timer() - _phase_t0_us) * 0.001);
+}
 // Keep timeline/playhead maintenance owned by the controller step so it does
 // not depend on any specific UI anchor instance being active.
+_phase_t0_us = get_timer();
 gv_timeline_step_tick();
+if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
+	tune_rt_budget_diag_record_controller_phase_ms("timeline_tick", (get_timer() - _phase_t0_us) * 0.001);
+}
 var _deferred_max_items = variable_global_exists("PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP")
 	? max(1, floor(real(global.PLAYBACK_DEFERRED_MAX_ITEMS_PER_STEP)))
 	: 128;
 var _deferred_budget_us = variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")
 	? max(0, real(global.PLAYBACK_DEFERRED_MAX_BUDGET_US))
 	: 1200;
+_phase_t0_us = get_timer();
 tune_scheduler_process_deferred(
 	_deferred_max_items,
 	_deferred_budget_us
 );
+if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
+	tune_rt_budget_diag_record_controller_phase_ms("deferred_tick", (get_timer() - _phase_t0_us) * 0.001);
+}
 
 // Apply deferred UI layer visibility after room switches.
 // room_goto() transitions at end-of-step, so this guarantees we set layers in the destination room.

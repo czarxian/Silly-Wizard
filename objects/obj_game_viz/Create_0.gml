@@ -150,7 +150,7 @@ global.timeline_cfg = {
     notebeam_underlay_cache_enabled: true,
     notebeam_underlay_invalidation_ms: 33,
     // Temporary notebeam jitter diagnostics (all off by default)
-    notebeam_diag_enabled: true,
+    notebeam_diag_enabled: false,
     notebeam_diag_log_interval_frames: 45,
     notebeam_diag_disable_planned: false,
     notebeam_diag_disable_player: false,
@@ -171,11 +171,14 @@ global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS = 1000;
 
 // Realtime timing budget diagnostics (scheduler + visual alignment)
 global.RT_BUDGET_DIAG_ENABLED = true;
-global.RT_BUDGET_DIAG_LOG_INTERVAL_MS = 1000;
+global.RT_BUDGET_DIAG_LOG_INTERVAL_MS = 2000;
 global.RT_BUDGET_SCHED_WARMUP_MS = 1000;
 global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = true;
 global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = true;
 global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL = false;
+global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW = false;
+global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES = false;
 global.PLAYBACK_DEBUG_GROUP_TIMING = true;
 if (!variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW")) {
     global.DIAG_DISABLE_TIMELINE_DRAW = false;
@@ -199,6 +202,11 @@ if (!variable_global_exists("GV_VISUAL_CACHE_REFRESH_MS")) {
 if (!variable_global_exists("GV_TUNESTRUCTURE_PLAY_REFRESH_MS")) {
     global.GV_TUNESTRUCTURE_PLAY_REFRESH_MS = 48;
 }
+if (!variable_global_exists("GV_TIMELINE_OVERLAY_REFRESH_MS")) {
+    // Throttle expensive timeline overlay redraw work to ~90 Hz while keeping
+    // per-frame surface blits smooth.
+    global.GV_TIMELINE_OVERLAY_REFRESH_MS = 11;
+}
 if (!variable_global_exists("GV_ANCHOR_RENDER_ONLY")) {
     global.GV_ANCHOR_RENDER_ONLY = true;
 }
@@ -211,13 +219,15 @@ if (!variable_global_exists("DIAG_SCHEDULER_FOCUS_MODE")) {
     global.DIAG_SCHEDULER_FOCUS_MODE = true;
 }
 if (global.DIAG_SCHEDULER_FOCUS_MODE) {
-    // Keep notebeam diagnostics on so nowpulse continues to log while the
-    // rest of the scheduler-focused filter remains active.
-    global.timeline_cfg.notebeam_diag_enabled = true;
+    // Keep scheduler-focused telemetry minimal to avoid instrumentation-induced jitter.
+    global.timeline_cfg.notebeam_diag_enabled = false;
     global.MIDI_TIMING_DIAG_ENABLED = false;
     global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
     global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;
     global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
+    global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL = false;
+    global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW = false;
+    global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES = false;
     global.PLAYBACK_DEBUG_GROUP_TIMING = false;
 }
 

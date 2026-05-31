@@ -158,7 +158,7 @@ function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_
 	var src_midi = floor(real(global.midi_timing_diag_source_midi_count ?? 0));
 	var src_wall = floor(real(global.midi_timing_diag_source_wall_count ?? 0));
 
-	show_debug_message("[MIDI_TIMING] poll_delay_ms p50=" + string_format(p50, 0, 3)
+	perf_diag_emit("[MIDI_TIMING] poll_delay_ms p50=" + string_format(p50, 0, 3)
 		+ " p95=" + string_format(p95, 0, 3)
 		+ " p99=" + string_format(p99, 0, 3)
 		+ " | raw_skew_ms p50=" + string_format(s50, 0, 3)

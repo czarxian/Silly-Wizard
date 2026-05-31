@@ -32,15 +32,17 @@ if (ui_name_value == "timeline_canvas_anchor") {
 			&& !playback_complete);
 	if (diag_disable_timeline_draw) exit;
 	if (suppress_timeline_anchor) {
-		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state) && global.timeline_state.active) {
-			gv_timeline_step_tick();
-		}
+		// Timeline tick ownership is in obj_game_controller Step; keep draw path side-effect free.
 		tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 		exit;
 	}
 	if (!use_visual_cache) {
+		var _timeline_base_t0_us = get_timer();
 		gv_draw_timeline_canvas(bbox_left, bbox_top, bbox_right, bbox_bottom);
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline_base", (get_timer() - _timeline_base_t0_us) / 1000);
+		var _timeline_overlay_t0_us = get_timer();
 		gv_draw_timeline_canvas_overlay(bbox_left, bbox_top, bbox_right, bbox_bottom);
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline_overlay", (get_timer() - _timeline_overlay_t0_us) / 1000);
 		tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 		exit;
 	}
@@ -53,15 +55,47 @@ if (ui_name_value == "timeline_canvas_anchor") {
 	var _cache_surf = variable_struct_get(_cache, "surf");
 	var _now_ms = timing_get_engine_now_ms();
 	if ((_now_ms - _cache_last_ms) >= cache_refresh_ms) {
+		var _timeline_base_refresh_t0_us = get_timer();
 		surface_set_target(_cache_surf);
 		draw_clear_alpha(c_black, 0);
 		gv_draw_timeline_canvas(0, 0, _w - 1, _h - 1);
 		surface_reset_target();
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline_base_refresh", (get_timer() - _timeline_base_refresh_t0_us) / 1000);
 		variable_struct_set(_cache, "last_ms", _now_ms);
 	}
 	draw_surface(_cache_surf, bbox_left, bbox_top);
-	// Live overlay: scrolling ticks + now-line drawn every frame at real playhead time.
-	gv_draw_timeline_canvas_overlay(bbox_left, bbox_top, bbox_right, bbox_bottom);
+	// Live overlay: redraw at a controlled cadence, then blit cached overlay every frame.
+	var _overlay_refresh_ms = variable_global_exists("GV_TIMELINE_OVERLAY_REFRESH_MS")
+		? max(1, real(global.GV_TIMELINE_OVERLAY_REFRESH_MS))
+		: cache_refresh_ms;
+	var _overlay_last_ms = variable_struct_exists(_cache, "overlay_last_ms")
+		? real(variable_struct_get(_cache, "overlay_last_ms"))
+		: -1000000000;
+	var _overlay_surf = variable_struct_exists(_cache, "overlay_surf")
+		? variable_struct_get(_cache, "overlay_surf")
+		: noone;
+	if (!surface_exists(_overlay_surf)
+		|| !variable_struct_exists(_cache, "overlay_w")
+		|| !variable_struct_exists(_cache, "overlay_h")
+		|| floor(real(variable_struct_get(_cache, "overlay_w"))) != _w
+		|| floor(real(variable_struct_get(_cache, "overlay_h"))) != _h) {
+		if (surface_exists(_overlay_surf)) surface_free(_overlay_surf);
+		_overlay_surf = surface_create(_w, _h);
+		variable_struct_set(_cache, "overlay_surf", _overlay_surf);
+		variable_struct_set(_cache, "overlay_w", _w);
+		variable_struct_set(_cache, "overlay_h", _h);
+		_overlay_last_ms = -1000000000;
+	}
+	if ((_now_ms - _overlay_last_ms) >= _overlay_refresh_ms) {
+		var _timeline_overlay_t0_us = get_timer();
+		surface_set_target(_overlay_surf);
+		draw_clear_alpha(c_black, 0);
+		gv_draw_timeline_canvas_overlay(0, 0, _w - 1, _h - 1);
+		surface_reset_target();
+		tune_rt_budget_diag_record_anchor_draw_ms("timeline_overlay", (get_timer() - _timeline_overlay_t0_us) / 1000);
+		variable_struct_set(_cache, "overlay_last_ms", _now_ms);
+	}
+	draw_surface(_overlay_surf, bbox_left, bbox_top);
 	gv_anchor_cache_store(_key, _cache);
 	tune_rt_budget_diag_record_anchor_draw_ms("timeline", (get_timer() - _anchor_t0_us) / 1000);
 	exit;
