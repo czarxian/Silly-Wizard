@@ -24,14 +24,47 @@ function scr_tune_library_normalize_root(_root)
     return root;
 }
 
-/// @function scr_data_paths_get_primary_root()
-/// @description Resolve the canonical runtime data root. Uses optional override, then auto candidates.
+/// @function scr_data_paths_get_user_data_root()
+/// @description Resolve canonical writable runtime data root.
+/// @returns {string} Root folder path ending with '/'
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers scr_data_paths_get_primary_root, scr_data_paths_get_category_root, config writers
+function scr_data_paths_get_user_data_root()
+{
+    var candidates = array_create(0);
+    array_push(candidates, scr_tune_library_normalize_root(working_directory + "datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root(program_directory + "datafiles/"));
+
+    for (var i = 0; i < array_length(candidates); i++) {
+        var root = candidates[i];
+        if (root == "") continue;
+
+        if (directory_exists(root)) {
+            return root;
+        }
+
+        var alt_root = string_replace_all(root, "/", "\\");
+        if (directory_exists(alt_root)) {
+            return scr_tune_library_normalize_root(alt_root);
+        }
+    }
+
+    var fallback = scr_tune_library_normalize_root(working_directory + "datafiles/");
+    if (fallback == "") fallback = "datafiles/";
+    return fallback;
+}
+
+/// @function scr_data_paths_get_content_root()
+/// @description Resolve canonical tune-content root. Optional override wins, then auto candidates.
 /// @returns {string} Root folder path ending with '/'
 /// @reads global.primary_data_root_override, global.tune_library_root_override
 /// @writes none
 /// @objects none
-/// @callers scr_tune_library_get_runtime_root, scr_data_paths_get_category_root, path consumers
-function scr_data_paths_get_primary_root()
+/// @callers scr_data_paths_get_category_root, scr_tune_library_get_runtime_root
+function scr_data_paths_get_content_root()
 {
     var candidates = array_create(0);
 
@@ -51,27 +84,36 @@ function scr_data_paths_get_primary_root()
         }
     }
 
-    array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
-    array_push(candidates, scr_tune_library_normalize_root(program_directory + "datafiles/"));
     array_push(candidates, scr_tune_library_normalize_root(working_directory + "datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root(program_directory + "datafiles/"));
+    array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
 
     for (var i = 0; i < array_length(candidates); i++) {
         var root = candidates[i];
         if (root == "") continue;
 
-        if (directory_exists(root)) {
+        var tunes_root = scr_tune_library_normalize_root(root + "tunes/");
+        if (directory_exists(tunes_root)) {
             return root;
         }
 
-        var alt_root = string_replace_all(root, "/", "\\");
-        if (directory_exists(alt_root)) {
-            return scr_tune_library_normalize_root(alt_root);
+        var alt_tunes_root = string_replace_all(tunes_root, "/", "\\");
+        if (directory_exists(alt_tunes_root)) {
+            return root;
         }
     }
 
-    var fallback = scr_tune_library_normalize_root("datafiles/");
+    var fallback = scr_data_paths_get_user_data_root();
     if (fallback == "") fallback = "datafiles/";
     return fallback;
+}
+
+/// @function scr_data_paths_get_primary_root()
+/// @description Backward-compatible alias for user-data root.
+/// @returns {string} Root folder path ending with '/'
+function scr_data_paths_get_primary_root()
+{
+    return scr_data_paths_get_user_data_root();
 }
 
 /// @function scr_data_paths_get_category_root(_category)
@@ -81,8 +123,13 @@ function scr_data_paths_get_primary_root()
 function scr_data_paths_get_category_root(_category)
 {
     var category = string_lower(string_trim(string(_category ?? "")));
-    if (category == "") return scr_data_paths_get_primary_root();
-    return scr_tune_library_normalize_root(scr_data_paths_get_primary_root() + category + "/");
+    if (category == "") return scr_data_paths_get_user_data_root();
+
+    if (category == "tunes") {
+        return scr_tune_library_normalize_root(scr_data_paths_get_content_root() + "tunes/");
+    }
+
+    return scr_tune_library_normalize_root(scr_data_paths_get_user_data_root() + category + "/");
 }
 
 /// @function scr_data_paths_resolve_datafiles_path(_path)
@@ -179,14 +226,18 @@ function scr_tune_library_root_has_json_content(_root)
 function scr_data_paths_load_primary_root_from_config()
 {
     var candidates = array_create(0);
+    // Canonical runtime path first.
+    array_push(candidates, working_directory + "datafiles/config/runtime_paths.json");
+    // Legacy runtime mirrors.
+    array_push(candidates, working_directory + "datafiles/runtime_paths.json");
+    array_push(candidates, working_directory + "runtime_paths.json");
+    // Program-directory mirrors.
+    array_push(candidates, program_directory + "datafiles/config/runtime_paths.json");
+    array_push(candidates, program_directory + "runtime_paths.json");
+    // Project-relative legacy mirrors (lowest priority).
     array_push(candidates, "datafiles/config/runtime_paths.json");
     array_push(candidates, "datafiles/runtime_paths.json");
     array_push(candidates, "runtime_paths.json");
-    array_push(candidates, program_directory + "runtime_paths.json");
-    array_push(candidates, program_directory + "datafiles/config/runtime_paths.json");
-    array_push(candidates, working_directory + "runtime_paths.json");
-    array_push(candidates, working_directory + "datafiles/runtime_paths.json");
-    array_push(candidates, working_directory + "datafiles/config/runtime_paths.json");
 
     for (var i = 0; i < array_length(candidates); i++) {
         var p = string(candidates[i]);
@@ -215,9 +266,15 @@ function scr_data_paths_load_primary_root_from_config()
         if (!is_struct(parsed)) continue;
 
         var root = "";
+        var has_explicit_override_key = false;
         if (variable_struct_exists(parsed, "primary_data_root_override")) {
+            has_explicit_override_key = true;
             root = string(variable_struct_get(parsed, "primary_data_root_override"));
+        } else if (variable_struct_exists(parsed, "content_data_root_override")) {
+            has_explicit_override_key = true;
+            root = string(variable_struct_get(parsed, "content_data_root_override"));
         } else if (variable_struct_exists(parsed, "tune_library_root_override")) {
+            has_explicit_override_key = true;
             root = string(variable_struct_get(parsed, "tune_library_root_override"));
             if (string_pos("/tunes/", root) > 0) {
                 root = string_replace(root, "/tunes/", "/");
@@ -225,8 +282,13 @@ function scr_data_paths_load_primary_root_from_config()
         } else if (variable_struct_exists(parsed, "paths")) {
             var paths = variable_struct_get(parsed, "paths");
             if (is_struct(paths) && variable_struct_exists(paths, "primary_data_root_override")) {
+                has_explicit_override_key = true;
                 root = string(variable_struct_get(paths, "primary_data_root_override"));
+            } else if (is_struct(paths) && variable_struct_exists(paths, "content_data_root_override")) {
+                has_explicit_override_key = true;
+                root = string(variable_struct_get(paths, "content_data_root_override"));
             } else if (is_struct(paths) && variable_struct_exists(paths, "tune_library_root_override")) {
+                has_explicit_override_key = true;
                 root = string(variable_struct_get(paths, "tune_library_root_override"));
                 if (string_pos("/tunes/", root) > 0) {
                     root = string_replace(root, "/tunes/", "/");
@@ -235,6 +297,10 @@ function scr_data_paths_load_primary_root_from_config()
         }
 
         root = scr_tune_library_normalize_root(root);
+        if (has_explicit_override_key && root == "") {
+            show_debug_message("scr_data_paths_load_primary_root_from_config: AUTO mode from " + p);
+            return "";
+        }
         if (root != "") {
             show_debug_message("scr_data_paths_load_primary_root_from_config: using " + root + " from " + p);
             return root;
@@ -311,38 +377,24 @@ function scr_data_paths_save_primary_root_to_config(_root)
     var normalized = scr_tune_library_normalize_root(_root);
     var payload = {
         primary_data_root_override: normalized,
+        content_data_root_override: normalized,
         // Keep legacy key while transition is in progress.
         tune_library_root_override: (normalized != "") ? (normalized + "tunes/") : ""
     };
     var raw = json_stringify(payload);
 
-    var paths = [
-        "datafiles/config/runtime_paths.json",
-        "datafiles/runtime_paths.json",
-        "runtime_paths.json"
-    ];
+    var canonical = scr_tune_library_normalize_root(scr_data_paths_get_user_data_root() + "config/") + "runtime_paths.json";
+    scr_tune_library_ensure_parent_dir(canonical);
 
-    var wrote_any = false;
-    for (var i = 0; i < array_length(paths); i++) {
-        var p = string(paths[i]);
-        scr_tune_library_ensure_parent_dir(p);
-
-        var f = file_text_open_write(p);
-        if (f < 0) {
-            show_debug_message("scr_data_paths_save_primary_root_to_config: could not write " + p);
-            continue;
-        }
-
-        file_text_write_string(f, raw);
-        file_text_close(f);
-        wrote_any = true;
+    var f = file_text_open_write(canonical);
+    if (f < 0) {
+        show_debug_message("scr_data_paths_save_primary_root_to_config: could not write " + canonical);
+        return false;
     }
 
-    if (!wrote_any) {
-        show_debug_message("scr_data_paths_save_primary_root_to_config: no config targets were writable");
-    }
-
-    return wrote_any;
+    file_text_write_string(f, raw);
+    file_text_close(f);
+    return true;
 }
 
 /// @function scr_tune_library_save_root_override_to_config(_root)

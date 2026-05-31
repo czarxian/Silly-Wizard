@@ -32,6 +32,16 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+### Runtime Paths Simplification (2026-05-30)
+- Added split-root path model in `scr_tune_library`:
+  - `scr_data_paths_get_user_data_root()` now defines writable runtime root (sets/config/debug/performances).
+  - `scr_data_paths_get_content_root()` resolves tune content root (override + AUTO candidates).
+- `scr_data_paths_get_category_root("tunes")` now routes to content root; other categories route to user-data root.
+- Runtime path config now prefers canonical runtime file first (`working_directory + datafiles/config/runtime_paths.json`) with legacy files as fallback-only reads.
+- Saving runtime path config now writes canonical runtime file only.
+- Settings UI labels/messages were updated so "data root" controls tune content root semantics.
+- Goal: keep compiler testing and packaged exe behavior aligned while preserving writable runtime data paths.
+
 ### Calibration Phase 1 Rollback & Stabilization (2026-05-17)
 **Status**: ✅ Complete — Game fully playable with multi-tune sets.
 

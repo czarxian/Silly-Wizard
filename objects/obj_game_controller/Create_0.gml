@@ -50,8 +50,8 @@ if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
 }
 
 //Create Globals
-	// Optional primary data root override loaded from JSON config (runtime_paths.json).
-	// Leave unset/blank in config to use auto-detection/runtime defaults.
+	// Optional tune content root override loaded from JSON config (runtime_paths.json).
+	// Leave unset/blank in config to use AUTO content-root detection.
 	if (!variable_global_exists("primary_data_root_override")) {
 		var _cfg_root_override = "";
 		if (script_exists(asset_get_index("scr_data_paths_load_primary_root_from_config"))) {

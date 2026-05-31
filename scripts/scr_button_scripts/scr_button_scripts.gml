@@ -1706,7 +1706,7 @@
 	}
 
 	/// @function scr_settings_refresh_data_root_field()
-	/// @description Refresh the settings field text for primary data root mode (AUTO/CUSTOM) and current resolved root.
+	/// @description Refresh the settings field text for tune content root mode (AUTO/CUSTOM) and current resolved tune root.
 	/// @reads global.primary_data_root_override
 	/// @writes obj_field_base.field_value/field_contents for setting_field_tune_root
 	/// @objects obj_field_base
@@ -1720,8 +1720,8 @@
 			override_root = scr_tune_library_normalize_root(global.primary_data_root_override);
 		}
 
-		var resolved_root = script_exists(asset_get_index("scr_data_paths_get_primary_root"))
-			? scr_data_paths_get_primary_root()
+		var resolved_root = script_exists(asset_get_index("scr_data_paths_get_content_root"))
+			? scr_data_paths_get_content_root()
 			: "datafiles/";
 
 		var contents = (override_root != "")
@@ -1735,10 +1735,10 @@
 	}
 
 	/// @function scr_settings_data_root_set(_ctx)
-	/// @description Set a custom primary data root (folder path prompt with optional file-picker assist), persist to runtime_paths JSON, and regenerate the tune library.
+	/// @description Set a custom tune content root (folder path prompt with optional file-picker assist), persist to runtime paths config, and regenerate the tune library.
 	/// @param _ctx Button context
 	/// @reads global.primary_data_root_override
-	/// @writes global.primary_data_root_override, runtime_paths.json mirrors, global.tune_library
+	/// @writes global.primary_data_root_override, runtime paths config, global.tune_library
 	/// @objects obj_field_base
 	/// @callers scr_handle_button_click (button 38)
 	function scr_settings_data_root_set(_ctx = noone) {
@@ -1746,15 +1746,15 @@
 		if (variable_global_exists("primary_data_root_override")) {
 			seed = scr_tune_library_normalize_root(global.primary_data_root_override);
 		}
-		if (seed == "" && script_exists(asset_get_index("scr_data_paths_get_primary_root"))) {
-			seed = scr_data_paths_get_primary_root();
+		if (seed == "" && script_exists(asset_get_index("scr_data_paths_get_content_root"))) {
+			seed = scr_data_paths_get_content_root();
 		}
 
 		var picked = "";
 		var picker_filter = "All files (*.*)|*.*";
 
 		// Primary UX: direct folder path entry (root settings should not require selecting a file).
-		var raw = get_string("Primary data root folder path", seed);
+		var raw = get_string("Tune content root folder path", seed);
 		raw = string(raw);
 
 		// Optional assist: if left blank, allow picking any file under the desired root.
@@ -1792,7 +1792,7 @@
 
 		if (!directory_exists(tunes_root)) {
 			show_debug_message("[SETTINGS] Data root rejected (missing /tunes folder): " + root);
-			show_message("Could not find a tunes folder under:\n" + root + "\n\nPick your primary data root (the folder that contains tunes, sets, config, debug, performances).\nIf you selected the project root, pick the datafiles folder instead.");
+			show_message("Could not find a tunes folder under:\n" + root + "\n\nPick your tune content root (the folder that contains /tunes).\nIf you selected the project root, pick the datafiles folder instead.");
 			return;
 		}
 		if (!scr_tune_library_root_has_json_content(tunes_root)) {
@@ -1809,13 +1809,13 @@
 
 		scr_regenerate_tune_library();
 		scr_settings_refresh_data_root_field();
-		show_debug_message("[SETTINGS] Primary data root set: " + root);
+		show_debug_message("[SETTINGS] Tune content root set: " + root);
 	}
 
 	/// @function scr_settings_data_root_reset_auto(_ctx)
-	/// @description Clear custom primary data root override, persist AUTO mode to runtime_paths JSON, and regenerate the tune library.
+	/// @description Clear custom tune content root override, persist AUTO mode to runtime paths config, and regenerate the tune library.
 	/// @param _ctx Button context
-	/// @writes global.primary_data_root_override, runtime_paths.json mirrors, global.tune_library
+	/// @writes global.primary_data_root_override, runtime paths config, global.tune_library
 	/// @callers scr_handle_button_click (button 39)
 	function scr_settings_data_root_reset_auto(_ctx = noone) {
 		global.primary_data_root_override = "";
@@ -1828,7 +1828,7 @@
 
 		scr_regenerate_tune_library();
 		scr_settings_refresh_data_root_field();
-		show_debug_message("[SETTINGS] Primary data root reset to AUTO");
+		show_debug_message("[SETTINGS] Tune content root reset to AUTO");
 	}
 
 	/// @function scr_settings_refresh_tune_root_field()
