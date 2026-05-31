@@ -1810,7 +1810,7 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
     }
 
     var line1 = "Perf: N/A";
-    var line2 = "No run summary";
+    var line2 = "Tap for details";
     if (has_summary) {
         var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
         var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
@@ -1829,6 +1829,125 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
     draw_text_transformed((x1 + x2) * 0.5, y1 + max(10, floor((y2 - y1) * 0.68)), line2, 0.62, 0.62, 0);
     draw_set_halign(fa_left);
     draw_set_valign(fa_top);
+}
+
+/// @function gv_perf_summary_build_lines(_summary)
+/// @description Build multi-line detail strings for the performance summary popup.
+/// @param {struct|undefined} _summary Latest run summary
+/// @returns {array} Text lines for popup body
+function gv_perf_summary_build_lines(_summary) {
+    if (!is_struct(_summary)) {
+        return [
+            "No run summary available.",
+            "Finish a run and tap refresh."
+        ];
+    }
+
+    var mode = string(gv_perf_summary_struct_get(_summary, "mode", "single"));
+    var title = string(gv_perf_summary_struct_get(_summary, "title", "unknown"));
+    var segs = floor(real(gv_perf_summary_struct_get(_summary, "segments", 0)));
+    var elapsed = real(gv_perf_summary_struct_get(_summary, "elapsed_ms", 0));
+    var groups = floor(real(gv_perf_summary_struct_get(_summary, "groups_total", 0)));
+    var events = floor(real(gv_perf_summary_struct_get(_summary, "events_total", 0)));
+    var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
+
+    var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
+    var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
+    var draw = gv_perf_summary_struct_get(_summary, "draw_ms", undefined);
+    var midi = gv_perf_summary_struct_get(_summary, "midi_process_ms", undefined);
+
+    var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
+    var ctrl_p99 = real(gv_perf_summary_struct_get(ctrl, "p99", 0));
+    var ctrl_max = real(gv_perf_summary_struct_get(ctrl, "max", 0));
+    var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
+    var sched_p99 = real(gv_perf_summary_struct_get(sched, "p99", 0));
+    var sched_max = real(gv_perf_summary_struct_get(sched, "max", 0));
+    var draw_p95 = real(gv_perf_summary_struct_get(draw, "p95", 0));
+    var midi_p95 = real(gv_perf_summary_struct_get(midi, "p95", 0));
+
+    var short_title = title;
+    if (string_length(short_title) > 40) {
+        short_title = string_copy(short_title, 1, 40) + "...";
+    }
+
+    return [
+        "Mode: " + mode + "   Segments: " + string(segs),
+        "Title: " + short_title,
+        "Elapsed: " + string_format(elapsed, 0, 2) + " ms   Groups: " + string(groups) + "   Events: " + string(events),
+        "Ctrl ms p95 " + string_format(ctrl_p95, 0, 2) + "  p99 " + string_format(ctrl_p99, 0, 2) + "  max " + string_format(ctrl_max, 0, 2),
+        "Sched ms p95 " + string_format(sched_p95, 0, 2) + "  p99 " + string_format(sched_p99, 0, 2) + "  max " + string_format(sched_max, 0, 2),
+        "Draw p95 " + string_format(draw_p95, 0, 2) + " ms   MIDI p95 " + string_format(midi_p95, 0, 2) + " ms",
+        "Spikes: " + string(spikes)
+    ];
+}
+
+/// @function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary)
+/// @description Draw on-canvas popup with detailed run metrics when enabled.
+/// @param {real} _x1 Left edge of controls panel
+/// @param {real} _y1 Top edge of controls panel
+/// @param {real} _x2 Right edge of controls panel
+/// @param {real} _y2 Bottom edge of controls panel
+/// @param {struct|undefined} _summary Latest run summary
+/// @writes global.timeline_state.perf_summary_popup
+function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+
+    if (!variable_struct_exists(global.timeline_state, "perf_summary_popup") || !is_struct(global.timeline_state.perf_summary_popup)) {
+        global.timeline_state.perf_summary_popup = { visible: false };
+    }
+
+    var popup_state = global.timeline_state.perf_summary_popup;
+    if (!variable_struct_exists(popup_state, "visible") || !popup_state.visible) return;
+
+    var lines = gv_perf_summary_build_lines(_summary);
+    var body_scale = 0.64;
+    var title_scale = 0.78;
+    var body_line_h = max(14, ceil(string_height("Ag") * body_scale) + 2);
+    var popup_inner_w = 260;
+    for (var i = 0; i < array_length(lines); i++) {
+        popup_inner_w = max(popup_inner_w, string_width(string(lines[i])) * body_scale);
+    }
+    popup_inner_w = max(popup_inner_w, string_width("Performance Summary") * title_scale);
+
+    var popup_w = clamp(ceil(popup_inner_w) + 30, 300, 620);
+    var popup_h = 40 + (array_length(lines) * body_line_h) + 14;
+    var popup_x1 = max(_x1 + 6, min(_x2 - popup_w - 6, _x1 + 10));
+    var popup_y1 = max(_y1 + 6, _y1 + 8);
+    var popup_x2 = popup_x1 + popup_w;
+    var popup_y2 = min(_y2 - 6, popup_y1 + popup_h);
+
+    draw_set_alpha(0.96);
+    draw_set_color(make_color_rgb(16, 16, 20));
+    draw_rectangle(popup_x1, popup_y1, popup_x2, popup_y2, false);
+    draw_set_alpha(1);
+    draw_set_color(make_color_rgb(90, 90, 98));
+    draw_rectangle(popup_x1, popup_y1, popup_x2, popup_y2, true);
+
+    draw_set_color(c_white);
+    gv_draw_text_scaled_top_left(popup_x1 + 6, popup_y1 + 6, "Performance Summary", title_scale);
+
+    var close_rect = [popup_x2 - 16, popup_y1 + 5, popup_x2 - 4, popup_y1 + 17];
+    draw_set_color(c_ltgray);
+    draw_rectangle(close_rect[0], close_rect[1], close_rect[2], close_rect[3], true);
+    draw_set_halign(fa_center);
+    draw_set_valign(fa_middle);
+    draw_text_transformed((close_rect[0] + close_rect[2]) * 0.5, (close_rect[1] + close_rect[3]) * 0.5, "x", 0.6, 0.6, 0);
+    draw_set_halign(fa_left);
+    draw_set_valign(fa_top);
+
+    var y = popup_y1 + 28;
+    for (var li = 0; li < array_length(lines); li++) {
+        draw_set_color(c_ltgray);
+        gv_draw_text_scaled_top_left(popup_x1 + 8, y, string(lines[li]), body_scale);
+        y += body_line_h;
+        if (y > popup_y2 - 8) break;
+    }
+
+    global.timeline_state.perf_summary_popup = {
+        visible: true,
+        popup_rect: [popup_x1, popup_y1, popup_x2, popup_y2],
+        close_rect: close_rect
+    };
 }
 
 /// @function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2)
@@ -1874,6 +1993,7 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
         // Phase 1 perf tile: show latest compact run summary status.
         var perf_summary = gv_perf_summary_get_latest(false);
         gv_gameviz_draw_perf_summary_button(layout.btn_slot5, perf_summary, true);
+        gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, perf_summary);
     }
 }
 
@@ -1890,6 +2010,23 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
 /// @writes global.timeline_cfg.tune_show_other_parts_ghost, global.timeline_cfg.notebeam_postplay_overlay_mode, global.timeline_cfg.scoring_panel_visible
 function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
     var layout = gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2);
+
+    // Perf popup consumes clicks while open.
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "perf_summary_popup")
+        && is_struct(global.timeline_state.perf_summary_popup)
+        && bool(gv_perf_summary_struct_get(global.timeline_state.perf_summary_popup, "visible", false))) {
+        var _popup = global.timeline_state.perf_summary_popup;
+        var _close_rect = gv_perf_summary_struct_get(_popup, "close_rect", undefined);
+        var _popup_rect = gv_perf_summary_struct_get(_popup, "popup_rect", undefined);
+        if (is_array(_close_rect) && gv_gameviz_point_in_rect(_mx, _my, _close_rect)) {
+            global.timeline_state.perf_summary_popup = { visible: false };
+            return true;
+        }
+        if (is_array(_popup_rect) && gv_gameviz_point_in_rect(_mx, _my, _popup_rect)) {
+            return true;
+        }
+    }
 
     if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_toggle)) {
         if (!gv_gameviz_controls_can_interact()) return false;
@@ -1934,6 +2071,7 @@ function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
         if (!variable_struct_exists(global.timeline_state, "playback_complete")
             || !global.timeline_state.playback_complete) return false;
         gv_perf_summary_get_latest(true);
+        global.timeline_state.perf_summary_popup = { visible: true };
         return true;
     }
 
