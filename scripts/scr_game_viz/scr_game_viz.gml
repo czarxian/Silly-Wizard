@@ -1935,12 +1935,12 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary) {
     draw_set_halign(fa_left);
     draw_set_valign(fa_top);
 
-    var y = popup_y1 + 28;
+    var line_y = popup_y1 + 28;
     for (var li = 0; li < array_length(lines); li++) {
         draw_set_color(c_ltgray);
-        gv_draw_text_scaled_top_left(popup_x1 + 8, y, string(lines[li]), body_scale);
-        y += body_line_h;
-        if (y > popup_y2 - 8) break;
+        gv_draw_text_scaled_top_left(popup_x1 + 8, line_y, string(lines[li]), body_scale);
+        line_y += body_line_h;
+        if (line_y > popup_y2 - 8) break;
     }
 
     global.timeline_state.perf_summary_popup = {
