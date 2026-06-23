@@ -58,6 +58,7 @@
 			case 37: scr_calibration_apply_profile(ctx); break;
 			case 38: scr_settings_data_root_set(ctx); break;
 			case 39: scr_settings_data_root_reset_auto(ctx); break;
+			case 40: scr_viewport_ahead_change(ctx); break;
 			// Compatibility aliases for calibration controls if RoomUI script indices drift.
 			case 78: scr_calibration_test_preview(ctx); break;
 			case 92: scr_calibration_mode_change(ctx); break;
@@ -1461,6 +1462,9 @@
 					if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")) {
 						global.timeline_cfg.score_lane_debug_file_log = false;
 					}
+					if (!variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log")) {
+						global.timeline_cfg.score_render_plan_debug_log = global.timeline_cfg.score_lane_debug_log;
+					}
 
 					var logs_enabled = bool(global.timeline_cfg.score_lane_debug_log);
 					scr_button_field_set(field_inst, "field_min_value", 0);
@@ -1493,6 +1497,17 @@
 			metronome_update_pattern_list(time_sig);
 			scr_button_calibration_refresh_ui();
 			scr_settings_refresh_data_root_field();
+
+			// Refresh View ahead / behind fields. Behind stays locked at half of ahead.
+			var _vcfg = gv_ensure_timeline_cfg_defaults();
+			var _ahead_ms = real(variable_struct_get(_vcfg, "time_ahead_ms") ?? 4500);
+			var _ahead_field = scr_button_find_field_by_ui_name("setting_field_view_ahead");
+			if (instance_exists(_ahead_field)) {
+				scr_button_field_set(_ahead_field, "field_min_value", 500);
+				scr_button_field_set(_ahead_field, "field_max_value", 30000);
+				scr_button_field_set(_ahead_field, "field_value", _ahead_ms);
+				scr_button_field_set(_ahead_field, "field_contents", string_format(_ahead_ms / 1000, 1, 2));
+			}
 		}
 
 		if (layer_name == "calibration_window_layer") {
@@ -1667,9 +1682,9 @@
 
 	//CASE 30 - Logs toggle in settings (OFF/ON)
 	/// @function scr_settings_logs_toggle(_ctx)
-	/// @description Toggle settings Logs control and sync score-lane console/file debug logging flags.
-	/// @reads global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log
-	/// @writes global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log
+	/// @description Toggle settings Logs control and sync score-lane debug flags plus runtime performance diagnostics.
+	/// @reads global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.RT_BUDGET_DIAG_ENABLED, global.MIDI_TIMING_DIAG_ENABLED
+	/// @writes global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.RT_BUDGET_DIAG_ENABLED, global.MIDI_TIMING_DIAG_ENABLED, global.PLAYBACK_DEBUG_GROUP_TIMING
 	/// @callers scr_handle_button_click (button 30)
 	function scr_settings_logs_toggle(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
@@ -1687,6 +1702,9 @@
 		if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")) {
 			global.timeline_cfg.score_lane_debug_file_log = false;
 		}
+		if (!variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log")) {
+			global.timeline_cfg.score_render_plan_debug_log = global.timeline_cfg.score_lane_debug_log;
+		}
 
 		var button_click_value = real(scr_button_inst_get(ctx, "button_click_value", 0));
 		var field_value = real(scr_button_field_get(field, "field_value", 0));
@@ -1701,6 +1719,10 @@
 
 		global.timeline_cfg.score_lane_debug_log = logs_enabled;
 		global.timeline_cfg.score_lane_debug_file_log = logs_enabled;
+		global.timeline_cfg.score_render_plan_debug_log = logs_enabled;
+		global.RT_BUDGET_DIAG_ENABLED = logs_enabled;
+		global.MIDI_TIMING_DIAG_ENABLED = logs_enabled;
+		global.PLAYBACK_DEBUG_GROUP_TIMING = logs_enabled;
 
 		show_debug_message("[SETTINGS] Logs " + (logs_enabled ? "ON" : "OFF"));
 	}
@@ -2247,6 +2269,10 @@
 	function scr_notebeam_zoom_change(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
 		if (ctx == noone) return;
+		if (script_exists(asset_get_index("gv_is_live_playback")) && gv_is_live_playback()) {
+			show_debug_message("Notebeam zoom is locked during active playback.");
+			return;
+		}
 
 		var steps = real(scr_button_inst_get(ctx, "button_click_value", 0));
 		if (steps == 0) return;
@@ -2283,6 +2309,43 @@
 		if (changed) {
 			show_debug_message("Notebeam pan step: " + string(steps));
 		}
+	}
+
+	//CASE 40 - Notebeam view-ahead change (+/-)
+	/// @function scr_viewport_ahead_change(_ctx)
+	/// @description Adjust global.timeline_cfg.time_ahead_ms by the button step (from button_click_value, e.g. ±50/±500 ms), clamped 500..30000. Keeps time_behind_ms locked to half of ahead, updates both field displays, and syncs the notebeam window.
+	/// @callers scr_handle_button_click (button 40)
+	function scr_viewport_ahead_change(_ctx = noone) {
+		var ctx = scr_button_get_ctx(_ctx);
+		if (ctx == noone) return;
+
+		var delta_ms = real(scr_button_inst_get(ctx, "button_click_value", 0));
+		if (delta_ms == 0) return;
+
+		var cfg = gv_ensure_timeline_cfg_defaults();
+		var cur_ms = real(variable_struct_get(cfg, "time_ahead_ms") ?? 4500);
+		var new_ms = clamp(cur_ms + delta_ms, 500, 30000);
+		variable_struct_set(cfg, "time_ahead_ms", new_ms);
+		var behind_ms = clamp(round(new_ms * 0.5), 250, 15000);
+		variable_struct_set(cfg, "time_behind_ms", behind_ms);
+
+		// Re-sync runtime window if active
+		if (script_exists(asset_get_index("gv_notebeam_sync_window_from_cfg"))) {
+			gv_notebeam_sync_window_from_cfg();
+		}
+
+		// Update field display
+		var field = scr_button_inst_get(ctx, "field_ref", noone);
+		if (!instance_exists(field)) field = scr_button_find_field_by_ui_name("setting_field_view_ahead");
+		if (instance_exists(field)) {
+			scr_button_field_set(field, "field_value", new_ms);
+			scr_button_field_set(field, "field_contents", string_format(new_ms / 1000, 1, 2));
+		}
+
+		if (script_exists(asset_get_index("scoring_player_settings_save_for_player"))) {
+			scoring_player_settings_save_for_player();
+		}
+		show_debug_message("Viewport ahead: " + string(new_ms) + " ms");
 	}
 
 	//CASE 9
@@ -3017,11 +3080,7 @@
 				global.timeline_cfg.player_channels = [0];
 			}
 
-			show_debug_message("[TIMELINE] target tune channel=" + string(selected_part)
-				+ " parts=" + string(array_length(available_parts)));
 		}
-
-		show_debug_message("Tune instance: " + string(tune) + " exists: " + string(instance_exists(tune)));
 		
 		
 		if (scr_set_is_active() || (instance_exists(tune) && scr_button_tune_is_loaded(tune))) {
@@ -3169,6 +3228,33 @@
 				}
 				if (is_undefined(gv_loop_set_blank_measure_enabled) == false) {
 					gv_loop_set_blank_measure_enabled(false);
+				}
+			}
+		}
+
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+			global.timeline_state.score_render_plan_needs_rebuild = true;
+			global.timeline_state.score_render_plan_pending_reason = global.loop_mode_enabled ? "loop_mode_on" : "loop_mode_off";
+			if (variable_struct_exists(global.timeline_state, "score_render_plan")
+				&& is_struct(global.timeline_state.score_render_plan)) {
+				global.timeline_state.score_render_plan.valid = false;
+				global.timeline_state.score_render_plan.status = "pending";
+				global.timeline_state.score_render_plan.reason = global.timeline_state.score_render_plan_pending_reason;
+			}
+			if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+				&& is_struct(global.timeline_state.score_render_plan_stats)) {
+				global.timeline_state.score_render_plan_stats.invalidations += 1;
+				global.timeline_state.score_render_plan_stats.last_reason = global.timeline_state.score_render_plan_pending_reason;
+			}
+			global.timeline_state.score_lane_layout_cache_single = {};
+
+			if (script_exists(asset_get_index("gv_build_loop_runtime_cache"))
+				&& variable_global_exists("playback_events_active")
+				&& is_array(global.playback_events_active)) {
+				if (global.loop_mode_enabled) {
+					global.timeline_state.loop_runtime_cache = gv_build_loop_runtime_cache(global.playback_events_active);
+				} else {
+					global.timeline_state.loop_runtime_cache = { valid: false, measure_starts: [] };
 				}
 			}
 		}

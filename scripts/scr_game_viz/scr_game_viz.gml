@@ -758,6 +758,12 @@ function gv_ensure_timeline_cfg_defaults() {
         // Preserve subpixel score-lane motion; content-window mapping handles measure-to-measure alignment.
         variable_struct_set(global.timeline_cfg, "score_lane_snap_pixels", false);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log")) {
+        variable_struct_set(global.timeline_cfg, "score_render_plan_debug_log", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log_interval_ms")) {
+        variable_struct_set(global.timeline_cfg, "score_render_plan_debug_log_interval_ms", 3000);
+    }
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_underlay_cache_enabled")) {
         variable_struct_set(global.timeline_cfg, "notebeam_underlay_cache_enabled", true);
     }
@@ -787,6 +793,18 @@ function gv_ensure_timeline_cfg_defaults() {
     }
     if (!variable_struct_exists(global.timeline_cfg, "measures_behind")) {
         variable_struct_set(global.timeline_cfg, "measures_behind", 1);
+    }
+    // ZOOM MODE TOGGLE: Set to "time" to test pure time-based zoom (ms), or "measures" for measure-based.
+    // When in time mode, ignore measures_ahead/behind; use time_ahead_ms/time_behind_ms instead.
+    // This allows side-by-side comparison before deciding on permanent architecture.
+    if (!variable_struct_exists(global.timeline_cfg, "notebeam_zoom_mode")) {
+        variable_struct_set(global.timeline_cfg, "notebeam_zoom_mode", "time");
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "time_ahead_ms")) {
+        variable_struct_set(global.timeline_cfg, "time_ahead_ms", 4500);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "time_behind_ms")) {
+        variable_struct_set(global.timeline_cfg, "time_behind_ms", 2250);
     }
     if (!variable_struct_exists(global.timeline_cfg, "notebeam_zoom_fixed_presets_enabled")) {
         variable_struct_set(global.timeline_cfg, "notebeam_zoom_fixed_presets_enabled", true);
@@ -832,10 +850,12 @@ function gv_ensure_timeline_cfg_defaults() {
     }
 
     if (!variable_struct_exists(global.timeline_cfg, "tl_beat_lane_h")) {
-        variable_struct_set(global.timeline_cfg, "tl_beat_lane_h", 24);
+        // Keep beat lane readable without over-allocating vertical space.
+        variable_struct_set(global.timeline_cfg, "tl_beat_lane_h", 32);
     }
     if (!variable_struct_exists(global.timeline_cfg, "tl_word_lane_h")) {
-        variable_struct_set(global.timeline_cfg, "tl_word_lane_h", 24);
+        // Reserve more space for future lyrics/canntaireachd/tips lane.
+        variable_struct_set(global.timeline_cfg, "tl_word_lane_h", 56);
     }
     if (!variable_struct_exists(global.timeline_cfg, "tl_beat_lane_bg_color")) {
         variable_struct_set(global.timeline_cfg, "tl_beat_lane_bg_color", make_color_rgb(26, 26, 30));
@@ -854,9 +874,10 @@ function gv_is_bagpipe_tune_channel(_channel) {
 }
 
 /// @function gv_notebeam_sync_window_from_cfg()
-/// @description Recompute global.timeline_state.ms_ahead and ms_behind from timeline_cfg.measures_ahead/measures_behind and the current measure_ms. Also invalidates the player surface cache.
+/// @description Recompute global.timeline_state.ms_ahead and ms_behind from timeline_cfg.
+/// Routes to either measure-based (legacy) or time-based zoom depending on notebeam_zoom_mode flag.
 /// @returns {bool}  true if sync succeeded; false if timeline not active or measure_ms absent.
-/// @reads  global.timeline_state.active, global.timeline_state.measure_ms, global.timeline_cfg.measures_ahead, global.timeline_cfg.measures_behind
+/// @reads  global.timeline_state.active, global.timeline_state.measure_ms, global.timeline_cfg.notebeam_zoom_mode, global.timeline_cfg.measures_ahead/behind or time_ahead/behind_ms
 /// @writes global.timeline_state.ms_ahead, global.timeline_state.ms_behind
 function gv_notebeam_sync_window_from_cfg() {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
@@ -864,47 +885,68 @@ function gv_notebeam_sync_window_from_cfg() {
     if (!variable_struct_exists(global.timeline_state, "measure_ms")) return false;
 
     var cfg = gv_ensure_timeline_cfg_defaults();
-    var ahead_measures = variable_struct_exists(cfg, "measures_ahead")
-        ? real(cfg.measures_ahead)
-        : 2;
-    var behind_measures = variable_struct_exists(cfg, "measures_behind")
-        ? real(cfg.measures_behind)
-        : 1;
+    var zoom_mode = string(variable_struct_get(cfg, "notebeam_zoom_mode") ?? "measures");
 
-    if (!variable_struct_exists(cfg, "notebeam_zoom_fixed_presets_enabled")
-        || variable_struct_get(cfg, "notebeam_zoom_fixed_presets_enabled")) {
-        var zoom_preset_factors = gv_notebeam_get_zoom_preset_factors();
-        var zoom_factor = max(0.25, real(ahead_measures) / 2.0);
-        if (is_real(behind_measures)) {
-            zoom_factor = (zoom_factor + max(0.25, real(behind_measures))) * 0.5;
-        }
+    if (zoom_mode == "time") {
+        // TIME-BASED MODE: Direct millisecond window, regardless of tune meter/BPM.
+        // This standardizes visible duration across all tunes in a set.
+        var time_ahead_ms = real(variable_struct_get(cfg, "time_ahead_ms") ?? 1500);
+        var time_behind_ms = clamp(round(time_ahead_ms * 0.5), 250, 15000);
+        variable_struct_set(cfg, "time_behind_ms", time_behind_ms);
+        
+        global.timeline_state.ms_ahead = clamp(time_ahead_ms, 10, 30000);
+        global.timeline_state.ms_behind = clamp(time_behind_ms, 10, 15000);
+        
+        // Store mode flag in state for UI/debug reference.
+        variable_struct_set(global.timeline_state, "zoom_mode_active", "time");
+    } else {
+        // MEASURE-BASED MODE: Convert musical structure to milliseconds (current legacy behavior).
+        var ahead_measures = variable_struct_exists(cfg, "measures_ahead")
+            ? real(cfg.measures_ahead)
+            : 2;
+        var behind_measures = variable_struct_exists(cfg, "measures_behind")
+            ? real(cfg.measures_behind)
+            : 1;
 
-        var best_index = 0;
-        var best_delta = 1000000000.0;
-        for (var i = 0; i < array_length(zoom_preset_factors); i++) {
-            var candidate = real(zoom_preset_factors[i]);
-            var delta = abs(candidate - zoom_factor);
-            if (delta < best_delta) {
-                best_delta = delta;
-                best_index = i;
+        if (!variable_struct_exists(cfg, "notebeam_zoom_fixed_presets_enabled")
+            || variable_struct_get(cfg, "notebeam_zoom_fixed_presets_enabled")) {
+            var zoom_preset_factors = gv_notebeam_get_zoom_preset_factors();
+            var zoom_factor = max(0.25, real(ahead_measures) / 2.0);
+            if (is_real(behind_measures)) {
+                zoom_factor = (zoom_factor + max(0.25, real(behind_measures))) * 0.5;
             }
+
+            var best_index = 0;
+            var best_delta = 1000000000.0;
+            for (var i = 0; i < array_length(zoom_preset_factors); i++) {
+                var candidate = real(zoom_preset_factors[i]);
+                var delta = abs(candidate - zoom_factor);
+                if (delta < best_delta) {
+                    best_delta = delta;
+                    best_index = i;
+                }
+            }
+
+            var best_factor = real(zoom_preset_factors[best_index]);
+            ahead_measures = max(0.25, 2.0 * best_factor);
+            behind_measures = max(0.25, 1.0 * best_factor);
+            variable_struct_set(cfg, "notebeam_zoom_preset_index", best_index);
+            variable_struct_set(cfg, "notebeam_zoom_preset_factor", best_factor);
         }
 
-        var best_factor = real(zoom_preset_factors[best_index]);
-        ahead_measures = max(0.25, 2.0 * best_factor);
-        behind_measures = max(0.25, 1.0 * best_factor);
-        variable_struct_set(cfg, "notebeam_zoom_preset_index", best_index);
-        variable_struct_set(cfg, "notebeam_zoom_preset_factor", best_factor);
+        ahead_measures = clamp(ahead_measures, 0.25, 24.0);
+        behind_measures = clamp(behind_measures, 0.25, 12.0);
+        variable_struct_set(cfg, "measures_ahead", ahead_measures);
+        variable_struct_set(cfg, "measures_behind", behind_measures);
+
+        var measure_ms = max(1, real(global.timeline_state.measure_ms));
+        global.timeline_state.ms_ahead = measure_ms * ahead_measures;
+        global.timeline_state.ms_behind = measure_ms * behind_measures;
+        
+        // Store mode flag in state for UI/debug reference.
+        variable_struct_set(global.timeline_state, "zoom_mode_active", "measures");
     }
-
-    ahead_measures = clamp(ahead_measures, 0.25, 24.0);
-    behind_measures = clamp(behind_measures, 0.25, 12.0);
-    variable_struct_set(cfg, "measures_ahead", ahead_measures);
-    variable_struct_set(cfg, "measures_behind", behind_measures);
-
-    var measure_ms = max(1, real(global.timeline_state.measure_ms));
-    global.timeline_state.ms_ahead = measure_ms * ahead_measures;
-    global.timeline_state.ms_behind = measure_ms * behind_measures;
+    
     gv_invalidate_player_surface_cache();
     return true;
 }
@@ -925,6 +967,10 @@ function gv_notebeam_get_zoom_preset_factors() {
 function gv_notebeam_zoom_by_steps(_steps) {
     var steps = real(_steps);
     if (steps == 0) return false;
+    if (gv_is_live_playback()) {
+        show_debug_message("Notebeam zoom ignored during active playback.");
+        return false;
+    }
 
     var cfg = gv_ensure_timeline_cfg_defaults();
     var cur_ahead = variable_struct_exists(cfg, "measures_ahead") ? real(cfg.measures_ahead) : 2;
@@ -986,6 +1032,23 @@ function gv_notebeam_zoom_by_steps(_steps) {
             }
             synced = gv_notebeam_sync_window_from_cfg();
         }
+    }
+
+    if (synced && variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.score_render_plan_needs_rebuild = true;
+        global.timeline_state.score_render_plan_pending_reason = "zoom_change";
+        if (variable_struct_exists(global.timeline_state, "score_render_plan")
+            && is_struct(global.timeline_state.score_render_plan)) {
+            global.timeline_state.score_render_plan.valid = false;
+            global.timeline_state.score_render_plan.status = "pending";
+            global.timeline_state.score_render_plan.reason = "zoom_change";
+        }
+        if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+            && is_struct(global.timeline_state.score_render_plan_stats)) {
+            global.timeline_state.score_render_plan_stats.invalidations += 1;
+            global.timeline_state.score_render_plan_stats.last_reason = "zoom_change";
+        }
+        global.timeline_state.score_lane_layout_cache_single = {};
     }
 
     gv_invalidate_notebeam_underlay_surface_cache();
@@ -1445,15 +1508,24 @@ function gv_draw_text_scaled_top_left(_x, _y, _text, _scale) {
 /// @param {real} _y1  Top edge.
 /// @param {real} _x2  Right edge.
 /// @param {real} _y2  Bottom edge.
-/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge, global.timeline_state.score_detail_popup
-/// @writes global.timeline_state.score_judge_row_hitboxes, global.timeline_state.score_detail_popup
+/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
+/// @writes global.timeline_state.score_judge_row_hitboxes, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
 function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
     if (!variable_struct_exists(global.timeline_state, "playback_complete") || !global.timeline_state.playback_complete) return;
-    var _scfg = gv_ensure_timeline_cfg_defaults();
-    if (variable_struct_exists(_scfg, "scoring_panel_visible") && !bool(variable_struct_get(_scfg, "scoring_panel_visible"))) return;
 
+    var perf_popup_open = gv_perf_summary_popup_visible();
+    var _scfg = gv_ensure_timeline_cfg_defaults();
     var layout = gv_notebeam_scoring_panel_get_layout(_x1, _y1, _x2, _y2);
+    if (!perf_popup_open && variable_struct_exists(_scfg, "scoring_panel_visible") && !bool(variable_struct_get(_scfg, "scoring_panel_visible"))) return;
+    if (perf_popup_open) {
+        var perf_summary = gv_perf_summary_get_latest(false);
+        global.timeline_state.score_judge_row_hitboxes = [];
+        global.timeline_state.score_detail_popup = { visible: false };
+        gv_gameviz_draw_perf_summary_popup(layout.panel_rect[0], layout.panel_rect[1], layout.panel_rect[2], layout.panel_rect[3], perf_summary, true);
+        return;
+    }
+
     var panel_rect = layout.panel_rect;
     var judge_rows = gv_scoring_get_judge_rows();
     var title_scale = 0.84;
@@ -1881,15 +1953,28 @@ function gv_perf_summary_build_lines(_summary) {
     ];
 }
 
-/// @function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary)
+/// @function gv_perf_summary_popup_visible()
+/// @description Return true when the performance summary popup state is visible.
+/// @returns {bool}
+/// @reads global.timeline_state.perf_summary_popup
+function gv_perf_summary_popup_visible() {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "perf_summary_popup") || !is_struct(global.timeline_state.perf_summary_popup)) {
+        return false;
+    }
+    return bool(gv_perf_summary_struct_get(global.timeline_state.perf_summary_popup, "visible", false));
+}
+
+/// @function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _replace_panel)
 /// @description Draw on-canvas popup with detailed run metrics when enabled.
 /// @param {real} _x1 Left edge of controls panel
 /// @param {real} _y1 Top edge of controls panel
 /// @param {real} _x2 Right edge of controls panel
 /// @param {real} _y2 Bottom edge of controls panel
 /// @param {struct|undefined} _summary Latest run summary
+/// @param {bool} _replace_panel True to fill the supplied panel rect (judge-panel replacement mode)
 /// @writes global.timeline_state.perf_summary_popup
-function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary) {
+function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _replace_panel = false) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
 
     if (!variable_struct_exists(global.timeline_state, "perf_summary_popup") || !is_struct(global.timeline_state.perf_summary_popup)) {
@@ -1909,12 +1994,22 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary) {
     }
     popup_inner_w = max(popup_inner_w, string_width("Performance Summary") * title_scale);
 
-    var popup_w = clamp(ceil(popup_inner_w) + 30, 300, 620);
+    var edge_pad = 8;
+    var popup_w = clamp(ceil(popup_inner_w) + 30, 300, max(300, floor(_x2 - _x1) - (edge_pad * 2)));
     var popup_h = 40 + (array_length(lines) * body_line_h) + 14;
     var popup_x1 = max(_x1 + 6, min(_x2 - popup_w - 6, _x1 + 10));
     var popup_y1 = max(_y1 + 6, _y1 + 8);
     var popup_x2 = popup_x1 + popup_w;
     var popup_y2 = min(_y2 - 6, popup_y1 + popup_h);
+
+    if (_replace_panel) {
+        popup_x1 = _x1 + edge_pad;
+        popup_y1 = _y1 + edge_pad;
+        popup_x2 = _x2 - edge_pad;
+        popup_y2 = _y2 - edge_pad;
+        if (popup_x2 <= popup_x1 + 80) popup_x2 = popup_x1 + 80;
+        if (popup_y2 <= popup_y1 + 40) popup_y2 = popup_y1 + 40;
+    }
 
     draw_set_alpha(0.96);
     draw_set_color(make_color_rgb(16, 16, 20));
@@ -1993,12 +2088,11 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
         // Phase 1 perf tile: show latest compact run summary status.
         var perf_summary = gv_perf_summary_get_latest(false);
         gv_gameviz_draw_perf_summary_button(layout.btn_slot5, perf_summary, true);
-        gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, perf_summary);
     }
 }
 
 /// @function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2)
-/// @description Handle a mouse click in the gameviz controls panel, toggling ghost mode, overlay mode, or scoring visibility.
+/// @description Handle a mouse click in the gameviz controls panel, toggling ghost mode, overlay mode, scoring visibility, loop scores, or opening perf details.
 /// @param {real} _mx  Mouse X.
 /// @param {real} _my  Mouse Y.
 /// @param {real} _x1  Panel left edge.
@@ -2007,26 +2101,9 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
 /// @param {real} _y2  Panel bottom edge.
 /// @returns {bool}  true if click was consumed.
 /// @reads  global.timeline_state.playback_complete, global.timeline_cfg
-/// @writes global.timeline_cfg.tune_show_other_parts_ghost, global.timeline_cfg.notebeam_postplay_overlay_mode, global.timeline_cfg.scoring_panel_visible
+/// @writes global.timeline_cfg.tune_show_other_parts_ghost, global.timeline_cfg.notebeam_postplay_overlay_mode, global.timeline_cfg.scoring_panel_visible, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
 function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
     var layout = gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2);
-
-    // Perf popup consumes clicks while open.
-    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
-        && variable_struct_exists(global.timeline_state, "perf_summary_popup")
-        && is_struct(global.timeline_state.perf_summary_popup)
-        && bool(gv_perf_summary_struct_get(global.timeline_state.perf_summary_popup, "visible", false))) {
-        var _popup = global.timeline_state.perf_summary_popup;
-        var _close_rect = gv_perf_summary_struct_get(_popup, "close_rect", undefined);
-        var _popup_rect = gv_perf_summary_struct_get(_popup, "popup_rect", undefined);
-        if (is_array(_close_rect) && gv_gameviz_point_in_rect(_mx, _my, _close_rect)) {
-            global.timeline_state.perf_summary_popup = { visible: false };
-            return true;
-        }
-        if (is_array(_popup_rect) && gv_gameviz_point_in_rect(_mx, _my, _popup_rect)) {
-            return true;
-        }
-    }
 
     if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_toggle)) {
         if (!gv_gameviz_controls_can_interact()) return false;
@@ -2071,6 +2148,7 @@ function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
         if (!variable_struct_exists(global.timeline_state, "playback_complete")
             || !global.timeline_state.playback_complete) return false;
         gv_perf_summary_get_latest(true);
+        global.timeline_state.score_detail_popup = { visible: false };
         global.timeline_state.perf_summary_popup = { visible: true };
         return true;
     }
@@ -2404,6 +2482,22 @@ function gv_timeline_step_tick() {
                 var _seg_filename = string(_new_seg[$ "filename"] ?? "");
                 if (_seg_filename != "") scr_score_override_groups_load_for_current_segment(_seg_filename);
                 
+                // Segment switches invalidate any future precomputed score render plan.
+                global.timeline_state.score_render_plan_needs_rebuild = true;
+                global.timeline_state.score_render_plan_pending_reason = "segment_change_step";
+                if (variable_struct_exists(global.timeline_state, "score_render_plan")
+                    && is_struct(global.timeline_state.score_render_plan)) {
+                    global.timeline_state.score_render_plan.valid = false;
+                    global.timeline_state.score_render_plan.status = "pending";
+                    global.timeline_state.score_render_plan.reason = "segment_change_step";
+                }
+                if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+                    && is_struct(global.timeline_state.score_render_plan_stats)) {
+                    global.timeline_state.score_render_plan_stats.invalidations += 1;
+                    global.timeline_state.score_render_plan_stats.last_reason = "segment_change_step";
+                }
+                global.timeline_state.score_lane_layout_cache_single = {};
+                
                 // ───────────────────────────────────────────────────────────────
                 // PHASE 3: Recalculate measure_ms from new segment's BPM/meter
                 // to prevent score lane compression at segment transitions.
@@ -2622,6 +2716,299 @@ function gv_build_planned_spans(_events) {
     return _spans;
 }
 
+/// @function gv_score_plan_prebuild_single_tune(_planned_events)
+/// @description Prebuild and persist a single-tune, non-loop score render plan at bind time to reduce first-draw cache misses.
+/// @param {array} _planned_events Planned events array for the run.
+/// @returns {bool} True when a plan was built and persisted.
+/// @reads global.timeline_state, global.timeline_cfg, global.loop_runtime_active, global.METRONOME_CONFIG, global.score_snippet_durations, global.score_playback_map, global.score_has_pickup, global.score_units_per_measure
+/// @writes global.timeline_state.score_render_plan, global.timeline_state.score_render_plan_needs_rebuild, global.timeline_state.score_render_plan_pending_reason, global.timeline_state.score_render_plan_stats, global.timeline_state.score_lane_layout_cache_single, global.timeline_state.structural_measure_starts
+function gv_score_plan_prebuild_single_tune(_planned_events) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+
+    var _is_set_mode = variable_global_exists("playback_context")
+        && is_struct(global.playback_context)
+        && string(global.playback_context[$ "mode"] ?? "") == "set";
+    if (_is_set_mode) return false;
+
+    var _single_tune_loop_runtime = variable_global_exists("loop_runtime_active")
+        && bool(global.loop_runtime_active);
+    if (_single_tune_loop_runtime) return false;
+
+    var _events = is_array(_planned_events) ? _planned_events : [];
+    if (array_length(_events) <= 0) {
+        _events = gv_get_planned_events_for_viz();
+    }
+    if (!is_array(_events) || array_length(_events) <= 0) return false;
+
+    var _skip_met = variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG);
+    var _met_ch = _skip_met ? real(global.METRONOME_CONFIG.channel) : -999;
+
+    var _measure_starts = [];
+    var _ne = array_length(_events);
+    var _has_marker_timing = false;
+    for (var _mi_probe = 0; _mi_probe < _ne; _mi_probe++) {
+        var _probe = _events[_mi_probe];
+        if (!is_struct(_probe)) continue;
+        if (string(_probe[$ "type"] ?? "") != "marker") continue;
+        var _probe_mt = string(_probe[$ "marker_type"] ?? "");
+        var _probe_beat = floor(real(_probe[$ "beat"] ?? 0));
+        var _probe_frac = real(_probe[$ "beat_fraction"] ?? 0);
+        if (_probe_mt == "bar" || (_probe_mt == "beat" && _probe_beat == 1 && abs(_probe_frac) <= 0.001)) {
+            _has_marker_timing = true;
+            break;
+        }
+    }
+
+    var _allow_note_fallback_single = !_has_marker_timing;
+    var _last_key = "";
+    var _seq = 0;
+    for (var _i = 0; _i < _ne; _i++) {
+        var _ev = _events[_i];
+        if (!is_struct(_ev)) continue;
+        var _etype = variable_struct_exists(_ev, "type") ? string(_ev.type) : "";
+
+        var _is_measure_start = false;
+        if (_etype == "marker") {
+            var _marker_type = string(_ev[$ "marker_type"] ?? "");
+            var _marker_beat = floor(real(_ev[$ "beat"] ?? 0));
+            var _marker_frac = real(_ev[$ "beat_fraction"] ?? 0);
+            _is_measure_start = (_marker_type == "bar") || (_marker_type == "beat" && _marker_beat == 1 && abs(_marker_frac) <= 0.001);
+        }
+        if (!_is_measure_start && _allow_note_fallback_single && _etype == "note_on") _is_measure_start = true;
+        if (!_is_measure_start) continue;
+
+        var _et = gv_evt_time_ms(_ev);
+        var _em = variable_struct_exists(_ev, "measure") ? floor(real(_ev.measure)) : -999;
+        if (_em <= 0) continue;
+
+        if (_skip_met && _etype == "note_on") {
+            var _ch = variable_struct_exists(_ev, "channel") ? real(_ev.channel) : 0;
+            if (_ch == _met_ch) continue;
+        }
+
+        var _part = variable_struct_exists(_ev, "part") ? floor(real(_ev.part)) : 1;
+        var _beat = variable_struct_exists(_ev, "beat") ? floor(real(_ev.beat)) : 0;
+        var _key = string(_em);
+        if (_key == _last_key) continue;
+        _last_key = _key;
+
+        array_push(_measure_starts, {
+            m: _em,
+            p: _part,
+            b: _beat,
+            t: _et,
+            seq: _seq,
+            seg_idx: -1,
+            seg_title: "",
+            seg_start_ms: -1,
+            seg_end_ms: -1
+        });
+        _seq += 1;
+    }
+
+    var _nm = array_length(_measure_starts);
+    if (_nm <= 0) return false;
+
+    var _fallback_measure_ms = 1000;
+    if (_nm >= 2) {
+        _fallback_measure_ms = max(1,
+            real(variable_struct_get(_measure_starts[_nm - 1], "t"))
+            - real(variable_struct_get(_measure_starts[_nm - 2], "t")));
+    }
+
+    var _structural_durations = (variable_global_exists("score_snippet_durations")
+        && is_array(global.score_snippet_durations)) ? global.score_snippet_durations : [];
+    var _structural_duration_count = array_length(_structural_durations);
+    var _target_map_count = (variable_global_exists("score_playback_map")
+        && is_array(global.score_playback_map)) ? array_length(global.score_playback_map) : 0;
+
+    if (_structural_duration_count > 0 && _nm > 0) {
+        var _units_per_measure = variable_global_exists("score_units_per_measure")
+            ? real(global.score_units_per_measure)
+            : 0;
+        var _marker_measure_ms = max(1, real(variable_struct_get(_measure_starts[0], "t")));
+        if (_nm >= 2) {
+            _marker_measure_ms = max(1,
+                real(variable_struct_get(_measure_starts[1], "t"))
+                - real(variable_struct_get(_measure_starts[0], "t")));
+        }
+        var _ms_per_unit = _units_per_measure > 0 ? (_marker_measure_ms / _units_per_measure) : 1;
+
+        var _first_is_pickup = variable_global_exists("score_has_pickup") && global.score_has_pickup;
+        var _structural_measure_starts = [];
+        var _observed_first_measure_raw = floor(real(variable_struct_get(_measure_starts[0], "m")));
+        var _observed_first_measure = _observed_first_measure_raw;
+        if (_observed_first_measure < 1) _observed_first_measure = 1;
+        var _structural_t = real(variable_struct_get(_measure_starts[0], "t"));
+        var _missing_lead_count = _observed_first_measure - 1;
+        if (_missing_lead_count > 0) {
+            var _lead_back_ms = 0;
+            var _lead_limit = min(_missing_lead_count, _structural_duration_count);
+            for (var _lead_i = 0; _lead_i < _lead_limit; _lead_i++) {
+                _lead_back_ms += max(1, real(_structural_durations[_lead_i]) * _ms_per_unit);
+            }
+            _structural_t -= _lead_back_ms;
+        }
+        if (_first_is_pickup && _observed_first_measure_raw >= 1) {
+            _structural_t -= max(1, real(_structural_durations[0]) * _ms_per_unit);
+        }
+
+        var _next_measure_num = 1;
+        for (var _sd_i = 0; _sd_i < _structural_duration_count; _sd_i++) {
+            var _duration_units = real(_structural_durations[_sd_i]);
+            var _is_pickup_snippet = (_sd_i == 0)
+                && (_units_per_measure > 0)
+                && (_duration_units < (_units_per_measure - 0.02));
+            var _structural_m = _next_measure_num;
+            if (_is_pickup_snippet) {
+                _structural_m = (_sd_i <= 0) ? 0 : max(1, _next_measure_num - 1);
+            }
+
+            array_push(_structural_measure_starts, {
+                m: _structural_m,
+                p: 1,
+                b: 1,
+                t: _structural_t,
+                seq: _sd_i,
+                seg_idx: -1,
+                seg_title: "",
+                seg_start_ms: -1,
+                seg_end_ms: -1
+            });
+
+            var _duration_ms = max(1, _duration_units * _ms_per_unit);
+            _structural_t += _duration_ms;
+            if (!_is_pickup_snippet) {
+                _next_measure_num += 1;
+            }
+        }
+
+        _measure_starts = _structural_measure_starts;
+        _nm = array_length(_measure_starts);
+        if (_nm >= 2) {
+            _fallback_measure_ms = max(1,
+                real(variable_struct_get(_measure_starts[_nm - 1], "t"))
+                - real(variable_struct_get(_measure_starts[_nm - 2], "t")));
+        }
+        global.timeline_state.structural_measure_starts = _measure_starts;
+    } else {
+        global.timeline_state.structural_measure_starts = [];
+    }
+
+    if (_structural_duration_count <= 0 && _target_map_count > 0 && _nm > 0) {
+        while (_nm > _target_map_count) {
+            var _drop_idx = -1;
+            for (var _gi = 1; _gi < _nm; _gi++) {
+                var _m_prev = floor(real(variable_struct_get(_measure_starts[_gi - 1], "m")));
+                var _m_cur = floor(real(variable_struct_get(_measure_starts[_gi], "m")));
+                if (_m_cur == _m_prev) {
+                    _drop_idx = _gi;
+                    break;
+                }
+            }
+            if (_drop_idx < 0) {
+                var _min_gap = 1000000000;
+                for (var _gg = 1; _gg < _nm; _gg++) {
+                    var _gap = real(variable_struct_get(_measure_starts[_gg], "t"))
+                        - real(variable_struct_get(_measure_starts[_gg - 1], "t"));
+                    if (_gap < _min_gap) {
+                        _min_gap = _gap;
+                        _drop_idx = _gg;
+                    }
+                }
+            }
+            if (_drop_idx < 0) break;
+            var _compact = [];
+            for (var _ki = 0; _ki < _nm; _ki++) {
+                if (_ki == _drop_idx) continue;
+                array_push(_compact, _measure_starts[_ki]);
+            }
+            _measure_starts = _compact;
+            _nm = array_length(_measure_starts);
+        }
+
+        while (_nm < _target_map_count) {
+            var _last = _measure_starts[_nm - 1];
+            var _last_t = real(variable_struct_get(_last, "t"));
+            var _last_m = floor(real(variable_struct_get(_last, "m")));
+            array_push(_measure_starts, {
+                m: _last_m + 1,
+                p: floor(real(variable_struct_get(_last, "p"))),
+                b: 1,
+                t: _last_t + _fallback_measure_ms,
+                seq: _nm,
+                seg_idx: floor(real(variable_struct_get(_last, "seg_idx"))),
+                seg_title: string(variable_struct_get(_last, "seg_title")),
+                seg_start_ms: real(variable_struct_get(_last, "seg_start_ms")),
+                seg_end_ms: real(variable_struct_get(_last, "seg_end_ms"))
+            });
+            _nm = array_length(_measure_starts);
+        }
+    }
+
+    if (_nm <= 0) return false;
+    for (var _ri = 0; _ri < _nm; _ri++) {
+        variable_struct_set(_measure_starts[_ri], "seq", _ri);
+    }
+
+    var _zoom_preset_idx = (variable_global_exists("timeline_cfg")
+        && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "notebeam_zoom_preset_index"))
+        ? floor(real(global.timeline_cfg.notebeam_zoom_preset_index))
+        : -1;
+    var _ms_ahead = real(global.timeline_state[$ "ms_ahead"] ?? 0);
+    var _ms_behind = real(global.timeline_state[$ "ms_behind"] ?? 0);
+    var _score_cache_event_count = array_length(_events);
+    var _score_cache_pbmap_count = (variable_global_exists("score_playback_map") && is_array(global.score_playback_map))
+        ? array_length(global.score_playback_map)
+        : 0;
+    var _score_cache_dur_count = (variable_global_exists("score_snippet_durations") && is_array(global.score_snippet_durations))
+        ? array_length(global.score_snippet_durations)
+        : 0;
+    var _score_cache_has_pickup = variable_global_exists("score_has_pickup") && bool(global.score_has_pickup);
+    var _score_layout_cache_key = string(_zoom_preset_idx)
+        + "|" + string_format(_ms_ahead, 0, 3)
+        + "|" + string_format(_ms_behind, 0, 3)
+        + "|" + string(_score_cache_event_count)
+        + "|" + string(_score_cache_pbmap_count)
+        + "|" + string(_score_cache_dur_count)
+        + "|" + string(_score_cache_has_pickup)
+        + "|" + string(floor(gv_get_planned_end_ms()));
+
+    global.timeline_state.score_lane_layout_cache_single = {
+        key: _score_layout_cache_key,
+        measure_starts: _measure_starts,
+        fallback_measure_ms: _fallback_measure_ms,
+        structural_measure_starts: variable_struct_exists(global.timeline_state, "structural_measure_starts")
+            ? global.timeline_state.structural_measure_starts
+            : []
+    };
+
+    global.timeline_state.score_render_plan = {
+        version: 1,
+        valid: true,
+        status: "ready",
+        reason: "bind_prebuild",
+        mode: "tune",
+        built_for_loop: false,
+        source_event_count: array_length(_events),
+        built_at_ms: timing_get_engine_now_ms(),
+        fallback_measure_ms: _fallback_measure_ms,
+        seg_raw_measure_counts: [],
+        items: _measure_starts
+    };
+    global.timeline_state.score_render_plan_needs_rebuild = false;
+    global.timeline_state.score_render_plan_pending_reason = "";
+
+    if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+        && is_struct(global.timeline_state.score_render_plan_stats)) {
+        global.timeline_state.score_render_plan_stats.builds += 1;
+        global.timeline_state.score_render_plan_stats.last_reason = "bind_prebuild";
+    }
+
+    return true;
+}
+
 // Replace your existing function with this version.
 /// @function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text)
 /// @description Fully initialise global.timeline_state for a new playback run: store planned events/spans, build measure nav, reset all review/scoring/loop/player-history state, precompute now-line pulse cues, and invalidate surface caches.
@@ -2665,11 +3052,14 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.measure_ms = _measure_ms;
     global.timeline_state.ms_ahead = _measure_ms * _ahead_measures;
     global.timeline_state.ms_behind = _measure_ms * _behind_measures;
-
     global.timeline_state.planned_events = _planned_events;
     global.timeline_state.planned_spans = gv_build_planned_spans(_planned_events);
     global.timeline_state.emb_groups    = gv_build_emb_groups(global.timeline_state.planned_spans);
     global.timeline_state.loop_runtime_cache = { valid: false, measure_starts: [] };
+
+    // Apply active zoom mode (time vs measures) immediately at bind/start.
+    // Without this, startup can briefly inherit measure-derived window sizing.
+    gv_notebeam_sync_window_from_cfg();
 
     var _bind_set_mode = variable_global_exists("playback_context")
         && is_struct(global.playback_context)
@@ -2772,6 +3162,7 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.score_popup_measure = -1;
     global.timeline_state.score_judge_row_hitboxes = [];
     global.timeline_state.score_detail_popup = { visible: false };
+    global.timeline_state.perf_summary_popup = { visible: false };
 
     // Precompute planned note-on cue times for a lightweight now-line pulse effect.
     var _pulse_cues = [];
@@ -2793,6 +3184,30 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.nowline_planned_pulse_cues = _pulse_cues;
     global.timeline_state.nowline_planned_pulse_i = 0;
     global.timeline_state.score_lane_layout_cache_single = {};
+    global.timeline_state.score_render_plan = {
+        version: 1,
+        valid: false,
+        status: "pending",
+        reason: "bind_tune_start",
+        mode: _bind_set_mode ? "set" : "tune",
+        built_for_loop: _bind_single_loop_runtime,
+        source_event_count: array_length(_planned_events),
+        built_at_ms: timing_get_engine_now_ms(),
+        items: []
+    };
+    global.timeline_state.score_render_plan_stats = {
+        hits: 0,
+        misses: 0,
+        builds: 0,
+        invalidations: 0,
+        last_log_ms: 0,
+        last_reason: "bind_tune_start"
+    };
+    global.timeline_state.score_render_plan_needs_rebuild = true;
+    global.timeline_state.score_render_plan_pending_reason = "bind_tune_start";
+    if (!_bind_set_mode && !_bind_single_loop_runtime) {
+        gv_score_plan_prebuild_single_tune(_planned_events);
+    }
 
     if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
         variable_struct_set(global.timeline_cfg, "notebeam_view_offset_target_ms", 0);
@@ -3515,6 +3930,21 @@ function gv_sync_now_line_display() {
                         gv_restore_score_segment_cache(i, true);
                         var _seg_filename = string(seg[$ "filename"] ?? "");
                         if (_seg_filename != "") scr_score_override_groups_load_for_current_segment(_seg_filename);
+
+                        global.timeline_state.score_render_plan_needs_rebuild = true;
+                        global.timeline_state.score_render_plan_pending_reason = "segment_change_sync";
+                        if (variable_struct_exists(global.timeline_state, "score_render_plan")
+                            && is_struct(global.timeline_state.score_render_plan)) {
+                            global.timeline_state.score_render_plan.valid = false;
+                            global.timeline_state.score_render_plan.status = "pending";
+                            global.timeline_state.score_render_plan.reason = "segment_change_sync";
+                        }
+                        if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+                            && is_struct(global.timeline_state.score_render_plan_stats)) {
+                            global.timeline_state.score_render_plan_stats.invalidations += 1;
+                            global.timeline_state.score_render_plan_stats.last_reason = "segment_change_sync";
+                        }
+                        global.timeline_state.score_lane_layout_cache_single = {};
                     }
                     break;
                 }
@@ -5782,13 +6212,33 @@ function gv_handle_notebeam_click(_mx, _my, _x1, _y1, _x2, _y2) {
 }
 
 /// @function gv_handle_notebeam_scoring_panel_click(_mx, _my, _x1, _y1, _x2, _y2)
-/// @description Handle a click within the notebeam scoring panel: routes to close-button, detail popup, judge row selection.
+/// @description Handle a click within the notebeam scoring panel: routes to perf popup close/consume when active, otherwise close-button, detail popup, and judge row selection.
 /// @returns {bool}  true if click consumed.
-/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_detail_popup, global.timeline_state.score_judge_row_hitboxes
-/// @writes global.timeline_state.score_detail_popup, global.timeline_state.score_selected_judge
+/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_detail_popup, global.timeline_state.score_judge_row_hitboxes, global.timeline_state.perf_summary_popup
+/// @writes global.timeline_state.score_detail_popup, global.timeline_state.score_selected_judge, global.timeline_state.perf_summary_popup
 function gv_handle_notebeam_scoring_panel_click(_mx, _my, _x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
     if (!variable_struct_exists(global.timeline_state, "playback_complete") || !global.timeline_state.playback_complete) return false;
+
+    if (gv_perf_summary_popup_visible()) {
+        var perf_popup_state = global.timeline_state.perf_summary_popup;
+        var perf_popup_rect = gv_perf_summary_struct_get(perf_popup_state, "popup_rect", []);
+        var perf_close_rect = gv_perf_summary_struct_get(perf_popup_state, "close_rect", []);
+        if (gv_gameviz_point_in_rect(_mx, _my, perf_close_rect)) {
+            global.timeline_state.perf_summary_popup = { visible: false };
+            return true;
+        }
+        if (gv_gameviz_point_in_rect(_mx, _my, perf_popup_rect)) {
+            return true;
+        }
+
+        var perf_layout = gv_notebeam_scoring_panel_get_layout(_x1, _y1, _x2, _y2);
+        if (gv_gameviz_point_in_rect(_mx, _my, perf_layout.panel_rect)) {
+            global.timeline_state.perf_summary_popup = { visible: false };
+            return true;
+        }
+        return false;
+    }
 
     if (!variable_struct_exists(global.timeline_state, "score_detail_popup") || !is_struct(global.timeline_state.score_detail_popup)) {
         global.timeline_state.score_detail_popup = { visible: false };
@@ -8582,10 +9032,15 @@ function gv_draw_timeline_canvas(_x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
     if (!variable_struct_exists(cfg, "enabled") || !cfg.enabled) return;
 
-    // Draw can be the only guaranteed active path in RoomUI-driven layouts, so
-    // tick playhead here as a fallback when no Step-driven viz instance is active.
+    // Fallback tick only when the controller owner is unavailable.
+    // Normal runtime ownership is obj_game_controller Step to avoid duplicate work.
     if (global.timeline_state.active) {
-        gv_timeline_step_tick();
+        var _has_controller_owner = variable_global_exists("ID_game_handler")
+            && global.ID_game_handler != noone
+            && instance_exists(global.ID_game_handler);
+        if (!_has_controller_owner) {
+            gv_timeline_step_tick();
+        }
     }
     var is_active = global.timeline_state.active;
 
@@ -8738,6 +9193,19 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             var _seg_idx = -1;
             var _score_layout_cache_hit = false;
             var _score_layout_cache_key = "";
+            var _score_plan_cache_hit = false;
+            if (!variable_struct_exists(global.timeline_state, "score_render_plan_stats")
+                || !is_struct(global.timeline_state.score_render_plan_stats)) {
+                global.timeline_state.score_render_plan_stats = {
+                    hits: 0,
+                    misses: 0,
+                    builds: 0,
+                    invalidations: 0,
+                    last_log_ms: 0,
+                    last_reason: "init"
+                };
+            }
+            var _score_plan_stats = global.timeline_state.score_render_plan_stats;
 
             // Active-segment metadata (for debug focus and override-group application).
             if (_set_mode) {
@@ -8754,6 +9222,37 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
             var _skip_met = variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG);
             var _met_ch   = _skip_met ? real(global.METRONOME_CONFIG.channel) : -999;
+
+            // Preferred path: consume precomputed score render plan when valid.
+            if (variable_struct_exists(global.timeline_state, "score_render_plan")
+                && is_struct(global.timeline_state.score_render_plan)
+                && (!variable_struct_exists(global.timeline_state, "score_render_plan_needs_rebuild")
+                    || !bool(global.timeline_state.score_render_plan_needs_rebuild))) {
+                var _plan = global.timeline_state.score_render_plan;
+                var _plan_mode = string(_plan[$ "mode"] ?? "");
+                var _expect_mode = _set_mode ? "set" : "tune";
+                var _plan_items = _plan[$ "items"] ?? [];
+                var _plan_loop = bool(_plan[$ "built_for_loop"] ?? false);
+                var _plan_events = floor(real(_plan[$ "source_event_count"] ?? -1));
+                var _current_events = is_array(_events) ? array_length(_events) : 0;
+                if (bool(_plan[$ "valid"] ?? false)
+                    && _plan_mode == _expect_mode
+                    && _plan_loop == _single_tune_loop_runtime
+                    && is_array(_plan_items)
+                    && array_length(_plan_items) > 0
+                    && (_plan_events < 0 || _plan_events == _current_events)) {
+                    _measure_starts = _plan_items;
+                    _nm = array_length(_measure_starts);
+                    _fallback_measure_ms = max(1, real(_plan[$ "fallback_measure_ms"] ?? 1000));
+                    _seg_raw_measure_counts = _plan[$ "seg_raw_measure_counts"] ?? [];
+                    _score_layout_cache_hit = true;
+                    _score_plan_cache_hit = true;
+                    _score_plan_stats.hits += 1;
+                }
+            }
+            if (!_score_plan_cache_hit) {
+                _score_plan_stats.misses += 1;
+            }
 
             if (!_set_mode && !_single_tune_loop_runtime) {
                 var _zoom_preset_idx = variable_struct_exists(cfg, "notebeam_zoom_preset_index")
@@ -9286,6 +9785,72 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 };
             }
 
+            // Persist precomputed plan for subsequent frames.
+            if (!_score_plan_cache_hit && _nm > 0) {
+                global.timeline_state.score_render_plan = {
+                    version: 1,
+                    valid: true,
+                    status: "ready",
+                    reason: "draw_rebuild",
+                    mode: _set_mode ? "set" : "tune",
+                    built_for_loop: _single_tune_loop_runtime,
+                    source_event_count: is_array(_events) ? array_length(_events) : 0,
+                    built_at_ms: timing_get_engine_now_ms(),
+                    fallback_measure_ms: _fallback_measure_ms,
+                    seg_raw_measure_counts: _seg_raw_measure_counts,
+                    items: _measure_starts
+                };
+                global.timeline_state.score_render_plan_needs_rebuild = false;
+                global.timeline_state.score_render_plan_pending_reason = "";
+                _score_plan_stats.builds += 1;
+                _score_plan_stats.last_reason = "draw_rebuild";
+            }
+
+            var _score_plan_debug_enabled = variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log")
+                && global.timeline_cfg.score_render_plan_debug_log;
+            static _score_draw_phase_last_log_ms = -1000000;
+            var _score_phase_sample_this_frame = false;
+            var _score_phase_interval_ms = variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log_interval_ms")
+                ? max(250, real(global.timeline_cfg.score_render_plan_debug_log_interval_ms))
+                : 2000;
+            var _score_phase_now_ms = timing_get_engine_now_ms();
+            if (_score_plan_debug_enabled && (_score_phase_now_ms - _score_draw_phase_last_log_ms) >= _score_phase_interval_ms) {
+                _score_phase_sample_this_frame = true;
+                _score_draw_phase_last_log_ms = _score_phase_now_ms;
+            }
+            var _score_phase_prep_us = 0;
+            var _score_phase_loop_total_us = 0;
+            var _score_phase_draw_us = 0;
+            var _score_phase_views = 0;
+            var _score_phase_prep_t0_us = 0;
+            if (_score_plan_debug_enabled) {
+                var _score_plan_debug_interval_ms = variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log_interval_ms")
+                    ? max(250, real(global.timeline_cfg.score_render_plan_debug_log_interval_ms))
+                    : 2000;
+                var _score_plan_now_ms = timing_get_engine_now_ms();
+                var _score_plan_last_log_ms = real(_score_plan_stats[$ "last_log_ms"] ?? 0);
+                if ((_score_plan_now_ms - _score_plan_last_log_ms) >= _score_plan_debug_interval_ms) {
+                    var _score_plan_log = "[SCORE_PLAN] hit=" + string(real(_score_plan_stats[$ "hits"] ?? 0));
+                    _score_plan_log += " miss=" + string(real(_score_plan_stats[$ "misses"] ?? 0));
+                    _score_plan_log += " build=" + string(real(_score_plan_stats[$ "builds"] ?? 0));
+                    _score_plan_log += " inval=" + string(real(_score_plan_stats[$ "invalidations"] ?? 0));
+                    _score_plan_log += " plan_hit=" + string(_score_plan_cache_hit);
+                    _score_plan_log += " layout_hit=" + string(_score_layout_cache_hit);
+                    _score_plan_log += " pending=" + string(bool(global.timeline_state[$ "score_render_plan_needs_rebuild"] ?? false));
+                    _score_plan_log += " reason=" + string(global.timeline_state[$ "score_render_plan_pending_reason"] ?? _score_plan_stats[$ "last_reason"] ?? "");
+                    _score_plan_log += " mode=" + (_set_mode ? "set" : "tune");
+                    _score_plan_log += " loop=" + string(_single_tune_loop_runtime);
+                    var _score_plan_mirror_output = variable_global_exists("PERF_DIAG_OUTPUT_WINDOW_ENABLED")
+                        && bool(global.PERF_DIAG_OUTPUT_WINDOW_ENABLED);
+                    diag_log_append_line(_score_plan_log, "perf_benchmark.log", _score_plan_mirror_output);
+                    _score_plan_stats.last_log_ms = _score_plan_now_ms;
+                }
+            }
+
+            if (_score_phase_sample_this_frame) {
+                _score_phase_prep_t0_us = get_timer();
+            }
+
             var _score_debug_enabled = variable_struct_exists(global.timeline_cfg, "score_lane_debug_log")
                 && global.timeline_cfg.score_lane_debug_log;
             var _score_debug_boundary_window_ms = variable_struct_exists(global.timeline_cfg, "score_lane_debug_boundary_window_ms")
@@ -9313,27 +9878,35 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             static _score_debug_last_playhead = -1;
             static _score_debug_file_key = "";
             static _score_debug_file_ready = false;
-            var _score_debug_file_enabled = _score_debug_enabled
-                && variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")
-                && global.timeline_cfg.score_lane_debug_file_log;
-            var _score_debug_file_path = variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_path")
-                ? string(global.timeline_cfg.score_lane_debug_file_path)
-                : "score_lane_debug.log";
-            if (_score_debug_file_path == "") {
-                _score_debug_file_path = "score_lane_debug.log";
+            var _score_debug_collect = _score_debug_enabled && ((current_time - _score_debug_last_ms) >= 1000);
+            var _score_debug_file_enabled = false;
+            var _score_debug_file_path = "score_lane_debug.log";
+            if (_score_debug_collect) {
+                _score_debug_file_enabled = variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_log")
+                    && global.timeline_cfg.score_lane_debug_file_log;
+                _score_debug_file_path = variable_struct_exists(global.timeline_cfg, "score_lane_debug_file_path")
+                    ? string(global.timeline_cfg.score_lane_debug_file_path)
+                    : "score_lane_debug.log";
+                if (_score_debug_file_path == "") {
+                    _score_debug_file_path = "score_lane_debug.log";
+                }
+                var _score_debug_events_count = is_array(_events) ? array_length(_events) : 0;
+                var _score_debug_run_end_ms = floor(gv_get_planned_end_ms());
+                var _score_debug_file_run_key = string(_set_mode)
+                    + "|" + string(_score_debug_events_count)
+                    + "|" + string(_score_debug_run_end_ms);
+                var _score_debug_playhead_reset = (_score_debug_last_playhead >= 0)
+                    && ((_playhead + 250) < _score_debug_last_playhead);
+                if (_score_debug_file_key != _score_debug_file_run_key || _score_debug_playhead_reset) {
+                    _score_debug_file_key = _score_debug_file_run_key;
+                    _score_debug_file_ready = false;
+                }
+                _score_debug_last_playhead = _playhead;
             }
-            var _score_debug_events_count = is_array(_events) ? array_length(_events) : 0;
-            var _score_debug_run_end_ms = floor(gv_get_planned_end_ms());
-            var _score_debug_file_run_key = string(_set_mode)
-                + "|" + string(_score_debug_events_count)
-                + "|" + string(_score_debug_run_end_ms);
-            var _score_debug_playhead_reset = (_score_debug_last_playhead >= 0)
-                && ((_playhead + 250) < _score_debug_last_playhead);
-            if (_score_debug_file_key != _score_debug_file_run_key || _score_debug_playhead_reset) {
-                _score_debug_file_key = _score_debug_file_run_key;
-                _score_debug_file_ready = false;
+            if (_score_phase_sample_this_frame) {
+                _score_phase_prep_us = get_timer() - _score_phase_prep_t0_us;
             }
-            _score_debug_last_playhead = _playhead;
+            var _score_phase_loop_t0_us = _score_phase_sample_this_frame ? get_timer() : 0;
 
             // Draw each measure whose time range overlaps the visible window
             for (var _mi = 0; _mi < _nm; _mi++) {
@@ -9491,7 +10064,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     if (_draw_t_end < _visible_start_ms) continue;
                     if (_draw_t_start > _visible_end_ms) continue;
 
-                    if (_score_debug_enabled) {
+                    if (_score_debug_collect) {
                         if (_score_debug_views > 0) _score_debug_line += " | ";
                         var _dbg_seg_title = string(_ms[$ "seg_title"] ?? "");
                         if (_dbg_seg_title == "") _dbg_seg_title = _seg_title;
@@ -9505,6 +10078,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                         _score_debug_line += " t=" + string(floor(_draw_t_start)) + "-" + string(floor(_draw_t_end));
                         _score_debug_views++;
                     }
+                    var _score_phase_draw_t0_us = _score_phase_sample_this_frame ? get_timer() : 0;
 
                     var _px1 = gv_time_to_x(_draw_t_start, _playhead, x1, x2, now_ratio, _ms_behind, _ms_ahead);
                     var _px2 = gv_time_to_x(_draw_t_end,   _playhead, x1, x2, now_ratio, _ms_behind, _ms_ahead);
@@ -9551,7 +10125,6 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     // stretches symbols vertically when the lane is taller than the 5-line staff.
                     var _scale_y    = staff_h / _spr_h;
                     var _y_offset   = staff_y1;
-
                     var _part_x  = _content_left + ((_cx1 - _draw_x1) / _scale_x);
                     var _part_w  = (_cx2 - _cx1) / _scale_x;
                     if (abs(_part_x - _content_left) <= 0.001) _part_x = _content_left;
@@ -9596,7 +10169,14 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                         }
                         draw_set_alpha(1);
                     }
+                    if (_score_phase_sample_this_frame) {
+                        _score_phase_draw_us += (get_timer() - _score_phase_draw_t0_us);
+                        _score_phase_views += 1;
+                    }
                 }
+            }
+            if (_score_phase_sample_this_frame) {
+                _score_phase_loop_total_us = get_timer() - _score_phase_loop_t0_us;
             }
 
             if (_score_debug_enabled) {
@@ -9634,6 +10214,19 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     _score_debug_last_line = _score_log;
                     _score_debug_last_ms = current_time;
                 }
+            }
+
+            if (_score_phase_sample_this_frame) {
+                var _score_phase_filter_us = max(0, _score_phase_loop_total_us - _score_phase_draw_us);
+                var _score_phase_log = "[SCORE_DRAW_PHASE] prep_ms=" + string_format(_score_phase_prep_us / 1000.0, 0, 3);
+                _score_phase_log += " filter_ms=" + string_format(_score_phase_filter_us / 1000.0, 0, 3);
+                _score_phase_log += " draw_ms=" + string_format(_score_phase_draw_us / 1000.0, 0, 3);
+                _score_phase_log += " loop_ms=" + string_format(_score_phase_loop_total_us / 1000.0, 0, 3);
+                _score_phase_log += " views=" + string(_score_phase_views);
+                _score_phase_log += " nm=" + string(_nm);
+                _score_phase_log += " mode=" + (_set_mode ? "set" : "tune");
+                _score_phase_log += " loop=" + string(_single_tune_loop_runtime);
+                perf_diag_emit(_score_phase_log);
             }
         }
     }
