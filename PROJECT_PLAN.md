@@ -47,6 +47,299 @@ This ensures deterministic, real‑time playback with no per‑frame computation
 - New output file: `datafiles/performances/run_summaries.jsonl` (one JSON object per run).
 - Summary fields include: `play_id`, mode/title, elapsed, groups/events totals, scheduler spike count, and jitter summaries (`scheduler_late_ms`, `controller_step_interval_ms`, `midi_process_ms`, `draw_ms`).
 - Purpose: remove routine dependency on manual PowerShell parsing for quick performance validation.
+- UI refinement: performance detail popup now replaces the notebeam judge panel while open (single panel at a time), giving expanded room for full metric lines and reducing overlap with judge/detail views.
+
+### Score Image A/B Checkpoint (2026-06-01)
+- Verified the authoritative runtime artifacts live under the user AppData path, not the project-local `datafiles` tree:
+  - `C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\performances`
+  - `C:\Users\xian\AppData\Local\Silly_Wizard\datafiles\debug\perf_benchmark.log`
+- Completed a matched `Jig of Slurs` A/B check at `90 BPM`, `grace 30 ms`:
+  - score image off: `JigofSlurs_20260601-223349_90_0_30`
+  - score image on: `JigofSlurs_20260601-223737_90_0_30`
+- Result: no correctness regression with score image enabled.
+  - Both runs exported complete game/player streams and produced populated summary/scoring data.
+  - Off run: `624` player rows, `627` game rows, `297` player spans, score `74.760`.
+  - On run: `634` player rows, `627` game rows, `304` player spans, score `76.369`.
+- Runtime interpretation:
+  - In-play `draw_ms`, `midi_process_ms`, and scheduler metrics stayed in the same general range with score image on vs off.
+  - Repeated post-stop controller interval spikes still occur in both modes (roughly `603-609 ms` max), so the remaining measurable issue appears to be cleanup/export/stop-path work rather than score-image draw cost during active playback.
+- Resume-next plan:
+  - Start with three more score-image A/B pairs on different tune types.
+  - Keep settings matched within each pair and compare AppData summaries plus perf log slices after each pair.
+  - Suggested tune-type coverage:
+    - a march
+    - a strathspey or reel
+    - a tune with more structural complexity (pickup/repeats/transition-heavy if available)
+
+### Priority Update (2026-06-02)
+- Based on additional A/B runs (Jig of Slurs, Strathann Reel, Simon Fraser medley), score-image ON remains correctness-safe but tends to show worse in-play controller/scheduler cadence than score-image OFF.
+- Re-prioritize work toward active-playback responsiveness first.
+- Treat post-play spike reduction as secondary quality work (nice-to-have), not a release-blocking optimization target.
+- Next implementation focus:
+  - reduce in-play score-image update work while preserving visual continuity;
+  - keep draw cost low and narrow ON-vs-OFF controller/scheduler gaps;
+
+### Viewport Window Constraint Simplification (2026-06-22)
+- Finalized notebeam window design: lookback (`time_behind_ms`) is now **internally locked to exactly 0.5 × lookahead** (`time_ahead_ms`).
+- User-facing control simplified to single ahead-adjustable value (two button rows: ±50 ms, ±500 ms).
+- Behind button handler, UI row, and room wiring removed; behind value computed on-demand in:
+  - `scr_button_scripts::scr_viewport_ahead_change()` (config updates)
+  - `scr_game_viz::gv_notebeam_sync_window_from_cfg()` (runtime sync)
+- Rationale: reduces UI cognitive load, ensures visually stable window layout during playback.
+- Status: working and validated; commit 4378db2 saved checkpoint.
+  - keep export/scoring correctness checks in place after each change.
+- Implementation started (2026-06-02): reduced score-off hot-path overhead by caching calibration script indices/existence checks and frame-stable flags in `obj_game_controller` Begin Step and `MIDI_process_messages()` (removed repeated per-frame/per-message `asset_get_index`/`script_exists` calls).
+
+### Score Lane Prepwork Slice (2026-06-06)
+- Applied a safe first implementation slice toward score-lane precompute architecture.
+- Zoom lock during active playback:
+  - `gv_notebeam_zoom_by_steps()` now rejects zoom changes while live playback is active.
+  - `scr_notebeam_zoom_change()` now also guards at button-handler level and logs the lock decision.
+- Render-plan scaffolding added at bind time:
+  - `gv_bind_timeline_on_tune_start()` now initializes `timeline_state.score_render_plan` with pending status metadata.
+  - Added `timeline_state.score_render_plan_needs_rebuild` and `timeline_state.score_render_plan_pending_reason` flags.
+- Segment-change invalidation hooks added:
+  - `gv_timeline_step_tick()` marks score render plan pending on set active-segment transitions.
+  - `gv_sync_now_line_display()` mirrors the same invalidation on sync-path segment jumps.
+- Loop toggle integration:
+  - `scr_loop_mode_toggle()` now marks score render plan pending on ON/OFF transitions.
+  - Loop toggle also primes `timeline_state.loop_runtime_cache` from `playback_events_active` when available.
+- No draw-path behavior swap yet: runtime still uses existing score rendering path; this slice is scaffolding/invalidation only to reduce regression risk before plan-consumption refactor.
+
+### Score Lane Plan Consumption Slice (2026-06-06 follow-up)
+- Added guarded score-plan consumption in `gv_draw_timeline_canvas_overlay`:
+  - when `timeline_state.score_render_plan.valid` is true and mode/loop/event-count checks match, score lane now reuses precomputed `items` + `fallback_measure_ms` instead of rebuilding measure starts.
+  - preserves full fallback to existing runtime construction logic when plan is missing/stale.
+- Added draw-time persistence of rebuilt plan:
+  - after a fallback rebuild succeeds (`_nm > 0`), overlay now stores plan payload back to `timeline_state.score_render_plan` and clears pending rebuild flags.
+- Added zoom-change invalidation:
+  - successful `gv_notebeam_zoom_by_steps` changes now mark score render plan pending (`reason="zoom_change"`) and clear single-tune score layout cache.
+- Scope intentionally unchanged:
+  - sprite selection/mapping rules, transition override handling, loop projection math, and score draw primitives remain unchanged in this slice.
+
+### Score Plan Instrumentation Slice (2026-06-06)
+- Added score-render-plan debug config defaults in `gv_ensure_timeline_cfg_defaults`:
+  - `score_render_plan_debug_log` (default `false`)
+  - `score_render_plan_debug_log_interval_ms` (default `2000`)
+- Added per-run plan stats struct initialized at bind:
+  - `timeline_state.score_render_plan_stats = {hits, misses, builds, invalidations, last_log_ms, last_reason}`
+- Wired invalidation counters/reason updates into current invalidation points:
+  - segment transition invalidations (`gv_timeline_step_tick`, `gv_sync_now_line_display`)
+  - zoom-change invalidation (`gv_notebeam_zoom_by_steps`)
+  - loop-mode toggle invalidation (`scr_loop_mode_toggle`)
+- Added runtime counters in score overlay:
+  - increment `hits` on guarded plan reuse
+  - increment `misses` when overlay falls back to rebuild path
+  - increment `builds` when fallback path persists a fresh plan
+- Added optional periodic debug log line when enabled:
+  - `[SCORE_PLAN] hit=.. miss=.. build=.. inval=.. plan_hit=.. layout_hit=.. pending=.. reason=.. mode=.. loop=..`
+  - intended for quick A/B verification that plan reuse is active and stable.
+
+### Score Plan File-Backed Diagnostics (2026-06-06)
+- Updated score-plan instrumentation in `gv_draw_timeline_canvas_overlay` to append `[SCORE_PLAN]` lines through `diag_log_append_line(..., "perf_benchmark.log", ...)`.
+- Result: score-plan reuse/build counters are now persisted in the same runtime JSONL perf stream used for normal log pulls, instead of Output-only visibility.
+- Logging cadence remains throttled by `score_render_plan_debug_log_interval_ms` and gated by `score_render_plan_debug_log` to avoid hot-path overhead.
+
+### Score Plan Bind-Time Prebuild (2026-06-06)
+- Added `gv_score_plan_prebuild_single_tune(_planned_events)` in `scr_game_viz.gml` and invoke it from `gv_bind_timeline_on_tune_start` for single-tune, non-loop runs.
+- Prebuild path now computes and persists `timeline_state.score_render_plan` (`valid=true`, `reason="bind_prebuild"`) before first overlay draw, while leaving draw-time fallback rebuild unchanged for safety.
+- Expected runtime effect: reduce first-frame score-plan miss/build churn in tune mode; SCORE_PLAN logs should now typically start with ready-state reuse after bind.
+
+### Score Draw Sub-Phase Instrumentation (2026-06-06)
+- Added throttled sampled `[SCORE_DRAW_PHASE]` diagnostics in `gv_draw_timeline_canvas_overlay` (guarded by `score_render_plan_debug_log` and same debug interval).
+- Each sampled line appends to `perf_benchmark.log` via `perf_diag_emit` and reports:
+  - `prep_ms` (pre-loop setup work)
+  - `filter_ms` (loop/map/filter work excluding draw calls)
+  - `draw_ms` (sprite/anchor draw work)
+  - `loop_ms`, `views`, `nm`, mode/loop context
+- Purpose: isolate where score-image ON overhead is coming from before deciding between runtime loop optimization vs upstream image regeneration changes.
+
+### Score Lane Debug Prep-Path Throttle (2026-06-06)
+- Reduced per-frame prep overhead in `gv_draw_timeline_canvas_overlay` by evaluating score-lane debug string/file setup only on its 1s emit cadence.
+- `score_lane_debug` run-key/file-reset checks and per-view debug string assembly now execute only when `_score_debug_collect` is true, instead of every frame.
+- Intent: lower ON-mode overhead while preserving existing debug visibility and file logging semantics.
+
+### Score-Off Optimization Plan (2026-06-02 evening)
+- Current reading from the clean score-off medley runs: draw cost is already negligible, so further gains are more likely to come from controller-step work than from score rendering.
+- Optimization target order for score-image OFF runs:
+  1. `MIDI_process_messages()` in `scr_MIDI.gml`
+  2. `script_tune_callback_batched()` in `scr_tune_scripts.gml`
+  3. `tune_scheduler_process_deferred()` and `obj_game_controller` Step housekeeping
+
+- Hypothesis:
+  - Remaining in-play cadence cost is coming from repeated per-message field extraction / branching on the player-input path and repeated per-event struct/global work on the scheduler callback path.
+  - In score-off mode, any measurable controller gain now needs to come from reducing CPU work in those paths, not from further draw changes.
+
+- Proposed next pass:
+  1. Baseline by controller phase, not just whole-frame summaries.
+    - Use existing `controller_phase_ms` logs (`scheduler_tick`, `timeline_tick`, `deferred_tick`) on one clean score-off run to confirm which phase still dominates when score images are off.
+    - Treat this as the gate before editing so the next change lands on the controlling slice.
+  2. Tighten `MIDI_process_messages()` hot path.
+    - Add an immediate fast exit when `midi_input_message_count(...) <= 0`.
+    - Hoist remaining stable globals/flags so they are resolved once per frame, not inside the message loop.
+    - Collapse repeated `midi_input_message_byte(...)` calls so each byte is fetched once.
+    - Re-check whether current-note UI, MIDI thru, and calibration hooks can be skipped earlier for the common non-calibration path.
+  3. Reduce callback-loop overhead in `script_tune_callback_batched()`.
+    - Hoist stable values (`METRONOME_CONFIG.channel`, runtime-capture enabled, legacy-history fallback, timeline offsets) outside the per-event loop.
+    - Replace repeated `struct_exists` / `variable_struct_exists` probes inside the event loop where a single precomputed local or normalized event shape would do.
+    - Check whether note/panel deferred payloads can be made smaller or emitted only for the UI features that are actually enabled.
+  4. Trim deferred-queue/controller maintenance cost.
+    - Review whether `tune_scheduler_process_deferred()` queue compaction is causing avoidable array-copy churn during active playback.
+    - If so, switch to a cheaper queue discipline before doing any broader scheduler rewrite.
+    - Re-check `gv_timeline_step_tick()` cost in score-off mode; if it is still non-trivial, look for cadence throttling or cheaper no-score-image behavior there.
+  5. Validate after each small edit.
+    - Prefer one focused change at a time, then one clean score-off medley rerun.
+    - Compare `controller_step_interval_ms`, `scheduler_late_ms`, `midi_process_ms`, and `controller_phase_ms` rather than relying on filename config labels.
+
+- Practical edit order for tomorrow:
+  - First inspect a clean score-off run for `controller_phase_ms` dominance.
+  - If `midi_process_ms` or input-heavy controller work still stands out, do the `MIDI_process_messages()` pass first.
+  - If scheduler group processing is the larger contributor, do the `script_tune_callback_batched()` hoist/normalization pass first.
+  - Leave post-play cleanup spikes for later unless they begin to affect active-playback cadence.
+
+### Scheduler/Controller Optimization Kickoff (2026-06-04)
+- Scope reviewed:
+  - controller Step owner path in `obj_game_controller/Step_0.gml` (`scheduler_tick`, `timeline_tick`, `deferred_tick`)
+  - Begin Step MIDI polling path in `obj_game_controller/Step_1.gml`
+  - scheduler pump / callback path in `scr_tune_scripts.gml`
+  - timeline tick ownership in `scr_game_viz.gml`
+  - additional Step events (`obj_field_base`, `obj_tune_picker`) for structural overhead
+
+- Immediate structural findings:
+  - Timeline tick had two call sites (controller Step owner + draw fallback), with de-dup guard via `TIMELINE_STEP_LAST_MS` but still avoidable fallback call overhead.
+  - Deferred queue compaction copied arrays once `head >= 64`, which can create avoidable copy churn under heavy deferred workloads.
+  - Controller Step still carries dev-only keyboard shortcuts and layer lookups each frame; this is a secondary cleanup candidate.
+  - Recent perf tail did not include `controller_phase_ms` lines, so detailed phase logging appears disabled in those sampled runs.
+
+- Changes applied in this kickoff:
+  1. `scr_game_viz.gml`: `gv_draw_timeline_canvas` fallback tick now runs only when controller owner is unavailable (`global.ID_game_handler` missing/non-instance).
+  2. `scr_tune_scripts.gml`: deferred compaction threshold changed from `head >= 64` to `head >= 256 && head * 2 >= qn` to reduce array-copy frequency while keeping queue growth bounded.
+
+- Next pass targets:
+  1. Re-enable/confirm `controller_phase_ms` diagnostics for one clean score-off run, then pick dominant slice first.
+  2. Hoist invariants in `script_tune_callback_batched()` (metronome channel, capture flags, offset reads) out of per-event loop.
+  3. Tighten `MIDI_process_messages()` fast-path branching and per-message byte fetch overhead.
+  4. Optionally gate dev hotkeys in controller Step behind explicit dev flag to remove always-on per-step checks.
+
+- Architecture note for future MIDI -> audio-event migration:
+  - Keep scheduler dispatch source-agnostic: one due-group scheduler, pluggable output sinks (MIDI send sink, audio event sink).
+  - Minimize sink-side side effects in scheduler loop (UI/deferred/logging should remain optional/lightweight).
+
+### Checkpoint Save (2026-06-05)
+- User request context:
+  - Several `Jig of Slurs` runs were executed with score image ON.
+  - The most recent run was `G4 Medley` with score image OFF.
+
+- Current assessment snapshot:
+  - Latest medley score-off summary: `SimonFraserUniversityPipeBand_20260604-211327_75_2_30`.
+  - Run looked mostly clean for scheduler/controller cadence (`scheduler_late_ms p95` and `controller_step_interval_ms p95` in expected low range), with one notable outlier area in `midi_process_ms` (elevated p95/max relative to other slices).
+  - Score image relationship clarification:
+    - score-image rendering runs in draw/overlay (`gv_draw_timeline_canvas_overlay`) and not directly inside controller scheduler step functions.
+    - controller still pays timeline maintenance every frame via `gv_timeline_step_tick` (`timeline_tick` phase), so score-image ON can still affect controller/scheduler indirectly via overall frame contention.
+
+- Pathing/runtime incident captured during this thread:
+  - Symptom: sets listed but tunes missing; set preprocess failed to open tune JSON paths.
+  - Root cause pattern: empty AppData `tune_library.json` overshadowed project content root after runtime/runner behavior drift, plus legacy set tune filename forms needed stronger canonicalization.
+  - Fixes landed:
+    - content root selection now prefers roots with actual tune content before fallback.
+    - set tune path resolver now normalizes legacy `datafiles/tunes/...` / `tunes/...` paths to canonical `scr_data_paths_get_category_root("tunes")`.
+
+- Next steps when resuming this thread:
+  1. Add timeline-step sub-phase diagnostics (playhead core vs pan/input vs segment/nav sync) to quantify controller `timeline_tick` cost independent of draw.
+  2. Run one matched medley pair (score ON then OFF) with sub-phase diagnostics enabled to separate indirect frame contention from true step-path cost.
+  3. Execute the next hot-path pass in `MIDI_process_messages()` (fast exit + per-message byte/branch reductions), then re-run medley OFF.
+  4. If `timeline_tick` remains non-trivial, gate non-essential review/pan input work while live playback is active.
+
+### During-Play Stream/Logging Restructure Plan (2026-06-01)
+Goal:
+- Reduce active-playback work on the player MIDI path, planned-event path, and timeline/time-event path without losing existing judge behavior.
+- Keep performance logging available, but make it easy to disable and cheap when enabled.
+- Remove unnecessary during-play payload construction and file I/O before making broader scheduler/timeline changes.
+
+Constraints:
+- Preserve existing judge/export behavior during the transition.
+- Do not add a new lightweight checkpoint system in this pass; streamline existing runtime work first.
+- Prefer compatibility layers over judge rewrites.
+
+Observed current-state issues:
+- Runtime perf logging is not post-play only; multiple `[RT_BUDGET]` and `[SCHED_SPIKE]` writes happen during playback.
+- `perf_diag_emit()` and `diag_log_append_line()` write JSONL records immediately, and rollover checks currently read the log file on append.
+- Player MIDI currently builds rich `EVENT_HISTORY` structs directly in `MIDI_process_messages()`.
+- Planned events enqueue deferred `history_event` items, and the deferred queue later builds another rich `EVENT_HISTORY` struct during play.
+- Existing exports and some scoring/history paths still expect the legacy unified `EVENT_HISTORY` shape.
+
+Phased implementation plan:
+1. Runtime logging controls and hot-path I/O reduction
+  - Introduce a single explicit runtime logging mode/config that separates:
+    - perf diagnostics on/off
+    - event-history capture on/off
+    - auto-export on/off
+  - Move log rollover work out of the append hot path.
+  - Keep default behavior equivalent to current behavior until validation is complete.
+
+2. Preserve judge compatibility with a reconstruction layer
+  - Keep legacy `EVENT_HISTORY` available to current judges/exports.
+  - Stop treating rich legacy structs as the primary runtime storage format.
+  - Build the legacy shape from minimal runtime stores when export/scoring/judge entry points need it.
+
+3. Minimize player runtime records
+  - During play, keep only fields that cannot be reconstructed later:
+    - event_type
+    - timestamp_ms
+    - note_midi
+    - channel
+    - velocity
+    - loop_iteration
+  - Defer canonical note text, offsets, target times, and other export-only fields until reconstruction/export.
+
+4. Minimize planned-event runtime records
+  - During play, keep only:
+    - event_id
+    - actual_time_ms
+    - loop_iteration
+  - Reconstruct planned/expected timing from the already-prepared playback event table for that run, not from raw tune source files.
+
+5. Remove planned-event history work from the deferred queue
+  - Keep deferred queue responsibility limited to UI-facing work:
+    - note panel updates
+    - beat markers
+    - current-note display
+  - Remove `history_event` as a normal deferred workload once the minimal planned-event store exists.
+
+6. Consolidate runtime performance diagnostics
+  - Replace many per-window perf log lines with one consolidated runtime summary line per interval.
+  - Replace repeated spike lines with an aggregated spike summary for the same interval.
+  - Keep compact post-play summaries (`run_summaries.jsonl`) because they are already low-cost and useful.
+
+7. Re-benchmark after logging reduction
+  - Re-measure player responsiveness and scheduler/timeline behavior after runtime logging and payload costs are reduced.
+  - Only then decide how much of the remaining issue is true timeline/controller work versus instrumentation overhead.
+
+Execution order:
+- Phase 1: unify runtime logging controls and remove hot-path rollover/file-churn.
+- Phase 2: add minimal runtime player/planned stores plus compatibility builder for legacy `EVENT_HISTORY`.
+- Phase 3: switch exports/judges to consume the compatibility builder.
+- Phase 4: stop rich in-play `event_history_add()` writes on player/planned hot paths once compatibility consumers are switched.
+
+Implementation progress:
+- Phase 1 started: `diag_log_rotate_if_needed()` now throttles rollover checks, `perf_diag_emit()` respects `global.RT_BUDGET_DIAG_ENABLED`, and the Logs toggle now drives runtime perf diagnostics.
+- Phase 2 started: added minimal runtime sidecar stores for player/planned events in `scr_event_log.gml`, wired capture from `MIDI_process_messages()` and planned deferred `history_event` handling, and added `event_history_build_from_runtime()` as the compatibility reconstruction entry point.
+- Phase 3 started: export CSV, summary export, loop-session export, tune-history indexing, and loop-iteration scoring now read from `event_history_get_effective_events()` instead of the live legacy history array.
+- Phase 4 started: rich in-play `event_history_add()` writes on the player/planned hot paths now only run as a fallback when `global.EVENT_RUNTIME_CAPTURE_ENABLED` is false.
+- Phase 5 started: planned-event history capture now happens inline in `script_tune_callback_batched()` and `history_event` is no longer a normal deferred-queue workload; deferred queue responsibility is back to UI-facing work only.
+- Phase 4: remove rich in-play `event_history_add()` usage from player and planned streams.
+- Phase 5: consolidate perf diagnostics.
+- Phase 6: rerun benchmarks with timeline on/off and judge validation.
+
+Validation requirements:
+- Judge outputs must remain unchanged for the same run data.
+- Exported summary/CSV behavior must remain functionally equivalent after reconstruction.
+- Player note responsiveness must not regress during the transition.
+- Benchmark runs should compare logging-on vs logging-off overhead explicitly.
+
+Implementation kickoff (2026-06-01):
+- Phase 1 started with a hot-path logging fix in `diag_log_rotate_if_needed()`: rollover checks are now throttled per log path instead of counting file lines on every append.
+- Intent: reduce runtime file I/O overhead during active playback while preserving the existing logging format and rollover behavior.
 
 ### Calibration Phase 1 Rollback & Stabilization (2026-05-17)
 **Status**: ✅ Complete — Game fully playable with multi-tune sets.
@@ -1871,4 +2164,73 @@ Acceptance guidance for Phase 1->2 decision:
 
 - Live-path removal policy:
   - Do not remove a live-path item until there is a pre-play or post-play replacement with equivalent correctness guarantees.
+
+### Audio Backend Migration Kickoff (2026-06-05)
+
+Objective:
+- Introduce a safe, source-agnostic output scaffold without regressing current MIDI-first behavior.
+- Start with metronome-only sample routing while keeping all other channels on MIDI.
+
+Phase 0 (completed in this checkpoint):
+- Added backend mode globals in `obj_game_controller` Create with MIDI-safe defaults:
+  - `global.PLAYBACK_AUDIO_BACKEND_OPTIONS = ["midi", "hybrid_metronome_sample"]`
+  - `global.PLAYBACK_AUDIO_BACKEND = "midi"` (default)
+- Added metronome sample config globals (safe placeholders):
+  - `global.METRONOME_SAMPLE_SOUND_EMPHASIS = -1`
+  - `global.METRONOME_SAMPLE_SOUND_NORMAL = -1`
+  - `global.METRONOME_SAMPLE_PRIORITY = 5`
+- Added playback start diagnostics to include selected `audio_backend` in PLAY_START perf marker.
+
+Phase 1 (metronome sample pilot, started):
+- Added output routing helpers in `scr_tune_scripts`:
+  - `playback_audio_backend_get()`
+  - `playback_should_use_metronome_sample_sink()`
+  - `playback_emit_metronome_sample(_velocity)`
+- Updated `script_tune_callback_batched()` dispatch path:
+  - metronome channel note events can route to sample sink when backend is `hybrid_metronome_sample`
+  - if sample asset is missing/invalid, event falls back to MIDI send
+  - non-metronome channel behavior remains unchanged (MIDI)
+  - marker/deferred/history capture behavior remains unchanged
+
+Current safety model:
+- Default build behavior remains identical (`PLAYBACK_AUDIO_BACKEND = "midi"`).
+- Hybrid mode is opt-in and fail-safe: missing sample assets do not break playback and do not suppress MIDI for non-metronome channels.
+
+Remaining Phase 1 tasks:
+1. Wire concrete metronome sample resources (`sounds/*`) and set valid sound asset IDs in globals.
+2. Add optional settings UI surface to switch backend mode and sample IDs safely.
+3. Run matched validation passes (single tune + set mode):
+   - MIDI mode baseline
+   - hybrid mode with valid samples
+   - hybrid mode with sample intentionally missing (confirm MIDI fallback)
+
+Audio branch pause / pickup cue:
+- Safe stop point reached: backend scaffold, hybrid metronome routing, docs, and fallback behavior are in place.
+- Resume cue for the next audio session: "Return to audio path development. Start by wiring path/resource-backed metronome sample assets into `METRONOME_SAMPLE_SOUND_NORMAL` and `METRONOME_SAMPLE_SOUND_EMPHASIS`, add a UI/backend toggle, then validate MIDI baseline vs hybrid sample mode."
+- Until sample assets exist, treat further audio-path work as secondary infrastructure only; primary execution focus returns to scheduler/controller/MIDI hot-path optimization.
+
+Optimization resume (2026-06-06):
+- Next concrete pass resumes on `MIDI_process_messages()` in `scr_MIDI.gml`.
+- Narrow hypothesis: remaining easy win is reducing empty-frame work plus repeated per-message byte fetch/branch overhead before moving back to scheduler callback work.
+
+Post-pass verification snapshot (2026-06-06):
+- User confirmed set playback remained behavior-safe after the MIDI hot-path pass.
+- Recent `testset` runs (2 segments) remained in a strong envelope:
+  - `controller_step_interval_ms p95` around `2-3`
+  - `scheduler_late_ms p95` around `2`
+  - `midi_process_ms p95` around `0.099-0.130`
+- Recent `G4 Medley` snapshot also shows low controller p95 (`2`) with occasional scheduler spike bursts (`spike_count` elevated on some runs).
+- Perf-log context indicates repeated `SCHED_SPIKE` bursts with `deferred_pending=0`, suggesting the next optimization target should shift from MIDI parsing to scheduler lateness resilience / dispatch timing behavior.
+
+Next concrete target after this checkpoint:
+1. Focus on `script_tune_callback_batched()` lateness handling in `scr_tune_scripts.gml` (timesource path), not further `MIDI_process_messages()` parsing changes.
+2. Keep changes narrow and measurable, then re-run one matched set capture and compare `scheduler_late_ms`/`spike_count` against this snapshot.
+
+Set-zoom motion stabilization checkpoint (2026-06-06):
+- Implemented stable set-mode notebeam ms window in `gv_notebeam_sync_window_from_cfg()`.
+- Behavior:
+  - in set mode, lock `ms_ahead/ms_behind` from the first resolved segment window and keep that constant across segment transitions;
+  - if source zoom inputs (`measures_ahead/measures_behind`) change, refresh the lock;
+  - outside set mode (or when disabled), preserve existing measure-based behavior as fallback.
+- Added cfg default `timeline_cfg.notebeam_set_stable_ms_window = true` and reset lock fields on new timeline bind (`gv_bind_timeline_on_tune_start`) to avoid stale carry-over between runs.
 
