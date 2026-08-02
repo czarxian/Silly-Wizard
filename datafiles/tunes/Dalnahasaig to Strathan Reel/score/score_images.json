@@ -19,7 +19,7 @@
       "image_meta": [
         {
           "file": "br_m000.png",
-          "width_px": 800,
+          "width_px": 360,
           "height_px": 80,
           "staff_top_px": 24,
           "staff_bottom_px": 55.7,
@@ -51,7 +51,7 @@
   "image_meta": [
     {
       "file": "br_m000.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,

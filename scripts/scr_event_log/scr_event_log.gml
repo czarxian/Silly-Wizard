@@ -13,8 +13,17 @@
 if (!variable_global_exists("EVENT_HISTORY")) {
     global.EVENT_HISTORY = array_create(0);
 }
+if (!variable_global_exists("EVENT_RUNTIME_PLAYER")) {
+    global.EVENT_RUNTIME_PLAYER = array_create(0);
+}
+if (!variable_global_exists("EVENT_RUNTIME_PLANNED")) {
+    global.EVENT_RUNTIME_PLANNED = array_create(0);
+}
 if (!variable_global_exists("EVENT_HISTORY_ENABLED")) {
     global.EVENT_HISTORY_ENABLED = true;
+}
+if (!variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED")) {
+    global.EVENT_RUNTIME_CAPTURE_ENABLED = true;
 }
 if (!variable_global_exists("EVENT_HISTORY_AUTO_EXPORT")) {
     global.EVENT_HISTORY_AUTO_EXPORT = true;
@@ -82,13 +91,333 @@ function event_history_add(_event_struct) {
     // show_debug_message("EVENT_LOG: " + string(_event_struct));
 }
 
+/// @function event_runtime_clear()
+/// @description Clear the minimal runtime player/planned event sidecar stores.
+/// @reads global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED
+/// @writes global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED
+/// @callers event_history_clear
+function event_runtime_clear() {
+    global.EVENT_RUNTIME_PLAYER = array_create(0);
+    global.EVENT_RUNTIME_PLANNED = array_create(0);
+}
+
+/// @function event_runtime_capture_player(_event_type, _timestamp_ms, _note_midi, _channel, _velocity, _loop_iteration)
+/// @description Append a minimal player-input event record for later legacy history reconstruction/export.
+/// @param {string} _event_type Player MIDI event type.
+/// @param {real} _timestamp_ms Normalized capture timestamp.
+/// @param {real} _note_midi Normalized MIDI note value.
+/// @param {real} _channel MIDI channel.
+/// @param {real} _velocity MIDI velocity.
+/// @param {real} [_loop_iteration] Optional loop iteration override.
+/// @reads global.EVENT_RUNTIME_CAPTURE_ENABLED, global.loop_runtime_active, global.loop_runtime_current_iteration
+/// @writes global.EVENT_RUNTIME_PLAYER
+/// @callers MIDI_process_messages
+function event_runtime_capture_player(_event_type, _timestamp_ms, _note_midi, _channel, _velocity, _loop_iteration = undefined) {
+    if (variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") && !global.EVENT_RUNTIME_CAPTURE_ENABLED) {
+        return;
+    }
+
+    var loop_iteration = is_undefined(_loop_iteration)
+        ? ((variable_global_exists("loop_runtime_active") && global.loop_runtime_active)
+            ? floor(real(global.loop_runtime_current_iteration ?? 0))
+            : 0)
+        : floor(real(_loop_iteration));
+
+    array_push(global.EVENT_RUNTIME_PLAYER, {
+        event_type: string(_event_type ?? "unknown"),
+        timestamp_ms: real(_timestamp_ms),
+        note_midi: real(_note_midi),
+        channel: real(_channel),
+        velocity: real(_velocity),
+        loop_iteration: max(0, loop_iteration)
+    });
+}
+
+/// @function event_runtime_capture_planned(_event_id, _actual_time_ms, _loop_iteration)
+/// @description Append a minimal planned-event dispatch record for later legacy history reconstruction/export.
+/// @param {real} _event_id Stable playback event identifier.
+/// @param {real} _actual_time_ms Actual dispatch timestamp.
+/// @param {real} [_loop_iteration] Optional loop iteration override.
+/// @reads global.EVENT_RUNTIME_CAPTURE_ENABLED, global.loop_runtime_active, global.loop_runtime_current_iteration
+/// @writes global.EVENT_RUNTIME_PLANNED
+/// @callers tune_scheduler_process_deferred
+function event_runtime_capture_planned(_event_id, _actual_time_ms, _loop_iteration = undefined) {
+    if (variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") && !global.EVENT_RUNTIME_CAPTURE_ENABLED) {
+        return;
+    }
+
+    var loop_iteration = is_undefined(_loop_iteration)
+        ? ((variable_global_exists("loop_runtime_active") && global.loop_runtime_active)
+            ? floor(real(global.loop_runtime_current_iteration ?? 0))
+            : 0)
+        : floor(real(_loop_iteration));
+
+    array_push(global.EVENT_RUNTIME_PLANNED, {
+        event_id: real(_event_id),
+        actual_time_ms: real(_actual_time_ms),
+        loop_iteration: max(0, loop_iteration)
+    });
+}
+
+/// @function event_runtime_playback_key(_event_id, _loop_iteration)
+/// @description Build a stable composite key for planned runtime records and playback-event lookups.
+/// @param {real} _event_id Playback event id.
+/// @param {real} _loop_iteration Loop iteration number.
+/// @returns {string} Composite lookup key.
+function event_runtime_playback_key(_event_id, _loop_iteration) {
+    return string(floor(real(_loop_iteration))) + ":" + string(floor(real(_event_id)));
+}
+
+/// @function event_runtime_get_planned_source_events()
+/// @description Resolve the active playback-event table used for planned-event reconstruction.
+/// @returns {array} Playback events array or empty array.
+/// @reads global.playback_events_active, global.playback_events
+function event_runtime_get_planned_source_events() {
+    if (variable_global_exists("playback_events_active")
+        && is_array(global.playback_events_active)
+        && array_length(global.playback_events_active) > 0) {
+        return global.playback_events_active;
+    }
+    if (variable_global_exists("playback_events")
+        && is_array(global.playback_events)
+        && array_length(global.playback_events) > 0) {
+        return global.playback_events;
+    }
+    return array_create(0);
+}
+
+/// @function event_history_build_from_runtime()
+/// @description Rebuild a legacy-style event history array from minimal runtime player/planned sidecar stores.
+/// @returns {array} Legacy event-history style array sorted by timestamp.
+/// @reads global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED, global.current_tune_name, global.timeline_cfg, global.MIDI_chanter, global.METRONOME_CONFIG, global.playback_events_active, global.playback_events
+/// @callers future export/scoring compatibility path
+function event_history_build_from_runtime() {
+    var rebuilt_events = array_create(0);
+
+    var audio_offset_ms = 0;
+    var visual_offset_ms = 0;
+    var input_offset_ms = 0;
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+        audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
+            ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
+            : 0;
+        visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
+            ? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
+            : 0;
+        input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+            ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+            : 0;
+    }
+
+    var tune_name_local = variable_global_exists("current_tune_name") ? string(global.current_tune_name) : "unknown";
+    var met_ch = (variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG))
+        ? real(global.METRONOME_CONFIG.channel ?? 9)
+        : 9;
+
+    var planned_index = {};
+    var planned_cursor = {};
+    var planned_events = event_runtime_get_planned_source_events();
+    var planned_count = array_length(planned_events);
+    for (var i = 0; i < planned_count; i++) {
+        var ev = planned_events[i];
+        if (!is_struct(ev)) continue;
+        var loop_iteration = floor(real(ev[$ "loop_iteration"] ?? 0));
+        var event_id = floor(real(ev[$ "event_id"] ?? 0));
+        var lookup_key = event_runtime_playback_key(event_id, loop_iteration);
+        if (!variable_struct_exists(planned_index, lookup_key) || !is_array(planned_index[$ lookup_key])) {
+            planned_index[$ lookup_key] = [];
+            planned_cursor[$ lookup_key] = 0;
+        }
+        var bucket = planned_index[$ lookup_key];
+        array_push(bucket, ev);
+        planned_index[$ lookup_key] = bucket;
+    }
+
+    if (variable_global_exists("EVENT_RUNTIME_PLANNED") && is_array(global.EVENT_RUNTIME_PLANNED)) {
+        var runtime_planned = global.EVENT_RUNTIME_PLANNED;
+        var runtime_planned_n = array_length(runtime_planned);
+        for (var planned_i = 0; planned_i < runtime_planned_n; planned_i++) {
+            var rec = runtime_planned[planned_i];
+            if (!is_struct(rec)) continue;
+
+            var loop_iteration = floor(real(rec[$ "loop_iteration"] ?? 0));
+            var event_id = floor(real(rec[$ "event_id"] ?? 0));
+            var lookup_key = event_runtime_playback_key(event_id, loop_iteration);
+            if (!variable_struct_exists(planned_index, lookup_key)
+                || !is_array(planned_index[$ lookup_key])
+                || array_length(planned_index[$ lookup_key]) <= 0) {
+                lookup_key = event_runtime_playback_key(event_id, 0);
+            }
+            if (!variable_struct_exists(planned_index, lookup_key)
+                || !is_array(planned_index[$ lookup_key])
+                || array_length(planned_index[$ lookup_key]) <= 0) {
+                continue;
+            }
+
+            var bucket = planned_index[$ lookup_key];
+            var cursor = variable_struct_exists(planned_cursor, lookup_key)
+                ? floor(real(planned_cursor[$ lookup_key]))
+                : 0;
+            var src_idx = clamp(cursor, 0, max(0, array_length(bucket) - 1));
+            var src = bucket[src_idx];
+            planned_cursor[$ lookup_key] = cursor + 1;
+            var ev_type = string(src[$ "type"] ?? "unknown");
+            var marker_type = "";
+            if (ev_type == "marker") {
+                marker_type = string(src[$ "marker_type"] ?? "");
+                ev_type = "marker_" + marker_type;
+            }
+
+            var note_midi = real(src[$ "note"] ?? 0);
+            var channel = real(src[$ "channel"] ?? 0);
+            var note_canonical = ((string(src[$ "type"] ?? "") == "note_on") || (string(src[$ "type"] ?? "") == "note_off"))
+                ? chanter_midi_to_canonical(note_midi, global.MIDI_chanter ?? "default", channel)
+                : "";
+
+            var expected_time_ms = real(src[$ "time"] ?? 0);
+            var actual_time_ms = real(rec[$ "actual_time_ms"] ?? expected_time_ms);
+            var is_embellishment = bool(src[$ "is_embellishment"] ?? false);
+            var embellishment_name = string(src[$ "embellishment_name"] ?? "");
+            if (embellishment_name == "") embellishment_name = string(src[$ "embellishment"] ?? "");
+            if (embellishment_name == "" && is_embellishment) {
+                var emb_literal = string(src[$ "emb_literal"] ?? "");
+                embellishment_name = (emb_literal != "") ? emb_literal : "embellishment";
+            }
+
+            array_push(rebuilt_events, {
+                timestamp_ms: actual_time_ms,
+                expected_time_ms: expected_time_ms,
+                actual_time_ms: actual_time_ms,
+                delta_ms: actual_time_ms - expected_time_ms,
+                canonical_time_ms: expected_time_ms,
+                audio_target_time_ms: expected_time_ms + audio_offset_ms,
+                visual_target_time_ms: expected_time_ms + visual_offset_ms,
+                input_aligned_time_ms: actual_time_ms + input_offset_ms,
+                event_type: ev_type,
+                source: (channel == met_ch && (string(src[$ "type"] ?? "") == "note_on" || string(src[$ "type"] ?? "") == "note_off")) ? "metronome" : "game",
+                note_midi: note_midi,
+                note_midi_raw: note_midi,
+                note_canonical: note_canonical,
+                velocity: real(src[$ "velocity"] ?? 0),
+                channel: channel,
+                tune_name: tune_name_local,
+                event_id: event_id,
+                is_embellishment: is_embellishment,
+                embellishment_name: embellishment_name,
+                marker_type: marker_type,
+                measure: real(src[$ "measure"] ?? 0),
+                beat: real(src[$ "beat"] ?? 0),
+                beat_fraction: real(src[$ "beat_fraction"] ?? (src[$ "division"] ?? 0)),
+                audio_output_offset_ms: audio_offset_ms,
+                visual_alignment_offset_ms: visual_offset_ms,
+                input_capture_offset_ms: input_offset_ms,
+                loop_iteration: loop_iteration
+            });
+        }
+    }
+
+    if (variable_global_exists("EVENT_RUNTIME_PLAYER") && is_array(global.EVENT_RUNTIME_PLAYER)) {
+        var runtime_player = global.EVENT_RUNTIME_PLAYER;
+        var runtime_player_n = array_length(runtime_player);
+        for (var player_i = 0; player_i < runtime_player_n; player_i++) {
+            var rec = runtime_player[player_i];
+            if (!is_struct(rec)) continue;
+
+            var timestamp_ms = real(rec[$ "timestamp_ms"] ?? 0);
+            var note_midi = real(rec[$ "note_midi"] ?? 0);
+            var channel = real(rec[$ "channel"] ?? 0);
+            var note_canonical = chanter_midi_to_canonical(note_midi, global.MIDI_chanter ?? "default", channel);
+
+            array_push(rebuilt_events, {
+                timestamp_ms: timestamp_ms,
+                raw_timestamp_ms: timestamp_ms,
+                normalized_time_ms: timestamp_ms,
+                processing_delay_ms: 0,
+                clock_source: "runtime_capture",
+                expected_time_ms: 0,
+                actual_time_ms: timestamp_ms,
+                delta_ms: 0,
+                canonical_time_ms: timestamp_ms + input_offset_ms,
+                audio_target_time_ms: timestamp_ms + audio_offset_ms,
+                visual_target_time_ms: timestamp_ms + visual_offset_ms,
+                input_aligned_time_ms: timestamp_ms + input_offset_ms,
+                event_type: string(rec[$ "event_type"] ?? "unknown"),
+                source: "player",
+                note_midi: note_midi,
+                note_midi_raw: note_midi,
+                note_canonical: note_canonical,
+                velocity: real(rec[$ "velocity"] ?? 0),
+                channel: channel,
+                tune_name: tune_name_local,
+                event_id: 0,
+                is_embellishment: false,
+                embellishment_name: "",
+                marker_type: "",
+                measure: 0,
+                beat: 0,
+                beat_fraction: 0,
+                audio_output_offset_ms: audio_offset_ms,
+                visual_alignment_offset_ms: visual_offset_ms,
+                input_capture_offset_ms: input_offset_ms,
+                loop_iteration: floor(real(rec[$ "loop_iteration"] ?? 0))
+            });
+        }
+    }
+
+    array_sort(rebuilt_events, function(a, b) {
+        return real((a[$ "timestamp_ms"] ?? 0)) - real((b[$ "timestamp_ms"] ?? 0));
+    });
+    return rebuilt_events;
+}
+
+/// @function event_history_get_effective_events()
+/// @description Return the export/scoring event stream, preferring runtime sidecar reconstruction and preserving non-runtime legacy rows.
+/// @returns {array} Effective event history array.
+/// @reads global.EVENT_HISTORY, global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED
+/// @callers event_history_update_tune_history_index, event_history_export_summary_json, event_history_export_loop_session_json, event_history_export_csv, scoring_build_loop_iteration_scores
+function event_history_get_effective_events() {
+    var legacy_events = variable_global_exists("EVENT_HISTORY") && is_array(global.EVENT_HISTORY)
+        ? global.EVENT_HISTORY
+        : array_create(0);
+
+    var has_runtime_player = variable_global_exists("EVENT_RUNTIME_PLAYER")
+        && is_array(global.EVENT_RUNTIME_PLAYER)
+        && array_length(global.EVENT_RUNTIME_PLAYER) > 0;
+    var has_runtime_planned = variable_global_exists("EVENT_RUNTIME_PLANNED")
+        && is_array(global.EVENT_RUNTIME_PLANNED)
+        && array_length(global.EVENT_RUNTIME_PLANNED) > 0;
+
+    if (!has_runtime_player && !has_runtime_planned) {
+        return legacy_events;
+    }
+
+    var effective_events = event_history_build_from_runtime();
+    for (var i = 0; i < array_length(legacy_events); i++) {
+        var ev = legacy_events[i];
+        if (!is_struct(ev)) continue;
+
+        var ev_source = string(event_history_struct_get(ev, "source", ""));
+        if (ev_source == "player" || ev_source == "game" || ev_source == "metronome") {
+            continue;
+        }
+
+        array_push(effective_events, ev);
+    }
+
+    array_sort(effective_events, function(a, b) {
+        return real((a[$ "timestamp_ms"] ?? 0)) - real((b[$ "timestamp_ms"] ?? 0));
+    });
+    return effective_events;
+}
+
 /// @function event_history_clear()
 /// @description Clear all logged events. Call before starting a new tune playback.
-/// @writes global.EVENT_HISTORY, global.EVENT_HISTORY_EXPORTED, global.EVENT_HISTORY_LIBRARY_UPDATED
+/// @writes global.EVENT_HISTORY, global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED, global.EVENT_HISTORY_EXPORTED, global.EVENT_HISTORY_LIBRARY_UPDATED
 /// @callers scr_button_scripts (before tune start)
 
 function event_history_clear() {
     global.EVENT_HISTORY = array_create(0);
+    event_runtime_clear();
     global.EVENT_HISTORY_EXPORTED = false;
     global.EVENT_HISTORY_LIBRARY_UPDATED = false;
     show_debug_message("✓ Event history cleared");
@@ -508,7 +837,8 @@ function event_history_get_export_info(_timestamp = "") {
 /// @reads global.EVENT_HISTORY (checks length before proceeding)
 /// @callers scr_button_scripts (export at end of tune)
 function event_history_update_tune_history_index(_export_info = undefined) {
-    if (!variable_global_exists("EVENT_HISTORY") || array_length(global.EVENT_HISTORY) <= 0) {
+    var effective_events = event_history_get_effective_events();
+    if (array_length(effective_events) <= 0) {
         return false;
     }
 
@@ -836,6 +1166,8 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         directory_create(export_folder);
     }
 
+    var effective_events = event_history_get_effective_events();
+
     var player_spans = event_history_build_summary_player_spans();
     var has_player_spans = array_length(player_spans) > 0;
     if (!has_player_spans) {
@@ -857,9 +1189,9 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
     var timing_sample_player = {};
     var has_timing_sample_game = false;
     var has_timing_sample_player = false;
-    if (variable_global_exists("EVENT_HISTORY") && is_array(global.EVENT_HISTORY)) {
-        for (var i = 0; i < array_length(global.EVENT_HISTORY); i++) {
-            var ev = global.EVENT_HISTORY[i];
+    if (array_length(effective_events) > 0) {
+        for (var i = 0; i < array_length(effective_events); i++) {
+            var ev = effective_events[i];
             if (!is_struct(ev)) continue;
 
             var ev_source = string(event_history_struct_get(ev, "source", ""));
@@ -938,7 +1270,7 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
         selected_judge: "",
         overall_by_judge: {},
         raw_by_judge: {},
-        measure_map_by_judge: {}
+        measure_map_by_key_by_judge: {}
     };
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         if (variable_struct_exists(global.timeline_state, "score_selected_judge")) {
@@ -952,9 +1284,9 @@ function event_history_export_summary_json(_filename_or_path, _export_info = und
             && is_struct(variable_struct_get(global.timeline_state, "score_raw_by_judge"))) {
             scoring_judges.raw_by_judge = variable_struct_get(global.timeline_state, "score_raw_by_judge");
         }
-        if (variable_struct_exists(global.timeline_state, "score_measure_maps")
-            && is_struct(variable_struct_get(global.timeline_state, "score_measure_maps"))) {
-            scoring_judges.measure_map_by_judge = variable_struct_get(global.timeline_state, "score_measure_maps");
+        if (variable_struct_exists(global.timeline_state, "score_measure_maps_by_key")
+            && is_struct(variable_struct_get(global.timeline_state, "score_measure_maps_by_key"))) {
+            scoring_judges.measure_map_by_key_by_judge = variable_struct_get(global.timeline_state, "score_measure_maps_by_key");
         }
     }
     variable_struct_set(payload, "scoring_judges", scoring_judges);
@@ -987,7 +1319,8 @@ function event_history_export_loop_session_json(_export_info = undefined) {
     if (!variable_global_exists("loop_runtime_active") || !global.loop_runtime_active) {
         return false;
     }
-    if (!variable_global_exists("EVENT_HISTORY") || !is_array(global.EVENT_HISTORY) || array_length(global.EVENT_HISTORY) <= 0) {
+    var effective_events = event_history_get_effective_events();
+    if (array_length(effective_events) <= 0) {
         return false;
     }
 
@@ -1009,8 +1342,8 @@ function event_history_export_loop_session_json(_export_info = undefined) {
 
     var run_map = {};
     var run_order = [];
-    for (var i = 0; i < array_length(global.EVENT_HISTORY); i++) {
-        var ev = global.EVENT_HISTORY[i];
+    for (var i = 0; i < array_length(effective_events); i++) {
+        var ev = effective_events[i];
         if (!is_struct(ev)) continue;
 
         var loop_iteration = floor(real(event_history_struct_get(ev, "loop_iteration", 0)));
@@ -1278,6 +1611,11 @@ function event_history_enrich(_events) {
         
         // Derive timing_quality based on source
         var timing_quality = (ev_source == "game") ? "on_time" : "n/a";
+        var is_embellishment = bool(struct_get(ev, "is_embellishment") ?? false);
+        var embellishment_name = string(struct_get(ev, "embellishment_name") ?? "");
+        if (embellishment_name == "") {
+            embellishment_name = string(struct_get(ev, "embellishment") ?? "");
+        }
         
         var enriched_ev = event_history_create_event(
             struct_get(ev, "timestamp_ms") ?? 0,
@@ -1295,8 +1633,8 @@ function event_history_enrich(_events) {
             struct_get(ev, "channel") ?? 0,
             struct_get(ev, "tune_name") ?? "unknown",
             struct_get(ev, "event_id") ?? 0,
-            false,  // is_embellishment (not tracked in raw log yet)
-            "",     // embellishment_name (not tracked in raw log yet)
+            is_embellishment,
+            embellishment_name,
             timing_quality
         );
 
@@ -1313,7 +1651,7 @@ function event_history_enrich(_events) {
 /// @description Write entire event history to a CSV file.
 /// @param _filename_or_path Filename ("event_history.csv") or full path ("datafiles/...")
 /// @returns (none)
-/// @reads global.EVENT_HISTORY, global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS
+/// @reads global.EVENT_HISTORY, global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED, global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS
 /// @callers scr_button_scripts (end-of-tune export)
 
 function event_history_export_csv(_filename_or_path) {
@@ -1337,7 +1675,7 @@ function event_history_export_csv(_filename_or_path) {
     // Write header
     file_text_write_string(file, "timestamp_ms,expected_ms,actual_ms,delta_ms,measure,beat,beat_frac,type,source,note_midi,note_letter,velocity,channel,tune,event_id,is_embellishment,embellishment,timing_quality,canonical_time_ms,audio_target_time_ms,visual_target_time_ms,input_aligned_time_ms,audio_offset_ms,visual_offset_ms,input_offset_ms,score_offset_ms\n");
     // Enrich events before export (derive note_letter, forward-fill measure/beat)
-    var export_events = event_history_enrich(global.EVENT_HISTORY);
+    var export_events = event_history_enrich(event_history_get_effective_events());
     var event_count = array_length(export_events);
     var export_info = event_history_get_export_info();
     var include_game_events = event_history_struct_get(export_info, "export_include_game_events", true);

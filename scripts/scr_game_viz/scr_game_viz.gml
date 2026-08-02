@@ -57,13 +57,15 @@ function gv_note_key(_ch, _note) {
 /// @function gv_build_loop_runtime_cache(_events)
 /// @description Precompute single-tune loop runtime timing metadata once so draw/measure lookup can avoid per-frame event scans.
 /// @param {array} _events Planned playback events (typically global.playback_events_active)
-/// @returns {struct} Cache {valid, iter1_start_ms, iter2_start_ms, loop_cycle_ms, measure_starts, fallback_measure_ms}
+/// @returns {struct} Cache {valid, iter1_start_ms, iter2_start_ms, phase_start_ms, phase_iteration, loop_cycle_ms, measure_starts, fallback_measure_ms}
 /// @reads global.METRONOME_CONFIG
 function gv_build_loop_runtime_cache(_events) {
     var _cache = {
         valid: false,
         iter1_start_ms: -1,
         iter2_start_ms: -1,
+        phase_start_ms: -1,
+        phase_iteration: 1,
         loop_cycle_ms: 0,
         measure_starts: [],
         fallback_measure_ms: 1000
@@ -72,14 +74,25 @@ function gv_build_loop_runtime_cache(_events) {
 
     var _skip_met = variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG);
     var _met_ch = _skip_met ? floor(real(global.METRONOME_CONFIG.channel ?? 9)) : -999;
+    var _has_pickup_map = variable_global_exists("score_has_pickup") && bool(global.score_has_pickup);
 
-    var _iter1_start = -1;
-    var _iter2_start = -1;
+    var _iter_start_boundary = {};
+    var _iter_start_any = {};
     var _ne = array_length(_events);
 
     for (var _i = 0; _i < _ne; _i++) {
         var _ev = _events[_i];
         if (!is_struct(_ev)) continue;
+        var _iter = floor(real(_ev[$ "loop_iteration"] ?? 0));
+        if (_iter <= 0) continue;
+
+        var _iter_key = string(_iter);
+        var _et = gv_evt_time_ms(_ev);
+        if (!variable_struct_exists(_iter_start_any, _iter_key)
+            || _et < real(_iter_start_any[$ _iter_key])) {
+            _iter_start_any[$ _iter_key] = _et;
+        }
+
         if (string(_ev[$ "type"] ?? "") != "marker") continue;
 
         var _mt = string(_ev[$ "marker_type"] ?? "");
@@ -88,31 +101,169 @@ function gv_build_loop_runtime_cache(_events) {
         var _is_boundary = (_mt == "bar") || (_mt == "beat" && _beat == 1 && abs(_frac) <= 0.001);
         if (!_is_boundary) continue;
 
-        var _iter = floor(real(_ev[$ "loop_iteration"] ?? 0));
-        var _et = gv_evt_time_ms(_ev);
-        if (_iter == 1) {
-            if (_iter1_start < 0 || _et < _iter1_start) _iter1_start = _et;
-        } else if (_iter == 2) {
-            if (_iter2_start < 0 || _et < _iter2_start) _iter2_start = _et;
+        if (!variable_struct_exists(_iter_start_boundary, _iter_key)
+            || _et < real(_iter_start_boundary[$ _iter_key])) {
+            _iter_start_boundary[$ _iter_key] = _et;
         }
-
-        if (_iter1_start >= 0 && _iter2_start >= 0) break;
     }
 
-    var _loop_cycle_ms = (_iter1_start >= 0 && _iter2_start > _iter1_start)
-        ? (_iter2_start - _iter1_start)
-        : 0;
+    var _iter1_start = variable_struct_exists(_iter_start_boundary, "1")
+        ? real(_iter_start_boundary[$ "1"])
+        : (variable_struct_exists(_iter_start_any, "1") ? real(_iter_start_any[$ "1"]) : -1);
+    var _iter2_start = variable_struct_exists(_iter_start_boundary, "2")
+        ? real(_iter_start_boundary[$ "2"])
+        : (variable_struct_exists(_iter_start_any, "2") ? real(_iter_start_any[$ "2"]) : -1);
+    var _iter3_start = variable_struct_exists(_iter_start_boundary, "3")
+        ? real(_iter_start_boundary[$ "3"])
+        : (variable_struct_exists(_iter_start_any, "3") ? real(_iter_start_any[$ "3"]) : -1);
+
+    // Prefer steady-state phase (iteration 2 -> 3) so spacer/blank loops normalize correctly.
+    var _phase_start = _iter1_start;
+    var _phase_iteration = 1;
+    var _loop_cycle_ms = 0;
+    if (_iter2_start >= 0 && _iter3_start > _iter2_start) {
+        _phase_start = _iter2_start;
+        _phase_iteration = 2;
+        _loop_cycle_ms = _iter3_start - _iter2_start;
+    } else if (_iter1_start >= 0 && _iter2_start > _iter1_start) {
+        _phase_start = _iter1_start;
+        _phase_iteration = 1;
+        _loop_cycle_ms = _iter2_start - _iter1_start;
+    }
+
+    if (_loop_cycle_ms <= 1) {
+        var _iter_keys = variable_struct_get_names(_iter_start_any);
+        if (is_array(_iter_keys) && array_length(_iter_keys) >= 2) {
+            for (var _ik = 1; _ik < array_length(_iter_keys); _ik++) {
+                var _iv = floor(real(_iter_keys[_ik]));
+                var _jk = _ik - 1;
+                while (_jk >= 0 && floor(real(_iter_keys[_jk])) > _iv) {
+                    _iter_keys[_jk + 1] = _iter_keys[_jk];
+                    _jk--;
+                }
+                _iter_keys[_jk + 1] = _iv;
+            }
+
+            for (var _pi = 0; _pi < array_length(_iter_keys) - 1; _pi++) {
+                var _a_key = string(floor(real(_iter_keys[_pi])));
+                var _b_key = string(floor(real(_iter_keys[_pi + 1])));
+                if (!variable_struct_exists(_iter_start_any, _a_key) || !variable_struct_exists(_iter_start_any, _b_key)) continue;
+                var _a_t = real(_iter_start_any[$ _a_key]);
+                var _b_t = real(_iter_start_any[$ _b_key]);
+                if (_b_t > _a_t) {
+                    _phase_start = _a_t;
+                    _phase_iteration = floor(real(_iter_keys[_pi]));
+                    _loop_cycle_ms = _b_t - _a_t;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Keep measure-start extraction anchored to iteration 1 when available so
+    // first-pass score image mapping matches current-measure highlighting.
+    // Phase normalization still uses steady-state anchor/cycle for repeat passes.
+    var _measure_iter_ref = (_iter1_start >= 0) ? 1 : max(1, _phase_iteration);
+
+    // Layered runtime model: if loop_session provides explicit timeline segments,
+    // use them as the primary timing source for measure/image projection.
+    var _ls_segments = [];
+    if (variable_global_exists("timeline_state")
+        && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "loop_session")
+        && is_struct(global.timeline_state.loop_session)) {
+        var _ls_for_cache = global.timeline_state.loop_session;
+        if (variable_struct_exists(_ls_for_cache, "active")
+            && bool(variable_struct_get(_ls_for_cache, "active"))
+            && variable_struct_exists(_ls_for_cache, "timeline_segments")
+            && is_array(variable_struct_get(_ls_for_cache, "timeline_segments"))) {
+            _ls_segments = variable_struct_get(_ls_for_cache, "timeline_segments");
+            if (_loop_cycle_ms <= 1) {
+                var _ls_pass_cache = max(0, real(variable_struct_exists(_ls_for_cache, "pass_duration_ms") ? variable_struct_get(_ls_for_cache, "pass_duration_ms") : 0));
+                var _ls_spacer_cache = max(0, real(variable_struct_exists(_ls_for_cache, "spacer_duration_ms") ? variable_struct_get(_ls_for_cache, "spacer_duration_ms") : 0));
+                var _ls_cycle_cache = _ls_pass_cache + _ls_spacer_cache;
+                if (_ls_cycle_cache > 1) {
+                    _loop_cycle_ms = _ls_cycle_cache;
+                }
+            }
+            if (_phase_start < 0 && variable_struct_exists(_ls_for_cache, "start_ms")) {
+                _phase_start = real(variable_struct_get(_ls_for_cache, "start_ms"));
+            }
+        }
+    }
+
+    if (is_array(_ls_segments) && array_length(_ls_segments) > 0) {
+        if (array_length(_ls_segments) > 1) {
+            array_sort(_ls_segments, function(a, b) {
+                var as = real(a[$ "start_ms"] ?? 0);
+                var bs = real(b[$ "start_ms"] ?? 0);
+                if (as != bs) return as - bs;
+                var an = floor(real(a[$ "seq"] ?? 0));
+                var bn = floor(real(b[$ "seq"] ?? 0));
+                return an - bn;
+            });
+        }
+
+        var _seg_measure_starts = [];
+        for (var _sgi = 0; _sgi < array_length(_ls_segments); _sgi++) {
+            var _seg = _ls_segments[_sgi];
+            if (!is_struct(_seg)) continue;
+            var _ss = real(_seg[$ "start_ms"] ?? -1);
+            var _se = real(_seg[$ "end_ms"] ?? -1);
+            if (_ss < 0 || _se <= _ss + 0.001) continue;
+
+            var _sm_timeline = floor(real(_seg[$ "timeline_measure"] ?? (_seg[$ "measure"] ?? -1)));
+            var _sm_owner = floor(real(_seg[$ "owner_measure"] ?? _sm_timeline));
+            var _sm_part = max(1, floor(real(_seg[$ "part"] ?? 1)));
+            var _sm_value = (_sm_timeline >= 1) ? _sm_timeline : _sm_owner;
+            if (_sm_value < 1) continue;
+            var _sm_seq = (_sm_value == 0) ? 0 : (_sm_value - (_has_pickup_map ? 0 : 1));
+
+            array_push(_seg_measure_starts, {
+                m: _sm_value,
+                p: _sm_part,
+                b: 1,
+                t: _ss,
+                seq: _sm_seq,
+                seg_idx: -1,
+                seg_title: "",
+                seg_start_ms: _ss,
+                seg_end_ms: _se
+            });
+        }
+
+        var _seg_n = array_length(_seg_measure_starts);
+        if (_seg_n > 0) {
+            var _seg_fallback = 1000;
+            if (_seg_n >= 2) {
+                _seg_fallback = max(1,
+                    real(_seg_measure_starts[_seg_n - 1][$ "t"] ?? 0)
+                    - real(_seg_measure_starts[_seg_n - 2][$ "t"] ?? 0));
+            } else if (_loop_cycle_ms > 1) {
+                _seg_fallback = _loop_cycle_ms;
+            }
+
+            _cache.iter1_start_ms = (_iter1_start >= 0) ? _iter1_start : real(_seg_measure_starts[0][$ "t"] ?? -1);
+            _cache.iter2_start_ms = _iter2_start;
+            _cache.phase_start_ms = (_phase_start >= 0) ? _phase_start : _cache.iter1_start_ms;
+            _cache.phase_iteration = _phase_iteration;
+            _cache.loop_cycle_ms = _loop_cycle_ms;
+            _cache.measure_starts = _seg_measure_starts;
+            _cache.fallback_measure_ms = _seg_fallback;
+            _cache.valid = (_cache.phase_start_ms >= 0) && (_cache.loop_cycle_ms > 1);
+            return _cache;
+        }
+    }
 
     var _measure_starts = [];
     var _last_key = "";
-    var _seq = 0;
     for (var _i = 0; _i < _ne; _i++) {
         var _ev = _events[_i];
         if (!is_struct(_ev)) continue;
         if (string(_ev[$ "type"] ?? "") != "marker") continue;
 
         var _iter = floor(real(_ev[$ "loop_iteration"] ?? 0));
-        if (_iter > 0 && _iter != 1) continue;
+        if (_iter > 0 && _iter != _measure_iter_ref) continue;
 
         var _mt = string(_ev[$ "marker_type"] ?? "");
         var _beat = floor(real(_ev[$ "beat"] ?? 0));
@@ -120,16 +271,19 @@ function gv_build_loop_runtime_cache(_events) {
         var _is_start = (_mt == "bar") || (_mt == "beat" && _beat == 1 && abs(_frac) <= 0.001);
         if (!_is_start) continue;
 
-        var _m = floor(real(_ev[$ "measure"] ?? 0));
+        var _m = floor(real(_ev[$ "owner_measure"] ?? (_ev[$ "measure"] ?? 0)));
         if (_m < 1) continue;
+        var _p = floor(real(_ev[$ "owner_part"] ?? (_ev[$ "part"] ?? 1)));
+        if (_p < 1) _p = 1;
+        var _seq = (_m == 0) ? 0 : (_m - (_has_pickup_map ? 0 : 1));
 
-        var _key = string(_m);
+        var _key = string(_p) + ":" + string(_m);
         if (_key == _last_key) continue;
         _last_key = _key;
 
         array_push(_measure_starts, {
             m: _m,
-            p: floor(real(_ev[$ "part"] ?? 1)),
+            p: _p,
             b: _beat,
             t: gv_evt_time_ms(_ev),
             seq: _seq,
@@ -138,7 +292,6 @@ function gv_build_loop_runtime_cache(_events) {
             seg_start_ms: -1,
             seg_end_ms: -1
         });
-        _seq += 1;
     }
 
     var _nm = array_length(_measure_starts);
@@ -156,6 +309,8 @@ function gv_build_loop_runtime_cache(_events) {
         for (var _msi = 0; _msi < _nm; _msi++) {
             var _ms = _measure_starts[_msi];
             var _ms_m = floor(real(_ms[$ "m"] ?? 0));
+            var _ms_p = floor(real(_ms[$ "p"] ?? 1));
+            if (_ms_p < 1) _ms_p = 1;
             if (_ms_m < 1) continue;
 
             var _ms_t = real(_ms[$ "t"] ?? 0);
@@ -169,7 +324,7 @@ function gv_build_loop_runtime_cache(_events) {
                 if (!is_struct(_lev)) continue;
 
                 var _lev_iter = floor(real(_lev[$ "loop_iteration"] ?? 0));
-                if (_lev_iter > 0 && _lev_iter != 1) continue;
+                if (_lev_iter > 0 && _lev_iter != _measure_iter_ref) continue;
 
                 var _lev_type = string(_lev[$ "type"] ?? "");
                 if ((_lev_type == "note_on" || _lev_type == "note_off") && _skip_met) {
@@ -180,8 +335,10 @@ function gv_build_loop_runtime_cache(_events) {
                 var _lev_t = gv_evt_time_ms(_lev);
                 if (_lev_t < _prev_t || _lev_t >= _ms_t) continue;
 
-                var _lev_m = floor(real(_lev[$ "measure"] ?? -1));
-                if (_lev_m != _ms_m) continue;
+                var _lev_m = floor(real(_lev[$ "owner_measure"] ?? (_lev[$ "measure"] ?? -1)));
+                var _lev_p = floor(real(_lev[$ "owner_part"] ?? (_lev[$ "part"] ?? 1)));
+                if (_lev_p < 1) _lev_p = 1;
+                if (_lev_m != _ms_m || _lev_p != _ms_p) continue;
 
                 if (_lev_t < _lead_t) _lead_t = _lev_t;
             }
@@ -194,10 +351,12 @@ function gv_build_loop_runtime_cache(_events) {
 
     _cache.iter1_start_ms = _iter1_start;
     _cache.iter2_start_ms = _iter2_start;
+    _cache.phase_start_ms = _phase_start;
+    _cache.phase_iteration = _phase_iteration;
     _cache.loop_cycle_ms = _loop_cycle_ms;
     _cache.measure_starts = _measure_starts;
     _cache.fallback_measure_ms = _fallback_measure_ms;
-    _cache.valid = (_iter1_start >= 0) && (_loop_cycle_ms > 1) && (_nm > 0);
+    _cache.valid = (_phase_start >= 0) && (_loop_cycle_ms > 1) && (_nm > 0);
     return _cache;
 }
 
@@ -256,6 +415,7 @@ function gv_build_synthetic_measure_nav_map(_fallback_end_ms, _fallback_measure_
         array_push(_entries, {
             measure: _fm,
             part: 1,
+            iteration: 0,
             start_ms: (_fm - 1) * _measure_ms,
             end_ms: _fm * _measure_ms,
             status: 0
@@ -270,6 +430,538 @@ function gv_build_synthetic_measure_nav_map(_fallback_end_ms, _fallback_measure_
         parts: [1],
         pickup_by_part: _pickup
     };
+}
+
+/// @function gv_tune_structure_rule_classify_segment(_entry, _measure_ms)
+/// @description Classify one structural segment from timing span for model metadata.
+/// @param {struct} _entry  Measure-nav entry with start/end/measure fields.
+/// @param {real} _measure_ms  Reference full-measure duration in ms.
+/// @returns {string}  One of: full, pickup, partial, rest_only.
+function gv_tune_structure_rule_classify_segment(_entry, _measure_ms) {
+    if (!is_struct(_entry)) return "partial";
+
+    var _measure = floor(real(_entry.measure ?? 0));
+    if (_measure <= 0) return "pickup";
+
+    var _start_ms = real(_entry.start_ms ?? 0);
+    var _end_ms = real(_entry.end_ms ?? _start_ms);
+    var _dur_ms = max(0, _end_ms - _start_ms);
+    var _full_ms = max(1, real(_measure_ms));
+    var _ratio = _dur_ms / _full_ms;
+
+    if (_ratio >= 0.9 && _ratio <= 1.1) return "full";
+    if (_ratio < 0.25) return "pickup";
+    return "partial";
+}
+
+/// @function gv_tune_structure_rule_musical_measure_idx(_entry, _next_default)
+/// @description Resolve player-facing musical measure index while preserving pickup-as-zero behavior.
+/// @param {struct} _entry  Measure-nav entry.
+/// @param {real} _next_default  Next fallback musical index when label is unavailable.
+/// @returns {struct}  { musical_measure_idx, next_default }.
+function gv_tune_structure_rule_musical_measure_idx(_entry, _next_default) {
+    var _next = max(1, floor(real(_next_default)));
+    if (!is_struct(_entry)) {
+        return {
+            musical_measure_idx: _next,
+            next_default: _next + 1
+        };
+    }
+
+    var _measure = floor(real(_entry.measure ?? 0));
+    if (_measure <= 0) {
+        return {
+            musical_measure_idx: 0,
+            next_default: _next
+        };
+    }
+
+    return {
+        musical_measure_idx: _measure,
+        next_default: max(_next, _measure + 1)
+    };
+}
+
+/// @function gv_tune_structure_rule_display_row_kind(_classification)
+/// @description Convert segment classification into tune-structure row-kind hint.
+/// @param {string} _classification  Segment classification.
+/// @returns {string}  full_row or pickup_row.
+function gv_tune_structure_rule_display_row_kind(_classification) {
+    if (string(_classification) == "pickup") return "pickup_row";
+    return "full_row";
+}
+
+/// @function gv_build_tune_structure_model_from_measure_nav(_measure_nav)
+/// @description Build a canonical tune-structure model from current measure-nav entries without changing draw/runtime read paths.
+/// @param {struct} _measure_nav  Measure-nav map with entries/parts/pickup_by_part.
+/// @returns {struct}  Canonical tune-structure model with segment metadata and display hints.
+/// @reads  global.timeline_state.measure_ms
+function gv_build_tune_structure_model_from_measure_nav(_measure_nav) {
+    var _entries = [];
+    if (is_struct(_measure_nav) && variable_struct_exists(_measure_nav, "entries") && is_array(_measure_nav.entries)) {
+        _entries = _measure_nav.entries;
+    }
+
+    var _ownership_by_key = {};
+    if (is_undefined(scr_button_build_measure_nav_map_for_ownership) == false
+        && variable_global_exists("playback_events")
+        && is_array(global.playback_events)
+        && array_length(global.playback_events) > 0) {
+        var _own_map = scr_button_build_measure_nav_map_for_ownership(global.playback_events);
+        if (is_struct(_own_map)
+            && variable_struct_exists(_own_map, "entries")
+            && is_array(variable_struct_get(_own_map, "entries"))) {
+            var _own_entries = variable_struct_get(_own_map, "entries");
+            for (var _oi = 0; _oi < array_length(_own_entries); _oi++) {
+                var _oe = _own_entries[_oi];
+                if (!is_struct(_oe)) continue;
+                var _op = max(1, floor(real(_oe.part ?? 1)));
+                var _om = floor(real(_oe.measure ?? -1));
+                if (_om < 1) continue;
+                var _ok = string(_op) + ":" + string(_om);
+                if (!variable_struct_exists(_ownership_by_key, _ok)) {
+                    _ownership_by_key[$ _ok] = {
+                        owner_nav_idx: _oi,
+                        start_ms: real(_oe.start_ms ?? -1),
+                        end_ms: real(_oe.end_ms ?? -1)
+                    };
+                }
+            }
+        }
+    }
+
+    var _measure_ms = 1000;
+    if (variable_global_exists("timeline_state")
+        && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "measure_ms")) {
+        _measure_ms = max(1, real(global.timeline_state.measure_ms));
+    }
+
+    var _segments = [];
+    var _next_musical = 1;
+    var _entry_n = array_length(_entries);
+    for (var _i = 0; _i < _entry_n; _i++) {
+        var _entry = _entries[_i];
+        if (!is_struct(_entry)) continue;
+
+        var _measure = floor(real(_entry.measure ?? 0));
+        var _part = max(1, floor(real(_entry.part ?? 1)));
+        var _timeline_start_ms = real(_entry.start_ms ?? 0);
+        var _timeline_end_ms = real(_entry.end_ms ?? _timeline_start_ms);
+        var _own_key = string(_part) + ":" + string(_measure);
+        var _owner_nav_idx = -1;
+        var _owner_start_ms = -1;
+        var _owner_end_ms = -1;
+        if (variable_struct_exists(_ownership_by_key, _own_key)) {
+            var _own_ref = _ownership_by_key[$ _own_key];
+            if (is_struct(_own_ref)) {
+                _owner_nav_idx = floor(real(_own_ref.owner_nav_idx ?? -1));
+                _owner_start_ms = real(_own_ref.start_ms ?? -1);
+                _owner_end_ms = real(_own_ref.end_ms ?? -1);
+            }
+        }
+        var _start_ms = _timeline_start_ms;
+        var _end_ms = _timeline_end_ms;
+        if ((_end_ms <= _start_ms + 0.001) && _owner_end_ms > _owner_start_ms + 0.001) {
+            _start_ms = _owner_start_ms;
+            _end_ms = _owner_end_ms;
+        }
+        var _beat_count = (_measure_ms > 0) ? ((_end_ms - _start_ms) / _measure_ms) : 0;
+        var _classification = gv_tune_structure_rule_classify_segment(_entry, _measure_ms);
+        var _mus = gv_tune_structure_rule_musical_measure_idx(_entry, _next_musical);
+        _next_musical = floor(real(_mus.next_default ?? _next_musical));
+        var _display_row_kind = gv_tune_structure_rule_display_row_kind(_classification);
+
+        var _boundary_role = "normal";
+        if (_i == 0) _boundary_role = "loop_start_candidate";
+        if (_i == _entry_n - 1) _boundary_role = "loop_end_candidate";
+
+        array_push(_segments, {
+            segment_id: "seg:" + string(_part) + ":" + string(_measure) + ":" + string(_i),
+            source_nav_idx: _i,
+            part: _part,
+            source_measure: _measure,
+            owner_nav_idx: _owner_nav_idx,
+            canonical_measure_idx: _i + 1,
+            musical_measure_idx: floor(real(_mus.musical_measure_idx ?? 0)),
+            start_ms: _start_ms,
+            end_ms: _end_ms,
+            timeline_start_ms: _timeline_start_ms,
+            timeline_end_ms: _timeline_end_ms,
+            owner_start_ms: _owner_start_ms,
+            owner_end_ms: _owner_end_ms,
+            start_beat: 1,
+            end_beat: max(1, _beat_count),
+            beat_count: _beat_count,
+            classification: _classification,
+            boundary_role: _boundary_role,
+            display_row_kind: _display_row_kind,
+            display_part_group: _part,
+            display_line_group: 1 + floor(_i / 4),
+            display_col: _i mod 4
+        });
+    }
+
+    return {
+        version: 1,
+        source: "measure_nav",
+        built_at_ms: timing_get_engine_now_ms(),
+        source_entry_count: _entry_n,
+        segment_count: array_length(_segments),
+        segments: _segments
+    };
+}
+
+/// @function gv_tune_structure_build_parity(_measure_nav, _model)
+/// @description Build lightweight parity stats between legacy measure-nav and canonical model.
+/// @param {struct} _measure_nav  Legacy measure-nav source.
+/// @param {struct} _model  Canonical model built from legacy source.
+/// @returns {struct}  Parity summary.
+function gv_tune_structure_build_parity(_measure_nav, _model) {
+    var _entries = (is_struct(_measure_nav) && variable_struct_exists(_measure_nav, "entries") && is_array(_measure_nav.entries))
+        ? _measure_nav.entries
+        : [];
+    var _segments = (is_struct(_model) && variable_struct_exists(_model, "segments") && is_array(_model.segments))
+        ? _model.segments
+        : [];
+
+    var _nav_n = array_length(_entries);
+    var _seg_n = array_length(_segments);
+    var _paired_n = min(_nav_n, _seg_n);
+    var _timing_mismatch = 0;
+    for (var _i = 0; _i < _paired_n; _i++) {
+        var _e = _entries[_i];
+        var _s = _segments[_i];
+        if (!is_struct(_e) || !is_struct(_s)) continue;
+        var _ds = abs(real(_e.start_ms ?? 0) - real(_s.start_ms ?? 0));
+        var _de = abs(real(_e.end_ms ?? 0) - real(_s.end_ms ?? 0));
+        if (_ds > 0.001 || _de > 0.001) _timing_mismatch += 1;
+    }
+
+    return {
+        nav_count: _nav_n,
+        model_count: _seg_n,
+        count_delta: _seg_n - _nav_n,
+        timing_mismatch_count: _timing_mismatch
+    };
+}
+
+/// @function gv_tune_structure_refresh_model_from_measure_nav(_measure_nav, _reason)
+/// @description Refresh Stage-1 canonical tune-structure model cache and optional parity logging.
+/// @param {struct} _measure_nav  Legacy measure-nav input.
+/// @param {string} _reason  Refresh reason tag.
+/// @reads  global.timeline_cfg.tune_structure_model_build_enabled, global.timeline_cfg.tune_structure_model_parity_log
+/// @writes global.timeline_state.tune_structure_model, global.timeline_state.tune_structure_model_parity, global.timeline_state.tune_structure_model_reason
+function gv_tune_structure_refresh_model_from_measure_nav(_measure_nav, _reason) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
+
+    var _cfg = gv_ensure_timeline_cfg_defaults();
+    var _build_enabled = !variable_struct_exists(_cfg, "tune_structure_model_build_enabled")
+        || bool(variable_struct_get(_cfg, "tune_structure_model_build_enabled"));
+    if (!_build_enabled) return;
+
+    var _model = gv_build_tune_structure_model_from_measure_nav(_measure_nav);
+    var _parity = gv_tune_structure_build_parity(_measure_nav, _model);
+    global.timeline_state.tune_structure_model = _model;
+    global.timeline_state.tune_structure_model_parity = _parity;
+    global.timeline_state.tune_structure_model_reason = string(_reason ?? "");
+
+    var _parity_log = variable_struct_exists(_cfg, "tune_structure_model_parity_log")
+        && bool(variable_struct_get(_cfg, "tune_structure_model_parity_log"));
+    if (_parity_log) {
+        var _msg = "[TSM_PARITY] reason=" + string(_reason ?? "")
+            + " nav=" + string(_parity.nav_count)
+            + " model=" + string(_parity.model_count)
+            + " delta=" + string(_parity.count_delta)
+            + " timing_mismatch=" + string(_parity.timing_mismatch_count);
+        if (is_undefined(diag_log_append_line) == false) {
+            diag_log_append_line(_msg, "perf_benchmark.log", false);
+        } else {
+            show_debug_message(_msg);
+        }
+    }
+}
+
+/// @function gv_tune_structure_model_resolve_musical_measure_at_time(_time_ms, _fallback_measure)
+/// @description Resolve timeline label measure index from canonical tune-structure model at a time position.
+/// @param {real} _time_ms  Time to resolve in ms.
+/// @param {real} _fallback_measure  Legacy measure label fallback.
+/// @returns {real}  Musical measure index from model when available, else fallback.
+/// @reads  global.timeline_state.tune_structure_model
+function gv_tune_structure_model_resolve_musical_measure_at_time(_time_ms, _fallback_measure) {
+    var _fallback = floor(real(_fallback_measure));
+    if (_fallback < 0) _fallback = 0;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return _fallback;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return _fallback;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return _fallback;
+
+    var _segments = _model.segments;
+    var _n = array_length(_segments);
+    var _t = real(_time_ms);
+    for (var _i = 0; _i < _n; _i++) {
+        var _seg = _segments[_i];
+        if (!is_struct(_seg)) continue;
+        var _start = real(_seg.start_ms ?? -1);
+        var _end = real(_seg.end_ms ?? _start);
+        if (_t < _start) continue;
+        if (_t >= _end) continue;
+
+        if (variable_struct_exists(_seg, "musical_measure_idx")) {
+            var _m = floor(real(_seg.musical_measure_idx));
+            if (_m >= 0) return _m;
+        }
+        return _fallback;
+    }
+
+    return _fallback;
+}
+
+/// @function gv_tune_structure_model_resolve_musical_measure_for_nav_idx(_source_nav_idx, _fallback_measure)
+/// @description Resolve musician-facing measure label from canonical model by source nav index.
+/// @param {real} _source_nav_idx  Source nav index from measure-nav table.
+/// @param {real} _fallback_measure  Legacy measure label fallback.
+/// @returns {real}  Musical measure index from model when available, else fallback.
+/// @reads  global.timeline_state.tune_structure_model
+function gv_tune_structure_model_resolve_musical_measure_for_nav_idx(_source_nav_idx, _fallback_measure) {
+    var _fallback = floor(real(_fallback_measure));
+    if (_fallback < 0) _fallback = 0;
+
+    var _target_idx = floor(real(_source_nav_idx));
+    if (_target_idx < 0) return _fallback;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return _fallback;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return _fallback;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return _fallback;
+    var _segments = _model.segments;
+
+    for (var _i = 0; _i < array_length(_segments); _i++) {
+        var _seg = _segments[_i];
+        if (!is_struct(_seg)) continue;
+        var _src = floor(real(_seg.source_nav_idx ?? -1));
+        if (_src != _target_idx) continue;
+        if (!variable_struct_exists(_seg, "musical_measure_idx")) return _fallback;
+        var _m = floor(real(_seg.musical_measure_idx));
+        return (_m >= 0) ? _m : _fallback;
+    }
+
+    return _fallback;
+}
+
+/// @function gv_tune_structure_model_build_panel_entries(_fallback_entries)
+/// @description Build panel entry source from canonical tune-structure model when enabled, else return legacy entries.
+/// @param {array} _fallback_entries  Legacy measure-nav entries.
+/// @returns {struct}  { entries, source_idx_map, used_model }.
+/// @reads  global.timeline_cfg.use_canonical_tune_structure_model, global.timeline_state.tune_structure_model
+function gv_tune_structure_model_build_panel_entries(_fallback_entries) {
+    var _result = {
+        entries: is_array(_fallback_entries) ? _fallback_entries : [],
+        source_idx_map: [],
+        used_model: false
+    };
+
+    var _fallback_n = array_length(_result.entries);
+    for (var _fi = 0; _fi < _fallback_n; _fi++) {
+        _result.source_idx_map[_fi] = _fi;
+    }
+
+    var _cfg = gv_ensure_timeline_cfg_defaults();
+    var _use_model = variable_struct_exists(_cfg, "use_canonical_tune_structure_model")
+        && bool(variable_struct_get(_cfg, "use_canonical_tune_structure_model"));
+    if (!_use_model) return _result;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return _result;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return _result;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return _result;
+
+    var _segments = _model.segments;
+    if (array_length(_segments) <= 0) return _result;
+
+    var _entries = [];
+    var _source_idx_map = [];
+    for (var _si = 0; _si < array_length(_segments); _si++) {
+        var _seg = _segments[_si];
+        if (!is_struct(_seg)) continue;
+
+        var _measure = floor(real(_seg.source_measure ?? -1));
+        var _part = max(1, floor(real(_seg.part ?? 1)));
+        var _start = real(_seg.start_ms ?? 0);
+        var _end = real(_seg.end_ms ?? _start);
+        var _src_idx = floor(real(_seg.source_nav_idx ?? _si));
+        var _status = 0;
+
+        array_push(_entries, {
+            measure: _measure,
+            part: _part,
+            iteration: 0,
+            start_ms: _start,
+            end_ms: _end,
+            status: _status,
+            display_row_kind: string(_seg.display_row_kind ?? "full_row"),
+            musical_measure_idx: floor(real(_seg.musical_measure_idx ?? _measure))
+        });
+        array_push(_source_idx_map, _src_idx);
+    }
+
+    if (array_length(_entries) <= 0) return _result;
+
+    _result.entries = _entries;
+    _result.source_idx_map = _source_idx_map;
+    _result.used_model = true;
+    return _result;
+}
+
+/// @function gv_tune_structure_model_resolve_context_at_time(_time_ms)
+/// @description Resolve structural context directly from canonical tune-structure model windows.
+/// @param {real} _time_ms  Time in ms.
+/// @returns {struct}  {found, measure, part, nav_idx, measure_ref_key, segment_id, musical_measure_idx}.
+/// @reads  global.timeline_cfg.use_canonical_tune_structure_model, global.timeline_state.tune_structure_model
+function gv_tune_structure_model_resolve_context_at_time(_time_ms) {
+    var _out = {
+        found: false,
+        measure: -1,
+        part: 1,
+        nav_idx: -1,
+        measure_ref_key: "",
+        segment_id: "",
+        musical_measure_idx: -1
+    };
+
+    var _cfg = gv_ensure_timeline_cfg_defaults();
+    var _use_model = variable_struct_exists(_cfg, "use_canonical_tune_structure_model")
+        && bool(variable_struct_get(_cfg, "use_canonical_tune_structure_model"));
+    if (!_use_model) return _out;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return _out;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return _out;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return _out;
+
+    var _segments = _model.segments;
+    var _t = real(_time_ms);
+    for (var _i = 0; _i < array_length(_segments); _i++) {
+        var _seg = _segments[_i];
+        if (!is_struct(_seg)) continue;
+
+        var _start = real(_seg.start_ms ?? -1);
+        var _end = real(_seg.end_ms ?? _start);
+        if (_start < 0 || _end <= _start + 0.001) continue;
+        if (_t < _start || _t >= _end) continue;
+
+        var _part = max(1, floor(real(_seg.part ?? 1)));
+        var _measure = floor(real(_seg.source_measure ?? -1));
+        var _nav_idx = floor(real(_seg.source_nav_idx ?? -1));
+        var _measure_ref_key = "";
+        var _score_key_fn = asset_get_index("scoring_measure_ref_key");
+        if (script_exists(_score_key_fn) && _measure >= 1) {
+            _measure_ref_key = string(script_execute(_score_key_fn, _part, _measure, _nav_idx));
+            if (_measure_ref_key == "") {
+                _measure_ref_key = string(script_execute(_score_key_fn, _part, _measure, -1));
+            }
+        }
+        if (_measure_ref_key == "" && _measure >= 1) {
+            _measure_ref_key = string(_part) + ":" + string(_measure);
+        }
+
+        _out.found = true;
+        _out.part = _part;
+        _out.measure = _measure;
+        _out.nav_idx = _nav_idx;
+        _out.measure_ref_key = _measure_ref_key;
+        _out.segment_id = string(_seg.segment_id ?? "");
+        _out.musical_measure_idx = floor(real(_seg.musical_measure_idx ?? -1));
+        return _out;
+    }
+
+    return _out;
+}
+
+/// @function gv_tune_structure_model_find_segment(_part, _measure, _nav_idx)
+/// @description Find a canonical model segment by structural identity, preferring exact source-nav match when available.
+/// @param {real} _part  Part number.
+/// @param {real} _measure  Source measure number.
+/// @param {real} _nav_idx  Source nav index, or -1.
+/// @returns {struct|undefined} Matching segment, or undefined.
+/// @reads  global.timeline_state.tune_structure_model
+function gv_tune_structure_model_find_segment(_part, _measure, _nav_idx) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return undefined;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return undefined;
+
+    var _target_part = max(1, floor(real(_part)));
+    var _target_measure = floor(real(_measure));
+    var _target_nav = floor(real(_nav_idx));
+    var _segments = _model.segments;
+    var _fallback = undefined;
+
+    for (var _i = 0; _i < array_length(_segments); _i++) {
+        var _seg = _segments[_i];
+        if (!is_struct(_seg)) continue;
+        var _part_i = max(1, floor(real(_seg.part ?? 1)));
+        var _measure_i = floor(real(_seg.source_measure ?? -1));
+        var _nav_i = floor(real(_seg.source_nav_idx ?? -1));
+        if (_part_i != _target_part || _measure_i != _target_measure) continue;
+        if (_target_nav >= 0 && _nav_i == _target_nav) return _seg;
+        if (is_undefined(_fallback)) _fallback = _seg;
+    }
+
+    return _fallback;
+}
+
+/// @function gv_tune_structure_model_find_next_segment(_part, _measure, _nav_idx)
+/// @description Find the next canonical model segment after the provided structural identity.
+/// @param {real} _part  Part number.
+/// @param {real} _measure  Source measure number.
+/// @param {real} _nav_idx  Source nav index, or -1.
+/// @returns {struct|undefined} Next segment, or undefined.
+/// @reads  global.timeline_state.tune_structure_model
+function gv_tune_structure_model_find_next_segment(_part, _measure, _nav_idx) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "tune_structure_model")
+        || !is_struct(global.timeline_state.tune_structure_model)) return undefined;
+
+    var _model = global.timeline_state.tune_structure_model;
+    if (!variable_struct_exists(_model, "segments") || !is_array(_model.segments)) return undefined;
+
+    var _target_part = max(1, floor(real(_part)));
+    var _target_measure = floor(real(_measure));
+    var _target_nav = floor(real(_nav_idx));
+    var _segments = _model.segments;
+    var _match_index = -1;
+    var _fallback_index = -1;
+
+    for (var _i = 0; _i < array_length(_segments); _i++) {
+        var _seg = _segments[_i];
+        if (!is_struct(_seg)) continue;
+        var _part_i = max(1, floor(real(_seg.part ?? 1)));
+        var _measure_i = floor(real(_seg.source_measure ?? -1));
+        var _nav_i = floor(real(_seg.source_nav_idx ?? -1));
+        if (_part_i != _target_part || _measure_i != _target_measure) continue;
+        if (_target_nav >= 0 && _nav_i == _target_nav) {
+            _match_index = _i;
+            break;
+        }
+        if (_fallback_index < 0) _fallback_index = _i;
+    }
+
+    if (_match_index < 0) _match_index = _fallback_index;
+    if (_match_index < 0) return undefined;
+    if ((_match_index + 1) >= array_length(_segments)) return undefined;
+    return _segments[_match_index + 1];
 }
 
 /// @function gv_measure_nav_apply_to_timeline_state(_measure_nav)
@@ -300,6 +992,7 @@ function gv_measure_nav_apply_to_timeline_state(_measure_nav) {
     global.timeline_state.measure_nav_entries = _entries;
     global.timeline_state.measure_nav_parts = _parts;
     global.timeline_state.measure_nav_pickup_by_part = _pickup;
+    gv_tune_structure_refresh_model_from_measure_nav(_measure_nav, "measure_nav_apply");
 }
 
 /// @function gv_measure_nav_ensure_state_defaults()
@@ -635,6 +1328,18 @@ function gv_ensure_timeline_cfg_defaults() {
     if (!variable_struct_exists(global.timeline_cfg, "tune_structure_page_rows")) {
         variable_struct_set(global.timeline_cfg, "tune_structure_page_rows", 8);
     }
+    if (!variable_struct_exists(global.timeline_cfg, "tune_structure_show_pickup_rows")) {
+        variable_struct_set(global.timeline_cfg, "tune_structure_show_pickup_rows", false);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "use_canonical_tune_structure_model")) {
+        variable_struct_set(global.timeline_cfg, "use_canonical_tune_structure_model", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "tune_structure_model_build_enabled")) {
+        variable_struct_set(global.timeline_cfg, "tune_structure_model_build_enabled", true);
+    }
+    if (!variable_struct_exists(global.timeline_cfg, "tune_structure_model_parity_log")) {
+        variable_struct_set(global.timeline_cfg, "tune_structure_model_parity_log", false);
+    }
     if (!variable_struct_exists(global.timeline_cfg, "now_ratio")) {
         variable_struct_set(global.timeline_cfg, "now_ratio", 0.33);
     }
@@ -728,7 +1433,7 @@ function gv_ensure_timeline_cfg_defaults() {
         variable_struct_set(global.timeline_cfg, "notebeam_visual_target_hz", 60);
     }
     if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_log")) {
-        variable_struct_set(global.timeline_cfg, "score_lane_debug_log", true);
+        variable_struct_set(global.timeline_cfg, "score_lane_debug_log", false);
     }
     if (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_boundary_window_ms")) {
         variable_struct_set(global.timeline_cfg, "score_lane_debug_boundary_window_ms", 2500);
@@ -1124,6 +1829,41 @@ function gv_get_target_tune_channel() {
     return target;
 }
 
+/// @function gv_count_selected_channel_score_measures(_events)
+/// @description Count distinct positive score-measure labels present on note_on events for the selected tune channel.
+/// @param {array} _events Planned events array.
+/// @returns {real} Distinct playable measure count for the selected tune channel, or 0 when unavailable.
+/// @reads global.timeline_cfg.tune_channel (via gv_get_target_tune_channel)
+function gv_count_selected_channel_score_measures(_events) {
+    if (!is_array(_events)) return 0;
+
+    var _target_channel = gv_get_target_tune_channel();
+    if (!gv_is_bagpipe_tune_channel(_target_channel)) return 0;
+
+    var _seen_measures = {};
+    var _count = 0;
+    var _n = array_length(_events);
+    for (var _i = 0; _i < _n; _i++) {
+        var _ev = _events[_i];
+        if (!is_struct(_ev)) continue;
+        if (string(_ev[$ "type"] ?? "") != "note_on") continue;
+
+        var _ev_ch = floor(real(_ev[$ "channel"] ?? -1));
+        if (_ev_ch != _target_channel) continue;
+
+        var _ev_measure = floor(real(_ev[$ "owner_measure"] ?? (_ev[$ "measure"] ?? -1)));
+        if (_ev_measure <= 0) continue;
+
+        var _key = string(_ev_measure);
+        if (variable_struct_exists(_seen_measures, _key)) continue;
+
+        _seen_measures[$ _key] = true;
+        _count += 1;
+    }
+
+    return _count;
+}
+
 /// @function gv_use_tune_ghost_parts()
 /// @description Return whether ghost display of non-focus tune parts is enabled.
 /// @returns {bool}
@@ -1178,16 +1918,15 @@ function gv_cycle_timeline_score_visibility_mode() {
 }
 
 /// @function gv_draw_gameinfo_timeline_visibility_panel(_x1, _y1, _x2, _y2)
-/// @description Draw the timeline visibility toggle in the game-info window.
+/// @description Draw loop boundary summary text in game-info window (`M# B# - M# B#`) with clickable beat fields.
 /// @param {real} _x1 Left edge.
 /// @param {real} _y1 Top edge.
 /// @param {real} _x2 Right edge.
 /// @param {real} _y2 Bottom edge.
-/// @reads  global.timeline_cfg, global.timeline_state
+/// @reads  global.timeline_state, global.loop_mode_enabled
+/// @writes global.timeline_state.loop_boundary_ui_controls
 function gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2) {
-    // Reserve a 2x2 layout footprint and use the top-left cell for this button.
     var pad = 6;
-    var gap = 6;
     var left = _x1 + pad;
     var top = _y1 + pad;
     var right = _x2 - pad;
@@ -1196,58 +1935,285 @@ function gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2) {
     if (right <= left) right = left + 1;
     if (bottom <= top) bottom = top + 1;
 
-    var avail_w = right - left;
-    var avail_h = bottom - top;
-    var tile_w = max(1, floor((avail_w - gap) * 0.5));
-    var tile_h = max(1, floor((avail_h - gap) * 0.5));
+    return [left, top, right, bottom];
+}
 
-    return [left, top, left + tile_w, top + tile_h];
+/// @function gv_loop_get_ui_resolved_boundaries()
+/// @description Resolve boundaries for UI display using selected refs and current refinement state.
+/// @returns {struct} `{valid, start_measure, start_beat, end_measure, end_beat, start_part, end_part, source}`.
+/// @reads global.loop_mode_enabled, global.timeline_state
+function gv_loop_get_ui_resolved_boundaries() {
+    var out = {
+        valid: false,
+        start_measure: -1,
+        start_beat: 1,
+        end_measure: -1,
+        end_beat: 1,
+        start_part: 1,
+        end_part: 1,
+        source: "none"
+    };
+
+    if (!gv_loop_mode_enabled()) return out;
+    if (is_undefined(gv_loop_get_selected_measure_refs) || is_undefined(gv_loop_resolve_boundary_endpoints)) return out;
+
+    var refs = gv_loop_get_selected_measure_refs();
+    if (!is_array(refs) || array_length(refs) <= 0) return out;
+
+    var ctx = gv_loop_resolve_boundary_endpoints(refs);
+    if (!is_struct(ctx) || !(ctx[$ "valid"] ?? false)) return out;
+
+    var sb = ctx[$ "start_boundary"];
+    var eb = ctx[$ "end_boundary"];
+    if (!is_struct(sb) || !is_struct(eb)) return out;
+
+    out.valid = true;
+    out.start_measure = floor(real(sb[$ "measure"] ?? -1));
+    out.start_beat = max(1, floor(real(sb[$ "beat"] ?? 1)));
+    out.end_measure = floor(real(eb[$ "measure"] ?? -1));
+    out.end_beat = max(1, floor(real(eb[$ "beat"] ?? 1)));
+    out.start_part = max(1, floor(real(sb[$ "part"] ?? 1)));
+    out.end_part = max(1, floor(real(eb[$ "part"] ?? 1)));
+
+    // Guard against unresolved/invalid boundary labels so UI never falls back
+    // to "M1" for the end selector while a valid range is selected.
+    if (out.start_measure < 1) {
+        var _first_ref = refs[0];
+        if (is_struct(_first_ref)) {
+            out.start_measure = max(1, floor(real(_first_ref[$ "measure"] ?? 1)));
+            out.start_part = max(1, floor(real(_first_ref[$ "part"] ?? out.start_part)));
+        } else {
+            out.start_measure = 1;
+        }
+    }
+    if (out.end_measure < 1) {
+        var _last_ref = refs[array_length(refs) - 1];
+        if (is_struct(_last_ref)) {
+            out.end_measure = max(1, floor(real(_last_ref[$ "measure"] ?? out.start_measure)) + 1);
+            out.end_part = max(1, floor(real(_last_ref[$ "part"] ?? out.start_part)));
+        } else {
+            out.end_measure = max(1, out.start_measure + 1);
+            out.end_part = out.start_part;
+        }
+    }
+
+    out.source = string(ctx[$ "source"] ?? "none");
+    return out;
+}
+
+/// @function gv_loop_get_measure_beat_count(_part, _measure)
+/// @description Estimate available beats in a measure from canonical marker events, with meter fallback.
+/// @param {real} _part Part number.
+/// @param {real} _measure Measure number.
+/// @returns {real} Max beat count for this measure (>=1).
+/// @reads global.playback_events, global.timeline_state.meter_num
+function gv_loop_get_measure_beat_count(_part, _measure) {
+    var target_part = max(1, floor(real(_part)));
+    var target_measure = floor(real(_measure));
+    if (target_measure < 1) return 1;
+
+    // Authoritative source for selector beat caps: active playback segment meter.
+    // No silent fallback chain here; if meter cannot be resolved, log and fail closed.
+    if (is_undefined(scr_playback_context_get_active_segment) || is_undefined(gv_parse_meter)) {
+        show_debug_message("[LOOP_V3][ERROR] Missing meter resolver scripts; loop beat cap defaults to 1.");
+        return 1;
+    }
+
+    var _active_seg = scr_playback_context_get_active_segment();
+    if (!is_struct(_active_seg)) {
+        show_debug_message("[LOOP_V3][ERROR] No active playback segment; loop beat cap defaults to 1.");
+        return 1;
+    }
+
+    var _seg_meter = string(_active_seg[$ "meter"] ?? "");
+    if (string_pos("/", _seg_meter) <= 0) {
+        show_debug_message("[LOOP_V3][ERROR] Active segment meter missing/invalid ('" + _seg_meter + "'); loop beat cap defaults to 1.");
+        return 1;
+    }
+
+    var _seg_parts = gv_parse_meter(_seg_meter);
+    if (!is_array(_seg_parts) || array_length(_seg_parts) < 1) {
+        show_debug_message("[LOOP_V3][ERROR] Failed to parse active segment meter ('" + _seg_meter + "'); loop beat cap defaults to 1.");
+        return 1;
+    }
+
+    var beats_per_measure = max(1, floor(real(_seg_parts[0])));
+    return beats_per_measure;
+}
+
+/// @function gv_loop_adjust_boundary_refinement_beat(_which, _delta)
+/// @description Adjust start/end boundary beat and keep resolver-valid ordering.
+/// @param {string} _which "start" or "end".
+/// @param {real} _delta +1 to advance, -1 to step backward.
+/// @returns {bool} true when adjustment applied.
+/// @reads global.timeline_state.loop_boundary_refinement
+/// @writes global.timeline_state.loop_boundary_refinement
+function gv_loop_adjust_boundary_refinement_beat(_which, _delta) {
+    if (!gv_loop_mode_enabled()) return false;
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (is_undefined(gv_loop_get_selected_measure_refs) || is_undefined(gv_loop_resolve_boundary_endpoints)) return false;
+
+    var refs = gv_loop_get_selected_measure_refs();
+    if (!is_array(refs) || array_length(refs) <= 0) return false;
+
+    if (!variable_struct_exists(global.timeline_state, "loop_boundary_refinement")
+        || !is_struct(global.timeline_state.loop_boundary_refinement)) {
+        gv_loop_sync_boundary_refinement_from_selection();
+    }
+    var refine = global.timeline_state.loop_boundary_refinement;
+    if (!is_struct(refine)) return false;
+
+    var field_prefix = (_which == "end") ? "end_" : "start_";
+    var part_key = field_prefix + "part";
+    var measure_key = field_prefix + "measure";
+    var beat_key = field_prefix + "beat";
+    var frac_key = field_prefix + "beat_fraction";
+
+    var part = max(1, floor(real(refine[$ part_key] ?? 1)));
+    var measure = floor(real(refine[$ measure_key] ?? -1));
+    if (measure < 1) return false;
+
+    var max_beat = gv_loop_get_measure_beat_count(part, measure);
+    var old_beat = max(1, floor(real(refine[$ beat_key] ?? 1)));
+    var new_beat = old_beat;
+    if (_delta >= 0) {
+        new_beat = (old_beat mod max_beat) + 1;
+    } else {
+        new_beat = old_beat - 1;
+        if (new_beat < 1) new_beat = max_beat;
+    }
+
+    var old_enabled = bool(refine[$ "enabled"] ?? false);
+    var old_frac = real(refine[$ frac_key] ?? 0);
+
+    refine[$ "enabled"] = true;
+    refine[$ beat_key] = new_beat;
+    refine[$ frac_key] = 0;
+    global.timeline_state.loop_boundary_refinement = refine;
+
+    var ctx = gv_loop_resolve_boundary_endpoints(refs);
+    var invalid = !is_struct(ctx)
+        || !(ctx[$ "valid"] ?? false)
+        || string_pos("refine_invalid_fallback", string(ctx[$ "source"] ?? "")) > 0;
+    if (invalid) {
+        refine[$ "enabled"] = old_enabled;
+        refine[$ beat_key] = old_beat;
+        refine[$ frac_key] = old_frac;
+        global.timeline_state.loop_boundary_refinement = refine;
+        return false;
+    }
+    return true;
+}
+
+/// @function gv_get_gameinfo_loop_boundary_layout(_x1, _y1, _x2, _y2, _summary)
+/// @description Build text/button layout for the loop boundary line.
+/// @param {real} _x1 Left edge.
+/// @param {real} _y1 Top edge.
+/// @param {real} _x2 Right edge.
+/// @param {real} _y2 Bottom edge.
+/// @param {struct} _summary Result from gv_loop_get_ui_resolved_boundaries().
+/// @returns {struct} Layout with `start_beat_rect`, `end_beat_rect`, and text positions.
+function gv_get_gameinfo_loop_boundary_layout(_x1, _y1, _x2, _y2, _summary) {
+    var line_scale = 0.8;
+    var prefix_a = "M" + string(max(1, floor(real(_summary[$ "start_measure"] ?? 1)))) + " ";
+    var beat_a = "B" + string(max(1, floor(real(_summary[$ "start_beat"] ?? 1))));
+    var mid = " - M" + string(max(1, floor(real(_summary[$ "end_measure"] ?? 1)))) + " ";
+    var beat_b = "B" + string(max(1, floor(real(_summary[$ "end_beat"] ?? 1))));
+
+    var w_prefix_a = string_width(prefix_a) * line_scale;
+    var w_beat_a = string_width(beat_a) * line_scale;
+    var w_mid = string_width(mid) * line_scale;
+    var w_beat_b = string_width(beat_b) * line_scale;
+    var pad_x = 4;
+    var total_w = w_prefix_a + (w_beat_a + pad_x * 2) + w_mid + (w_beat_b + pad_x * 2);
+
+    var content_rect = gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2);
+    var cx = (content_rect[0] + content_rect[2]) * 0.5;
+    var line_h = string_height("M0 B0") * line_scale;
+    var line_y = floor(content_rect[1] + max(2, ((content_rect[3] - content_rect[1]) - line_h) * 0.35));
+    var x_cursor = cx - (total_w * 0.5);
+
+    var prefix_a_x = x_cursor;
+    x_cursor += w_prefix_a;
+    var beat_a_x1 = x_cursor;
+    var beat_a_x2 = beat_a_x1 + w_beat_a + pad_x * 2;
+    x_cursor = beat_a_x2;
+    var mid_x = x_cursor;
+    x_cursor += w_mid;
+    var beat_b_x1 = x_cursor;
+    var beat_b_x2 = beat_b_x1 + w_beat_b + pad_x * 2;
+
+    var beat_y1 = line_y - 2;
+    var beat_y2 = line_y + line_h + 2;
+    return {
+        line_scale: line_scale,
+        prefix_a: prefix_a,
+        beat_a: beat_a,
+        mid: mid,
+        beat_b: beat_b,
+        prefix_a_x: prefix_a_x,
+        beat_a_x: beat_a_x1 + pad_x,
+        mid_x: mid_x,
+        beat_b_x: beat_b_x1 + pad_x,
+        line_y: line_y,
+        start_beat_rect: [beat_a_x1, beat_y1, beat_a_x2, beat_y2],
+        end_beat_rect: [beat_b_x1, beat_y1, beat_b_x2, beat_y2]
+    };
 }
 
 function gv_draw_gameinfo_timeline_visibility_panel(_x1, _y1, _x2, _y2) {
-    var rect = gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2);
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
 
-    var mode = gv_get_timeline_score_visibility_mode();
-    var score_images_visible = (mode == 0);
-    var can_interact = gv_gameviz_controls_can_interact();
-    var label = score_images_visible ? "Score" : "Marker";
+    var summary = gv_loop_get_ui_resolved_boundaries();
+    global.timeline_state.loop_boundary_ui_controls = {
+        valid: false,
+        start_beat_rect: [-1, -1, -1, -1],
+        end_beat_rect: [-1, -1, -1, -1]
+    };
+
+    if (!summary[$ "valid"]) return;
 
     draw_set_font(fnt_setting);
+    var can_interact = gv_gameviz_controls_can_interact();
+    var layout = gv_get_gameinfo_loop_boundary_layout(_x1, _y1, _x2, _y2, summary);
 
-    var x1 = rect[0];
-    var y1 = rect[1];
-    var x2 = rect[2];
-    var y2 = rect[3];
+    var border_col = can_interact ? make_colour_rgb(168, 168, 168) : make_colour_rgb(90, 90, 90);
+    var fill_col = can_interact ? make_colour_rgb(58, 58, 58) : make_colour_rgb(44, 44, 44);
+    var text_col = can_interact ? make_colour_rgb(222, 222, 222) : make_colour_rgb(148, 148, 148);
 
-    if (!can_interact) {
-        draw_set_colour(make_colour_rgb(42, 42, 42));
-        draw_rectangle(x1, y1, x2, y2, false);
-        draw_set_colour(make_colour_rgb(88, 88, 88));
-        draw_rectangle(x1, y1, x2, y2, true);
-        draw_set_colour(make_colour_rgb(150, 150, 150));
-    } else if (score_images_visible) {
-        draw_set_colour(make_colour_rgb(66, 66, 66));
-        draw_rectangle(x1, y1, x2, y2, false);
-        draw_set_colour(make_colour_rgb(190, 190, 190));
-        draw_rectangle(x1, y1, x2, y2, true);
-        draw_set_colour(make_colour_rgb(214, 214, 214));
-    } else {
-        draw_set_colour(make_colour_rgb(52, 52, 52));
-        draw_rectangle(x1, y1, x2, y2, false);
-        draw_set_colour(make_colour_rgb(170, 170, 170));
-        draw_rectangle(x1, y1, x2, y2, true);
-        draw_set_colour(make_colour_rgb(206, 206, 206));
-    }
+    var b1 = layout[$ "start_beat_rect"];
+    var b2 = layout[$ "end_beat_rect"];
 
-    draw_set_halign(fa_center);
-    draw_set_valign(fa_middle);
-    draw_text((x1 + x2) * 0.5, (y1 + y2) * 0.5, label);
-    draw_set_halign(fa_left);
-    draw_set_valign(fa_top);
+    draw_set_colour(fill_col);
+    draw_rectangle(b1[0], b1[1], b1[2], b1[3], false);
+    draw_rectangle(b2[0], b2[1], b2[2], b2[3], false);
+    draw_set_colour(border_col);
+    draw_rectangle(b1[0], b1[1], b1[2], b1[3], true);
+    draw_rectangle(b2[0], b2[1], b2[2], b2[3], true);
+
+    draw_set_colour(text_col);
+    gv_draw_text_scaled_top_left(layout[$ "prefix_a_x"], layout[$ "line_y"], layout[$ "prefix_a"], layout[$ "line_scale"]);
+    gv_draw_text_scaled_top_left(layout[$ "beat_a_x"], layout[$ "line_y"], layout[$ "beat_a"], layout[$ "line_scale"]);
+    gv_draw_text_scaled_top_left(layout[$ "mid_x"], layout[$ "line_y"], layout[$ "mid"], layout[$ "line_scale"]);
+    gv_draw_text_scaled_top_left(layout[$ "beat_b_x"], layout[$ "line_y"], layout[$ "beat_b"], layout[$ "line_scale"]);
+
+    // Tiny affordances: start beat advances (+), end beat steps backward (-).
+    var hint_scale = 0.58;
+    var hint_dy = 1;
+    var hint_col = can_interact ? make_colour_rgb(188, 188, 188) : make_colour_rgb(122, 122, 122);
+    draw_set_colour(hint_col);
+    gv_draw_text_scaled_top_left(b1[2] - (string_width("+") * hint_scale) - 2, b1[1] + hint_dy, "+", hint_scale);
+    gv_draw_text_scaled_top_left(b2[2] - (string_width("-") * hint_scale) - 2, b2[1] + hint_dy, "-", hint_scale);
+
+    global.timeline_state.loop_boundary_ui_controls = {
+        valid: true,
+        start_beat_rect: b1,
+        end_beat_rect: b2
+    };
 }
 
 /// @function gv_handle_gameinfo_timeline_visibility_click(_mx, _my, _x1, _y1, _x2, _y2)
-/// @description Handle click for the game-info timeline visibility toggle.
+/// @description Handle clicks on game-info loop boundary beat buttons (start advances, end steps backward).
 /// @param {real} _mx Mouse X.
 /// @param {real} _my Mouse Y.
 /// @param {real} _x1 Left edge.
@@ -1256,15 +2222,26 @@ function gv_draw_gameinfo_timeline_visibility_panel(_x1, _y1, _x2, _y2) {
 /// @param {real} _y2 Bottom edge.
 /// @returns {bool} True if click was consumed.
 /// @reads  global.timeline_state
-/// @writes global.timeline_cfg.timeline_score_visibility_mode
+/// @writes global.timeline_state.loop_boundary_refinement
 function gv_handle_gameinfo_timeline_visibility_click(_mx, _my, _x1, _y1, _x2, _y2) {
-    var rect = gv_get_gameinfo_timeline_visibility_button_rect(_x1, _y1, _x2, _y2);
-
-    if (!gv_gameviz_point_in_rect(_mx, _my, rect)) return false;
+    if (!gv_loop_mode_enabled()) return false;
     if (!gv_gameviz_controls_can_interact()) return false;
 
-    gv_cycle_timeline_score_visibility_mode();
-    return true;
+    var summary = gv_loop_get_ui_resolved_boundaries();
+    if (!(summary[$ "valid"])) return false;
+
+    var layout = gv_get_gameinfo_loop_boundary_layout(_x1, _y1, _x2, _y2, summary);
+    var start_rect = layout[$ "start_beat_rect"];
+    var end_rect = layout[$ "end_beat_rect"];
+
+    if (gv_gameviz_point_in_rect(_mx, _my, start_rect)) {
+        return gv_loop_adjust_boundary_refinement_beat("start", 1);
+    }
+    if (gv_gameviz_point_in_rect(_mx, _my, end_rect)) {
+        return gv_loop_adjust_boundary_refinement_beat("end", -1);
+    }
+
+    return false;
 }
 
 /// @function gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2)
@@ -1376,18 +2353,24 @@ function gv_is_notebeam_anchor(_inst) {
     return string(variable_instance_get(_inst, "ui_name")) == "notebeam_canvas_anchor";
 }
 
-/// @function gv_scoring_call_script(_script_name, _arg0, _arg1)
-/// @description Dynamically invoke a scoring script asset by name, passing up to two optional arguments.
+/// @function gv_scoring_call_script(_script_name, _arg0, _arg1, _arg2, _arg3, _arg4)
+/// @description Dynamically invoke a scoring script asset by name, passing up to five optional arguments.
 /// @param {string} _script_name  Asset name of the scoring script.
 /// @param {any}    _arg0         Optional first argument.
 /// @param {any}    _arg1         Optional second argument.
+/// @param {any}    _arg2         Optional third argument.
+/// @param {any}    _arg3         Optional fourth argument.
+/// @param {any}    _arg4         Optional fifth argument.
 /// @returns {any}  Return value from the script, or undefined if not found.
-function gv_scoring_call_script(_script_name, _arg0 = undefined, _arg1 = undefined) {
+function gv_scoring_call_script(_script_name, _arg0 = undefined, _arg1 = undefined, _arg2 = undefined, _arg3 = undefined, _arg4 = undefined) {
     var idx = asset_get_index(_script_name);
     if (!script_exists(idx)) return undefined;
-    if (is_undefined(_arg0) && is_undefined(_arg1)) return script_execute(idx);
-    if (is_undefined(_arg1)) return script_execute(idx, _arg0);
-    return script_execute(idx, _arg0, _arg1);
+    if (is_undefined(_arg0) && is_undefined(_arg1) && is_undefined(_arg2) && is_undefined(_arg3) && is_undefined(_arg4)) return script_execute(idx);
+    if (is_undefined(_arg1) && is_undefined(_arg2) && is_undefined(_arg3) && is_undefined(_arg4)) return script_execute(idx, _arg0);
+    if (is_undefined(_arg2) && is_undefined(_arg3) && is_undefined(_arg4)) return script_execute(idx, _arg0, _arg1);
+    if (is_undefined(_arg3) && is_undefined(_arg4)) return script_execute(idx, _arg0, _arg1, _arg2);
+    if (is_undefined(_arg4)) return script_execute(idx, _arg0, _arg1, _arg2, _arg3);
+    return script_execute(idx, _arg0, _arg1, _arg2, _arg3, _arg4);
 }
 
 /// @function gv_scoring_get_overview_lines()
@@ -1398,20 +2381,99 @@ function gv_scoring_get_overview_lines() {
     return lines;
 }
 
-/// @function gv_scoring_get_judge_rows()
-/// @description Return judge table rows for the currently selected measure and judge from the active scoring run.
-/// @returns {array}  Judge row structs, or [] if unavailable.
-/// @reads  global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge
-function gv_scoring_get_judge_rows() {
-    var selected_measure = -1;
-    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
-        if (variable_struct_exists(global.timeline_state, "score_popup_measure")) {
-            selected_measure = floor(real(variable_struct_get(global.timeline_state, "score_popup_measure")));
+/// @function gv_scoring_get_selected_measure_context()
+/// @description Resolve selected score context from timeline state with key-first fallback.
+/// @returns {struct}  {measure, part, nav_idx, measure_key}
+function gv_scoring_get_selected_measure_context() {
+    var out = {
+        measure: -1,
+        part: -1,
+        nav_idx: -1,
+        measure_key: ""
+    };
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
+
+    if (variable_struct_exists(global.timeline_state, "score_popup_nav_idx")) {
+        out.nav_idx = floor(real(global.timeline_state.score_popup_nav_idx));
+    }
+    if (variable_struct_exists(global.timeline_state, "score_popup_measure_key")) {
+        out.measure_key = string(global.timeline_state.score_popup_measure_key);
+    }
+
+    if (out.measure_key != "") {
+        var first_sep = string_pos(":", out.measure_key);
+        if (first_sep > 0) {
+            var part_txt = string_copy(out.measure_key, 1, first_sep - 1);
+            var rem = string_copy(out.measure_key, first_sep + 1, string_length(out.measure_key) - first_sep);
+            var rem_sep = string_pos(":", rem);
+            var measure_txt = (rem_sep > 0) ? string_copy(rem, 1, rem_sep - 1) : rem;
+            var nav_txt = (rem_sep > 0) ? string_copy(rem, rem_sep + 1, string_length(rem) - rem_sep) : "";
+
+            if (part_txt != "") out.part = max(1, floor(real(part_txt)));
+            if (measure_txt != "") out.measure = floor(real(measure_txt));
+            if (out.nav_idx < 0 && nav_txt != "") out.nav_idx = floor(real(nav_txt));
         }
     }
 
+    return out;
+}
+
+/// @function gv_scoring_set_selected_measure_key(_measure_key, _nav_idx)
+/// @description Set canonical selection identity and keep legacy numeric selection as derived-only compatibility state.
+/// @param {string} _measure_key  Canonical score key (`part:measure[:nav]`), or "" to clear selection.
+/// @param {real} [_nav_idx]  Optional nav index override; when < 0, nav may be parsed from key suffix.
+/// @returns {struct}  Resolved context from key parse.
+/// @writes global.timeline_state.score_popup_measure_key, global.timeline_state.score_popup_nav_idx, global.timeline_state.score_popup_measure
+function gv_scoring_set_selected_measure_key(_measure_key, _nav_idx = -1) {
+    var out = {
+        measure: -1,
+        part: -1,
+        nav_idx: floor(real(_nav_idx)),
+        measure_key: string(_measure_key)
+    };
+
+    var key = out.measure_key;
+    if (key != "") {
+        var first_sep = string_pos(":", key);
+        if (first_sep > 0) {
+            var part_txt = string_copy(key, 1, first_sep - 1);
+            var rem = string_copy(key, first_sep + 1, string_length(key) - first_sep);
+            var rem_sep = string_pos(":", rem);
+            var measure_txt = (rem_sep > 0) ? string_copy(rem, 1, rem_sep - 1) : rem;
+            var nav_txt = (rem_sep > 0) ? string_copy(rem, rem_sep + 1, string_length(rem) - rem_sep) : "";
+
+            if (part_txt != "") out.part = max(1, floor(real(part_txt)));
+            if (measure_txt != "") out.measure = floor(real(measure_txt));
+            if (out.nav_idx < 0 && nav_txt != "") out.nav_idx = floor(real(nav_txt));
+        }
+    } else {
+        out.nav_idx = -1;
+    }
+
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.score_popup_measure_key = out.measure_key;
+        global.timeline_state.score_popup_nav_idx = out.nav_idx;
+        // Compatibility field remains derived from canonical key only.
+        global.timeline_state.score_popup_measure = out.measure;
+    }
+
+    return out;
+}
+
+/// @function gv_scoring_get_judge_rows()
+/// @description Return judge table rows for the currently selected measure and judge from the active scoring run.
+/// @returns {array}  Judge row structs, or [] if unavailable.
+/// @reads  global.timeline_state.score_popup_measure_key, global.timeline_state.score_popup_nav_idx, global.timeline_state.score_selected_judge
+function gv_scoring_get_judge_rows() {
+    var ctx = gv_scoring_get_selected_measure_context();
+    var selected_measure = floor(real(ctx.measure ?? -1));
+    var selected_part = floor(real(ctx.part ?? -1));
+    var selected_nav_idx = floor(real(ctx.nav_idx ?? -1));
+    var selected_measure_key = string(ctx.measure_key ?? "");
+
     // Request all enabled judges for the current scope; selection/highlight is handled in the panel draw path.
-    var rows = gv_scoring_call_script("scoring_get_judge_table_rows", selected_measure, "");
+    var rows = gv_scoring_call_script("scoring_get_judge_table_rows", selected_measure, "", selected_part, selected_nav_idx, selected_measure_key);
     if (!is_array(rows)) return [];
     return rows;
 }
@@ -1422,7 +2484,10 @@ function gv_scoring_get_judge_rows() {
 /// @param {string} _judge_id     Judge identifier string.
 /// @returns {struct}  Focus struct.
 function gv_scoring_get_panel_focus(_measure_num, _judge_id) {
-    var focus = gv_scoring_call_script("scoring_get_panel_focus", _measure_num, _judge_id);
+    var part_num = (argument_count > 2) ? floor(real(argument[2])) : -1;
+    var nav_idx = (argument_count > 3) ? floor(real(argument[3])) : -1;
+    var measure_key = (argument_count > 4) ? string(argument[4]) : "";
+    var focus = gv_scoring_call_script("scoring_get_panel_focus", _measure_num, _judge_id, part_num, nav_idx, measure_key);
     if (!is_struct(focus)) {
         return {
             judge_id: "ms_overlap",
@@ -1441,9 +2506,12 @@ function gv_scoring_get_panel_focus(_measure_num, _judge_id) {
 /// @param {string} _judge_id     Judge identifier (default "ms_overlap").
 /// @returns {array}  Array of display strings.
 function gv_scoring_get_popup_lines(_measure_num, _judge_id = "ms_overlap") {
-    var lines = gv_scoring_call_script("scoring_get_detail_popup_rows", _measure_num, _judge_id);
+    var part_num = (argument_count > 2) ? floor(real(argument[2])) : -1;
+    var nav_idx = (argument_count > 3) ? floor(real(argument[3])) : -1;
+    var measure_key = (argument_count > 4) ? string(argument[4]) : "";
+    var lines = gv_scoring_call_script("scoring_get_detail_popup_rows", _measure_num, _judge_id, part_num, nav_idx, measure_key);
     if (!is_array(lines)) {
-        lines = gv_scoring_call_script("scoring_get_measure_popup_rows", _measure_num);
+        lines = gv_scoring_call_script("scoring_get_measure_popup_rows", _measure_num, _judge_id, part_num, nav_idx, measure_key);
     }
     if (!is_array(lines)) return [];
     return lines;
@@ -1508,7 +2576,7 @@ function gv_draw_text_scaled_top_left(_x, _y, _text, _scale) {
 /// @param {real} _y1  Top edge.
 /// @param {real} _x2  Right edge.
 /// @param {real} _y2  Bottom edge.
-/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
+/// @reads  global.timeline_state.playback_complete, global.timeline_state.score_popup_measure_key, global.timeline_state.score_popup_nav_idx, global.timeline_state.score_selected_judge, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
 /// @writes global.timeline_state.score_judge_row_hitboxes, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
 function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
@@ -1544,9 +2612,8 @@ function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
     draw_set_color(make_color_rgb(74, 74, 82));
     draw_rectangle(panel_rect[0], panel_rect[1], panel_rect[2], panel_rect[3], true);
 
-    var selected_measure = variable_struct_exists(global.timeline_state, "score_popup_measure")
-        ? floor(real(variable_struct_get(global.timeline_state, "score_popup_measure")))
-        : -1;
+    var selected_ctx = gv_scoring_get_selected_measure_context();
+    var selected_measure = floor(real(selected_ctx.measure ?? -1));
     var selected_judge = variable_struct_exists(global.timeline_state, "score_selected_judge")
         ? string(variable_struct_get(global.timeline_state, "score_selected_judge"))
         : "ms_overlap";
@@ -1572,7 +2639,7 @@ function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
         global.timeline_state.score_selected_judge = selected_judge;
     }
 
-    var focus = gv_scoring_get_panel_focus(selected_measure, selected_judge);
+    var focus = gv_scoring_get_panel_focus(selected_measure, selected_judge, selected_ctx.part, selected_ctx.nav_idx, selected_ctx.measure_key);
 
     var o = layout.overview_rect;
     var left_w = floor((o[2] - o[0]) * 0.52);
@@ -1659,7 +2726,7 @@ function gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2) {
             : selected_judge;
         if (popup_judge_id == "") popup_judge_id = selected_judge;
 
-        var popup_lines = gv_scoring_get_popup_lines(selected_measure, popup_judge_id);
+        var popup_lines = gv_scoring_get_popup_lines(selected_measure, popup_judge_id, selected_ctx.part, selected_ctx.nav_idx, selected_ctx.measure_key);
         var max_popup_lines = min(8, array_length(popup_lines));
         var popup_inner_w = 180;
         for (var popup_i = 0; popup_i < max_popup_lines; popup_i++) {
@@ -2054,15 +3121,16 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _repla
 /// @reads  global.timeline_state.playback_complete, global.timeline_cfg
 function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
     var layout = gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2);
-    var ghost_mode = gv_use_tune_ghost_parts();
     var can_interact = gv_gameviz_controls_can_interact();
-    var label = ghost_mode ? "All Parts" : "Player Part";
+    var score_mode = gv_get_timeline_score_visibility_mode();
+    var score_images_visible = (score_mode == 0);
+    var label = score_images_visible ? "Score" : "Marker";
     var review_active = variable_global_exists("timeline_state") && is_struct(global.timeline_state)
         && variable_struct_exists(global.timeline_state, "playback_complete")
         && global.timeline_state.playback_complete;
 
     draw_set_font(fnt_setting);
-    gv_gameviz_draw_toggle_button(layout.btn_toggle, label, ghost_mode, can_interact);
+    gv_gameviz_draw_toggle_button(layout.btn_toggle, label, score_images_visible, can_interact);
 
     // Overlay mode button â€” only visible once playback is complete
     if (review_active) {
@@ -2092,7 +3160,7 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
 }
 
 /// @function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2)
-/// @description Handle a mouse click in the gameviz controls panel, toggling ghost mode, overlay mode, scoring visibility, loop scores, or opening perf details.
+/// @description Handle a mouse click in the gameviz controls panel, toggling score visibility, overlay mode, scoring visibility, loop scores, or opening perf details.
 /// @param {real} _mx  Mouse X.
 /// @param {real} _my  Mouse Y.
 /// @param {real} _x1  Panel left edge.
@@ -2101,15 +3169,13 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
 /// @param {real} _y2  Panel bottom edge.
 /// @returns {bool}  true if click was consumed.
 /// @reads  global.timeline_state.playback_complete, global.timeline_cfg
-/// @writes global.timeline_cfg.tune_show_other_parts_ghost, global.timeline_cfg.notebeam_postplay_overlay_mode, global.timeline_cfg.scoring_panel_visible, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
+/// @writes global.timeline_cfg.timeline_score_visibility_mode, global.timeline_cfg.notebeam_postplay_overlay_mode, global.timeline_cfg.scoring_panel_visible, global.timeline_state.score_detail_popup, global.timeline_state.perf_summary_popup
 function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
     var layout = gv_gameviz_controls_get_layout(_x1, _y1, _x2, _y2);
 
     if (gv_gameviz_point_in_rect(_mx, _my, layout.btn_toggle)) {
         if (!gv_gameviz_controls_can_interact()) return false;
-        var cfg = gv_ensure_timeline_cfg_defaults();
-        var ghost_mode = gv_use_tune_ghost_parts();
-        variable_struct_set(cfg, "tune_show_other_parts_ghost", !ghost_mode);
+        gv_cycle_timeline_score_visibility_mode();
         return true;
     }
 
@@ -2521,7 +3587,8 @@ function gv_timeline_step_tick() {
                 global.timeline_state.measure_highlight_last_measure = -1;
                 global.timeline_state.measure_highlight_last_nav_idx = -1;
                 global.timeline_state.measure_highlight_last_struct_idx = -1;
-                var _seg_seed_measure = gv_get_current_planned_measure(_ph);
+                var _seg_seed = gv_resolve_measure_context(_ph);
+                var _seg_seed_measure = floor(real(_seg_seed.measure ?? -1));
                 global.timeline_state.current_measure = max(0, floor(real(_seg_seed_measure)));
                 
                 show_debug_message("  [SEGMENT TRANSITION] Segment " + string(_ac_cur) + ": measure_ms=" + string(_new_measure_ms)
@@ -2609,6 +3676,8 @@ function gv_build_planned_spans(_events) {
         if (_note < 0) continue;
 
         var _measure = variable_struct_exists(e, "measure") ? real(e.measure) : -1;
+        var _part = variable_struct_exists(e, "part") ? real(e.part) : 1;
+        if (_part < 1) _part = 1;
         var _beat = variable_struct_exists(e, "beat") ? real(e.beat) : -1;
         var _bf = 0;
         if (variable_struct_exists(e, "beat_fraction")) _bf = real(e.beat_fraction);
@@ -2617,6 +3686,10 @@ function gv_build_planned_spans(_events) {
         var _is_emb = variable_struct_exists(e, "is_embellishment") && e.is_embellishment;
         var _canonical = chanter_midi_to_canonical(_note, global.MIDI_chanter ?? "default", _ch);
         var _lane_idx = gv_note_to_lane_index(_canonical, _note, _ch);
+        var _measure_ref_key_seed = "";
+        if (_measure >= 1) {
+            _measure_ref_key_seed = string(floor(_part)) + ":" + string(floor(_measure));
+        }
 
         var _k = gv_note_key(_ch, _note);
 
@@ -2629,9 +3702,11 @@ function gv_build_planned_spans(_events) {
                 lane_idx: _lane_idx,
                 is_embellishment: _is_emb,
                 channel: _ch,
+                part: _part,
                 measure: _measure,
                 beat: _beat,
                 beat_fraction: _bf,
+                measure_ref_key_seed: _measure_ref_key_seed,
                 event_id: _eid
             };
 
@@ -2663,9 +3738,11 @@ function gv_build_planned_spans(_events) {
                 lane_idx: real(_on2.lane_idx ?? -1),
                 is_embellishment: _on2.is_embellishment,
                 channel: _on2.channel,
+                part: _on2.part,
                 measure: _on2.measure,
                 beat: _on2.beat,
                 beat_fraction: _on2.beat_fraction,
+                measure_ref_key_seed: _on2.measure_ref_key_seed,
                 event_id: _on2.event_id
             });
         }
@@ -2696,9 +3773,11 @@ function gv_build_planned_spans(_events) {
                 lane_idx: real(_on_tail.lane_idx ?? -1),
                 is_embellishment: _on_tail.is_embellishment,
                 channel: _on_tail.channel,
+                part: _on_tail.part,
                 measure: _on_tail.measure,
                 beat: _on_tail.beat,
                 beat_fraction: _on_tail.beat_fraction,
+                measure_ref_key_seed: _on_tail.measure_ref_key_seed,
                 event_id: _on_tail.event_id
             });
         }
@@ -2739,6 +3818,9 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
         _events = gv_get_planned_events_for_viz();
     }
     if (!is_array(_events) || array_length(_events) <= 0) return false;
+
+    var _selected_tune_channel = gv_get_target_tune_channel();
+    var _selected_playable_measure_count = gv_count_selected_channel_score_measures(_events);
 
     var _skip_met = variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG);
     var _met_ch = _skip_met ? real(global.METRONOME_CONFIG.channel) : -999;
@@ -2835,6 +3917,12 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
         var _ms_per_unit = _units_per_measure > 0 ? (_marker_measure_ms / _units_per_measure) : 1;
 
         var _first_is_pickup = variable_global_exists("score_has_pickup") && global.score_has_pickup;
+        var _structural_cap_count = _structural_duration_count;
+        if (_selected_playable_measure_count > 0) {
+            var _cap_with_pickup = _selected_playable_measure_count + (_first_is_pickup ? 1 : 0);
+            _structural_cap_count = min(_structural_duration_count, _cap_with_pickup);
+        }
+
         var _structural_measure_starts = [];
         var _observed_first_measure_raw = floor(real(variable_struct_get(_measure_starts[0], "m")));
         var _observed_first_measure = _observed_first_measure_raw;
@@ -2843,7 +3931,7 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
         var _missing_lead_count = _observed_first_measure - 1;
         if (_missing_lead_count > 0) {
             var _lead_back_ms = 0;
-            var _lead_limit = min(_missing_lead_count, _structural_duration_count);
+            var _lead_limit = min(_missing_lead_count, _structural_cap_count);
             for (var _lead_i = 0; _lead_i < _lead_limit; _lead_i++) {
                 _lead_back_ms += max(1, real(_structural_durations[_lead_i]) * _ms_per_unit);
             }
@@ -2854,7 +3942,7 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
         }
 
         var _next_measure_num = 1;
-        for (var _sd_i = 0; _sd_i < _structural_duration_count; _sd_i++) {
+        for (var _sd_i = 0; _sd_i < _structural_cap_count; _sd_i++) {
             var _duration_units = real(_structural_durations[_sd_i]);
             var _is_pickup_snippet = (_sd_i == 0)
                 && (_units_per_measure > 0)
@@ -2969,6 +4057,8 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
     var _score_layout_cache_key = string(_zoom_preset_idx)
         + "|" + string_format(_ms_ahead, 0, 3)
         + "|" + string_format(_ms_behind, 0, 3)
+        + "|ch=" + string(_selected_tune_channel)
+        + "|selm=" + string(_selected_playable_measure_count)
         + "|" + string(_score_cache_event_count)
         + "|" + string(_score_cache_pbmap_count)
         + "|" + string(_score_cache_dur_count)
@@ -2991,6 +4081,8 @@ function gv_score_plan_prebuild_single_tune(_planned_events) {
         reason: "bind_prebuild",
         mode: "tune",
         built_for_loop: false,
+        target_tune_channel: _selected_tune_channel,
+        selected_channel_measure_count: _selected_playable_measure_count,
         source_event_count: array_length(_events),
         built_at_ms: timing_get_engine_now_ms(),
         fallback_measure_ms: _fallback_measure_ms,
@@ -3056,6 +4148,31 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     global.timeline_state.planned_spans = gv_build_planned_spans(_planned_events);
     global.timeline_state.emb_groups    = gv_build_emb_groups(global.timeline_state.planned_spans);
     global.timeline_state.loop_runtime_cache = { valid: false, measure_starts: [] };
+    if (!variable_struct_exists(global.timeline_state, "loop_session")
+        || !is_struct(global.timeline_state.loop_session)) {
+        global.timeline_state.loop_session = {
+            active: false,
+            selected_refs: [],
+            loop_start_boundary: {},
+            loop_end_boundary: {},
+            boundary_refinement: {},
+            timeline_segments: [],
+            start_ms: 0,
+            end_ms: 0,
+            pass_duration_ms: 0,
+            passes_total: 0,
+            passes_completed: 0,
+            spacer_enabled: false,
+            spacer_duration_ms: 0,
+            jump_enabled: false,
+            phase: "complete",
+            current_pass_index: 0,
+            phase_start_ms: 0,
+            phase_end_ms: 0,
+            pickup_mode: "none",
+            degraded: false
+        };
+    }
 
     // Apply active zoom mode (time vs measures) immediately at bind/start.
     // Without this, startup can briefly inherit measure-derived window sizing.
@@ -3067,6 +4184,20 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     var _bind_single_loop_runtime = !_bind_set_mode
         && variable_global_exists("loop_runtime_active")
         && bool(global.loop_runtime_active);
+    if (!_bind_single_loop_runtime) {
+        var _ls_reset = global.timeline_state.loop_session;
+        _ls_reset.active = false;
+        _ls_reset.phase = "complete";
+        _ls_reset.current_pass_index = 0;
+        _ls_reset.passes_completed = 0;
+        _ls_reset.phase_start_ms = 0;
+        _ls_reset.phase_end_ms = 0;
+        _ls_reset.loop_start_boundary = {};
+        _ls_reset.loop_end_boundary = {};
+        _ls_reset.boundary_refinement = {};
+        _ls_reset.timeline_segments = [];
+        global.timeline_state.loop_session = _ls_reset;
+    }
     if (_bind_single_loop_runtime) {
         var _loop_cache = gv_build_loop_runtime_cache(_planned_events);
         global.timeline_state.loop_runtime_cache = _loop_cache;
@@ -3097,7 +4228,24 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
     if (!variable_struct_exists(global.timeline_state, "loop_blank_measure")) {
         global.timeline_state.loop_blank_measure = false;
     }
+    if (!variable_struct_exists(global.timeline_state, "loop_boundary_refinement")
+        || !is_struct(global.timeline_state.loop_boundary_refinement)) {
+        global.timeline_state.loop_boundary_refinement = {
+            enabled: false,
+            start_part: 1,
+            start_measure: -1,
+            start_beat: 1,
+            start_beat_fraction: 0,
+            end_part: 1,
+            end_measure: -1,
+            end_beat: 1,
+            end_beat_fraction: 0
+        };
+    }
     global.timeline_state.loop_last_selected_measure = -1;
+    global.timeline_state.loop_last_selected_part = 1;
+    global.timeline_state.loop_last_selected_key = "";
+    global.timeline_state.loop_last_selected_nav_idx = -1;
     global.timeline_state.loop_drag = {
         active: false,
         start_measure: -1,
@@ -3158,8 +4306,10 @@ function gv_bind_timeline_on_tune_start(_planned_events, _bpm, _meter_text) {
         : "ms_overlap";
     if (_default_judge == "") _default_judge = "ms_overlap";
     global.timeline_state.score_selected_judge = _default_judge;
-    global.timeline_state.score_measure_maps = {};
+    global.timeline_state.score_measure_maps_by_key = {};
     global.timeline_state.score_popup_measure = -1;
+    global.timeline_state.score_popup_measure_key = "";
+    global.timeline_state.score_popup_nav_idx = -1;
     global.timeline_state.score_judge_row_hitboxes = [];
     global.timeline_state.score_detail_popup = { visible: false };
     global.timeline_state.perf_summary_popup = { visible: false };
@@ -3725,24 +4875,37 @@ function gv_on_tune_playback_finished(_final_time_ms = -1) {
 
     // Build objective ms-overlap score immediately so review visuals can use it
     // before any manual export action is triggered.
-    var _scoring_build_idx = asset_get_index("scoring_build_ms_overlap_summary");
-    if (script_exists(_scoring_build_idx)) {
+    var _scoring_run_idx = asset_get_index("scoring_run_judge_summary");
+    var _registry_idx = asset_get_index("scoring_judge_settings_get_registry");
+    if (script_exists(_scoring_run_idx)) {
         var _export_info = event_history_get_export_info();
-        // Primary calibrated judge
-        script_execute(_scoring_build_idx, _export_info, "ms_overlap", undefined, true);
-        // Embellishment-window variant (calibrated only)
-        script_execute(_scoring_build_idx, _export_info, "ms_overlap_emb_window", undefined, false);
-        // Companion uncalibrated judge (same algorithm, no compare offset)
-        script_execute(_scoring_build_idx, _export_info, "ms_overlap_uncal", 0, false);
+        var _registry = script_exists(_registry_idx) ? script_execute(_registry_idx) : [];
+        var _promoted_once = false;
 
-        // Respect persisted selected judge when both maps are available.
+        if (is_array(_registry) && array_length(_registry) > 0) {
+            for (var _ri = 0; _ri < array_length(_registry); _ri++) {
+                var _jr = _registry[_ri];
+                if (!is_struct(_jr)) continue;
+                if (!bool(_jr.enabled ?? true)) continue;
+                var _jid = string(_jr.id ?? "");
+                if (_jid == "") continue;
+                script_execute(_scoring_run_idx, _export_info, _jid, !_promoted_once);
+                if (!_promoted_once) _promoted_once = true;
+            }
+        }
+
+        if (!_promoted_once) {
+            script_execute(_scoring_run_idx, _export_info, "ms_overlap", true);
+        }
+
+        // Respect persisted selected judge when key maps are available.
         if (variable_global_exists("judge_settings_store")
             && is_struct(global.judge_settings_store)
             && variable_struct_exists(global.judge_settings_store, "selected_judge_id")
-            && variable_struct_exists(global.timeline_state, "score_measure_maps")
-            && is_struct(global.timeline_state.score_measure_maps)) {
+            && variable_struct_exists(global.timeline_state, "score_measure_maps_by_key")
+            && is_struct(global.timeline_state.score_measure_maps_by_key)) {
             var _pref_judge = string(global.judge_settings_store.selected_judge_id);
-            if (_pref_judge != "" && variable_struct_exists(global.timeline_state.score_measure_maps, _pref_judge)) {
+            if (_pref_judge != "" && variable_struct_exists(global.timeline_state.score_measure_maps_by_key, _pref_judge)) {
                 global.timeline_state.score_selected_judge = _pref_judge;
             }
         }
@@ -3806,6 +4969,307 @@ function gv_on_tune_playback_finished(_final_time_ms = -1) {
             _rcs[$ "review_match_state"] = _rcstate;
         }
     }
+}
+
+/// @function map_time_to_context(_time_ms)
+/// @description Resolve canonical musical context at a timeline time.
+/// Priority: active loop session windows -> measure_nav_entries -> legacy helpers.
+/// @param {real} _time_ms Time in ms.
+/// @returns {struct} {segment_idx, part, measure, beat, beat_fraction, nav_idx, owner_nav_idx, loop_iteration, phase, measure_ref_key}
+/// @reads global.timeline_state, global.playback_context, global.loop_runtime_current_iteration
+function map_time_to_context(_time_ms) {
+    var t = real(_time_ms);
+    var out = {
+        segment_idx: -1,
+        part: 1,
+        measure: -1,
+        beat: -1,
+        beat_fraction: 0,
+        nav_idx: -1,
+        owner_nav_idx: -1,
+        loop_iteration: variable_global_exists("loop_runtime_current_iteration") ? floor(real(global.loop_runtime_current_iteration)) : 0,
+        phase: "none",
+        measure_ref_key: ""
+    };
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
+
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        var active_seg = floor(real(global.playback_context[$ "active_segment"] ?? -1));
+        out.segment_idx = active_seg;
+        var segs = global.playback_context[$ "segments"];
+        if (is_array(segs) && array_length(segs) > 0) {
+            for (var si = 0; si < array_length(segs); si++) {
+                var seg = segs[si];
+                if (!is_struct(seg)) continue;
+                var s0 = real(seg[$ "start_ms"] ?? 0);
+                var s1 = real(seg[$ "end_ms"] ?? s0);
+                if (t >= s0 && t < s1) {
+                    out.segment_idx = si;
+                    break;
+                }
+            }
+        }
+    }
+
+    var has_loop = variable_struct_exists(global.timeline_state, "loop_session")
+        && is_struct(global.timeline_state.loop_session)
+        && bool(global.timeline_state.loop_session.active ?? false);
+    if (has_loop) {
+        var ls = global.timeline_state.loop_session;
+        out.phase = string(ls.phase ?? "pass");
+        var refs = variable_struct_exists(ls, "selected_refs") && is_array(ls.selected_refs) ? ls.selected_refs : [];
+        var segs2 = variable_struct_exists(ls, "timeline_segments") && is_array(ls.timeline_segments) ? ls.timeline_segments : [];
+
+        var hit = undefined;
+        for (var i = 0; i < array_length(segs2); i++) {
+            var seg2 = segs2[i];
+            if (!is_struct(seg2)) continue;
+            var ss = real(seg2.start_ms ?? -1);
+            var se = real(seg2.end_ms ?? ss);
+            if (ss < 0 || se <= ss + 0.001) continue;
+            if (t >= ss && t < se) {
+                hit = seg2;
+                break;
+            }
+        }
+
+        if (!is_struct(hit)) {
+            for (var ri = 0; ri < array_length(refs); ri++) {
+                var r = refs[ri];
+                if (!is_struct(r)) continue;
+                var rs = real(r.start_ms ?? -1);
+                var re = real(r.end_ms ?? rs);
+                if (rs < 0 || re <= rs + 0.001) continue;
+                if (t >= rs && t < re) {
+                    hit = r;
+                    break;
+                }
+            }
+        }
+
+        if (is_struct(hit)) {
+            out.part = max(1, floor(real(variable_struct_exists(hit, "part") ? variable_struct_get(hit, "part") : 1)));
+            out.measure = floor(real(variable_struct_exists(hit, "owner_measure")
+                ? variable_struct_get(hit, "owner_measure")
+                : (variable_struct_exists(hit, "measure") ? variable_struct_get(hit, "measure") : -1)));
+            out.nav_idx = floor(real(variable_struct_exists(hit, "nav_idx") ? variable_struct_get(hit, "nav_idx") : -1));
+            out.owner_nav_idx = floor(real(variable_struct_exists(hit, "owner_nav_idx") ? variable_struct_get(hit, "owner_nav_idx") : out.nav_idx));
+        }
+    }
+
+    if (out.measure < 1) {
+        var m = gv_measure_at_ms(t);
+        if (m >= 1) {
+            var ni = gv_measure_nav_find_local_idx(t, m);
+            out.measure = m;
+            out.nav_idx = ni;
+            out.owner_nav_idx = ni;
+            if (ni >= 0 && variable_struct_exists(global.timeline_state, "measure_nav_entries") && is_array(global.timeline_state.measure_nav_entries)
+                && ni < array_length(global.timeline_state.measure_nav_entries)) {
+                var e = global.timeline_state.measure_nav_entries[ni];
+                if (is_struct(e)) {
+                    out.part = max(1, floor(real(e.part ?? out.part)));
+                }
+            }
+        }
+    }
+
+    if (out.measure >= 1) {
+        var score_key_fn = asset_get_index("scoring_measure_ref_key");
+        if (script_exists(score_key_fn)) {
+            out.measure_ref_key = string(script_execute(score_key_fn, out.part, out.measure, out.nav_idx));
+            if (out.measure_ref_key == "") {
+                out.measure_ref_key = string(script_execute(score_key_fn, out.part, out.measure, -1));
+            }
+        }
+        if (out.measure_ref_key == "") {
+            out.measure_ref_key = string(out.part) + ":" + string(out.measure);
+        }
+    }
+
+    return out;
+}
+
+/// @function gv_resolve_measure_context(_time_ms)
+/// @description Resolve structural context with mapper-first behavior and legacy measure fallback.
+/// @param {real} _time_ms Time in ms.
+/// @returns {struct} {measure, part, nav_idx, measure_ref_key, ctx}
+function gv_resolve_measure_context(_time_ms) {
+    var t = real(_time_ms);
+    var model_ctx = gv_tune_structure_model_resolve_context_at_time(t);
+    var ctx = map_time_to_context(t);
+
+    var measure = model_ctx.found ? floor(real(model_ctx.measure ?? -1)) : floor(real(ctx.measure ?? -1));
+    var part = model_ctx.found ? max(1, floor(real(model_ctx.part ?? 1))) : max(1, floor(real(ctx.part ?? 1)));
+    var nav_idx = model_ctx.found ? floor(real(model_ctx.nav_idx ?? -1)) : floor(real(ctx.nav_idx ?? -1));
+    var measure_ref_key = model_ctx.found ? string(model_ctx.measure_ref_key ?? "") : string(ctx.measure_ref_key ?? "");
+
+    if (!model_ctx.found) {
+        if (measure < 1 && floor(real(ctx.measure ?? -1)) >= 1) {
+            measure = floor(real(ctx.measure ?? -1));
+        }
+        if (nav_idx < 0 && floor(real(ctx.nav_idx ?? -1)) >= 0) {
+            nav_idx = floor(real(ctx.nav_idx ?? -1));
+        }
+        if (measure_ref_key == "") {
+            measure_ref_key = string(ctx.measure_ref_key ?? "");
+        }
+    }
+
+    if (measure < 1) {
+        measure = gv_get_current_planned_measure(t);
+        if (measure >= 1) {
+            if (nav_idx < 0 && variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+                && variable_struct_exists(global.timeline_state, "measure_highlight_last_nav_idx")) {
+                nav_idx = floor(real(global.timeline_state.measure_highlight_last_nav_idx));
+            }
+            if (measure_ref_key == "") {
+                measure_ref_key = string(part) + ":" + string(measure);
+            }
+        }
+    }
+
+    return {
+        measure: measure,
+        part: part,
+        nav_idx: nav_idx,
+        measure_ref_key: measure_ref_key,
+        ctx: ctx
+    };
+}
+
+/// @function map_context_to_window(_measure_ref_key)
+/// @description Resolve canonical time window for a structural key (part:measure[:nav]).
+/// @param {string} _measure_ref_key Canonical key.
+/// @returns {struct} {found, part, measure, nav_idx, owner_nav_idx, start_ms, end_ms, timeline_start_ms, timeline_end_ms, owner_start_ms, owner_end_ms, source}
+/// @reads global.timeline_state.loop_session, global.timeline_state.measure_nav_entries, global.timeline_state.structural_measure_starts
+function map_context_to_window(_measure_ref_key) {
+    var out = {
+        found: false,
+        part: 1,
+        measure: -1,
+        nav_idx: -1,
+        owner_nav_idx: -1,
+        start_ms: -1,
+        end_ms: -1,
+        timeline_start_ms: -1,
+        timeline_end_ms: -1,
+        owner_start_ms: -1,
+        owner_end_ms: -1,
+        source: "none"
+    };
+
+    var key = string(_measure_ref_key);
+    if (key == "") return out;
+    var s1 = string_pos(":", key);
+    if (s1 <= 0) return out;
+    var ptxt = string_copy(key, 1, s1 - 1);
+    var rest = string_copy(key, s1 + 1, string_length(key) - s1);
+    var s2 = string_pos(":", rest);
+    var mtxt = (s2 > 0) ? string_copy(rest, 1, s2 - 1) : rest;
+    var ntxt = (s2 > 0) ? string_copy(rest, s2 + 1, string_length(rest) - s2) : "";
+    var p = max(1, floor(real(ptxt)));
+    var m = floor(real(mtxt));
+    var n = (ntxt != "") ? floor(real(ntxt)) : -1;
+
+    out.part = p;
+    out.measure = m;
+    out.nav_idx = n;
+
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state) || m < 1) return out;
+
+    if (variable_struct_exists(global.timeline_state, "loop_session")
+        && is_struct(global.timeline_state.loop_session)
+        && bool(global.timeline_state.loop_session.active ?? false)) {
+        var ls = global.timeline_state.loop_session;
+        var refs = variable_struct_exists(ls, "selected_refs") && is_array(ls.selected_refs) ? ls.selected_refs : [];
+        for (var i = 0; i < array_length(refs); i++) {
+            var r = refs[i];
+            if (!is_struct(r)) continue;
+            var rp = max(1, floor(real(r.part ?? 1)));
+            var rm = floor(real(r.measure ?? -1));
+            var rn = floor(real(r.nav_idx ?? -1));
+            if (rp != p || rm != m) continue;
+            if (n >= 0 && rn >= 0 && rn != n) continue;
+            out.found = true;
+            out.nav_idx = rn;
+            out.owner_nav_idx = floor(real(r.owner_nav_idx ?? rn));
+            out.start_ms = real(r.start_ms ?? -1);
+            out.end_ms = real(r.end_ms ?? out.start_ms);
+            out.timeline_start_ms = real(r.timeline_start_ms ?? out.start_ms);
+            out.timeline_end_ms = real(r.timeline_end_ms ?? out.end_ms);
+            out.owner_start_ms = real(r.owner_start_ms ?? out.start_ms);
+            out.owner_end_ms = real(r.owner_end_ms ?? out.end_ms);
+            out.source = "loop_session";
+            return out;
+        }
+    }
+
+    var _model_seg = gv_tune_structure_model_find_segment(p, m, n);
+    if (is_struct(_model_seg)) {
+        out.found = true;
+        out.nav_idx = floor(real(_model_seg.source_nav_idx ?? n));
+        out.owner_nav_idx = floor(real(_model_seg.owner_nav_idx ?? out.nav_idx));
+        out.start_ms = real(_model_seg.start_ms ?? -1);
+        out.end_ms = real(_model_seg.end_ms ?? out.start_ms);
+        out.timeline_start_ms = real(_model_seg.timeline_start_ms ?? out.start_ms);
+        out.timeline_end_ms = real(_model_seg.timeline_end_ms ?? out.end_ms);
+        out.owner_start_ms = real(_model_seg.owner_start_ms ?? out.start_ms);
+        out.owner_end_ms = real(_model_seg.owner_end_ms ?? out.end_ms);
+        out.source = "canonical_model";
+        return out;
+    }
+
+    if (variable_struct_exists(global.timeline_state, "measure_nav_entries")
+        && is_array(global.timeline_state.measure_nav_entries)) {
+        var entries = global.timeline_state.measure_nav_entries;
+        for (var ei = 0; ei < array_length(entries); ei++) {
+            var e = entries[ei];
+            if (!is_struct(e)) continue;
+            var ep = max(1, floor(real(e.part ?? 1)));
+            var em = floor(real(e.measure ?? -1));
+            if (ep != p || em != m) continue;
+            if (n >= 0 && ei != n) continue;
+            out.found = true;
+            out.nav_idx = ei;
+            out.owner_nav_idx = ei;
+            out.start_ms = real(e.start_ms ?? -1);
+            out.end_ms = real(e.end_ms ?? out.start_ms);
+            out.timeline_start_ms = out.start_ms;
+            out.timeline_end_ms = out.end_ms;
+            out.owner_start_ms = out.start_ms;
+            out.owner_end_ms = out.end_ms;
+            out.source = "measure_nav";
+            return out;
+        }
+    }
+
+    var starts = variable_struct_exists(global.timeline_state, "structural_measure_starts") ? global.timeline_state.structural_measure_starts : [];
+    if (is_array(starts) && array_length(starts) > 0) {
+        for (var si = 0; si < array_length(starts); si++) {
+            var s = starts[si];
+            if (!is_struct(s)) continue;
+            var sm = floor(real(variable_struct_get(s, "m")));
+            if (sm != m) continue;
+            var st = real(variable_struct_get(s, "t"));
+            var en = st + max(1, real(global.timeline_state.measure_ms ?? 1000));
+            if (si + 1 < array_length(starts) && is_struct(starts[si + 1])) {
+                en = real(variable_struct_get(starts[si + 1], "t"));
+            }
+            out.found = true;
+            out.start_ms = st;
+            out.end_ms = en;
+            out.timeline_start_ms = st;
+            out.timeline_end_ms = en;
+            out.owner_start_ms = st;
+            out.owner_end_ms = en;
+            out.source = "structural";
+            return out;
+        }
+    }
+
+    return out;
 }
 
 /// @function gv_measure_at_ms(_ms)
@@ -3900,11 +5364,11 @@ function gv_measure_nav_find_local_idx(_ms, _measure_num) {
 
 /// @function gv_sync_now_line_display()
 /// @description After any change to playhead_ms, sync all derived display state:
-///              score_popup_measure, active_segment (sets), and gameinfo_title.
+///              canonical score selection identity, active_segment (sets), and gameinfo_title.
 ///              Segment/measure-nav rebuild happens first so the measure lookup
 ///              always uses up-to-date entries.
 /// @reads  global.timeline_state.playhead_ms, global.playback_context, global.timeline_state.measure_nav_entries
-/// @writes global.playback_context.active_segment, global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge
+/// @writes global.playback_context.active_segment, global.timeline_state.score_popup_measure_key, global.timeline_state.score_popup_nav_idx, global.timeline_state.score_popup_measure, global.timeline_state.score_selected_judge
 function gv_sync_now_line_display() {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return;
     var playhead_ms = real(global.timeline_state.playhead_ms ?? 0);
@@ -3952,10 +5416,15 @@ function gv_sync_now_line_display() {
         }
     }
 
-    // Step 2: sync score_popup_measure using (now up-to-date) measure_nav_entries
-    var m = gv_measure_at_ms(playhead_ms);
+    // Step 2: sync canonical score selection using (now up-to-date) measure_nav_entries
+    var resolved = gv_resolve_measure_context(playhead_ms);
+    var m = floor(real(resolved.measure ?? -1));
     if (m >= 1) {
-        global.timeline_state.score_popup_measure = m;
+        var sync_part = max(1, floor(real(resolved.part ?? 1)));
+        var sync_nav_idx = floor(real(resolved.nav_idx ?? -1));
+        var sync_key = string(resolved.measure_ref_key ?? "");
+        if (sync_key == "") sync_key = string(sync_part) + ":" + string(m);
+        gv_scoring_set_selected_measure_key(sync_key, sync_nav_idx);
         if (!variable_struct_exists(global.timeline_state, "score_selected_judge")) {
             var _default_judge = (variable_global_exists("judge_settings_store")
                 && is_struct(global.judge_settings_store)
@@ -3966,7 +5435,7 @@ function gv_sync_now_line_display() {
             global.timeline_state.score_selected_judge = _default_judge;
         }
     } else {
-        global.timeline_state.score_popup_measure = -1;
+        gv_scoring_set_selected_measure_key("", -1);
     }
 }
 
@@ -4099,6 +5568,9 @@ function gv_build_emb_groups(_planned_spans) {
             array_push(groups, {
                 window_start_ms: window_start,
                 window_end_ms: real(tgt.end_ms ?? real(tgt.start_ms ?? window_start)),
+                anchor_ms: real(tgt.start_ms ?? window_start),
+                target_measure: floor(real(tgt.measure ?? -1)),
+                lane_idx: tgt_lane_idx,
                 expected_notes: expected_notes,
                 note_set: note_set,
                 lane_indices: lane_indices,
@@ -4114,6 +5586,9 @@ function gv_build_emb_groups(_planned_spans) {
         array_push(groups, {
             window_start_ms: window_start,
             window_end_ms: is_struct(ls) ? real(ls.end_ms ?? window_start) : window_start,
+            anchor_ms: is_struct(ls) ? real(ls.start_ms ?? window_start) : window_start,
+            target_measure: -1,
+            lane_idx: -1,
             expected_notes: expected_notes,
             note_set: note_set,
             lane_indices: lane_indices,
@@ -4280,6 +5755,7 @@ function gv_build_measure_nav_map(_planned_events) {
             array_push(_entries, {
                 measure: _display_m,
                 part: 1,
+                iteration: 0,
                 start_ms: _t,
                 end_ms: _t + _dur_ms,
                 status: 0
@@ -4294,6 +5770,111 @@ function gv_build_measure_nav_map(_planned_events) {
         result.entries = _entries;
         result.parts = [1];
         result.pickup_by_part = _pickup;
+        return result;
+    }
+
+    // Loop-runtime path: preserve repeated-pass identity by tracking
+    // measure starts per (iteration, part, measure), then ordering by time.
+    if (_single_tune_loop_runtime) {
+        var _loop_candidates = [];
+        var _loop_seen_parts = {};
+        var _planned_n_loop = array_length(_planned_events);
+        for (var _li = 0; _li < _planned_n_loop; _li++) {
+            var _lev = _planned_events[_li];
+            if (!is_struct(_lev)) continue;
+            if (string(_lev.type ?? "") != "marker") continue;
+
+            var _lmt = string(_lev.marker_type ?? "");
+            var _lbeat = floor(real(_lev.beat ?? 0));
+            var _lfrac = real(_lev.beat_fraction ?? 0);
+            var _is_boundary_loop = (_lmt == "bar") || (_lmt == "beat" && _lbeat == 1 && abs(_lfrac) <= 0.001);
+            if (!_is_boundary_loop) continue;
+
+            var _lm = floor(real(_lev.owner_measure ?? _lev.measure ?? -1));
+            if (_lm < 1) continue;
+            var _lp = max(1, floor(real(_lev.owner_part ?? _lev.part ?? 1)));
+            var _lit = max(0, floor(real(_lev.loop_iteration ?? 0)));
+            var _lt = gv_evt_time_ms(_lev);
+
+            array_push(_loop_candidates, {
+                iteration: _lit,
+                part: _lp,
+                measure: _lm,
+                start_ms: _lt
+            });
+
+            var _lp_key = string(_lp);
+            if (!variable_struct_exists(_loop_seen_parts, _lp_key)) {
+                _loop_seen_parts[$ _lp_key] = true;
+                array_push(result.parts, _lp);
+            }
+        }
+
+        if (array_length(_loop_candidates) <= 0) {
+            return result;
+        }
+
+        if (array_length(_loop_candidates) > 1) {
+            array_sort(_loop_candidates, function(a, b) {
+                var _at = real(a.start_ms ?? 0);
+                var _bt = real(b.start_ms ?? 0);
+                if (_at != _bt) return _at - _bt;
+                var _ait = floor(real(a.iteration ?? 0));
+                var _bit = floor(real(b.iteration ?? 0));
+                if (_ait != _bit) return _ait - _bit;
+                var _ap = floor(real(a.part ?? 1));
+                var _bp = floor(real(b.part ?? 1));
+                if (_ap != _bp) return _ap - _bp;
+                var _am = floor(real(a.measure ?? 0));
+                var _bm = floor(real(b.measure ?? 0));
+                return _am - _bm;
+            });
+        }
+
+        var _loop_dedup = [];
+        for (var _lc = 0; _lc < array_length(_loop_candidates); _lc++) {
+            var _cand = _loop_candidates[_lc];
+            if (!is_struct(_cand)) continue;
+            var _keep = true;
+            if (array_length(_loop_dedup) > 0) {
+                var _prev = _loop_dedup[array_length(_loop_dedup) - 1];
+                var _same_it = floor(real(_prev.iteration ?? 0)) == floor(real(_cand.iteration ?? 0));
+                var _same_p = floor(real(_prev.part ?? 1)) == floor(real(_cand.part ?? 1));
+                var _same_m = floor(real(_prev.measure ?? 0)) == floor(real(_cand.measure ?? 0));
+                if (_same_it && _same_p && _same_m
+                    && abs(real(_prev.start_ms ?? 0) - real(_cand.start_ms ?? 0)) <= 0.001) {
+                    _keep = false;
+                }
+            }
+            if (_keep) array_push(_loop_dedup, _cand);
+        }
+
+        result.entries = _loop_dedup;
+
+        var _loop_entries_n = array_length(result.entries);
+        for (var _lei = 0; _lei < _loop_entries_n; _lei++) {
+            var _e_loop = result.entries[_lei];
+            var _next_start_loop = (_lei + 1 < _loop_entries_n)
+                ? real(result.entries[_lei + 1].start_ms ?? _e_loop.start_ms)
+                : real(gv_get_planned_end_ms());
+            if (_next_start_loop <= real(_e_loop.start_ms)) {
+                var _fallback_loop_ms = (variable_global_exists("timeline_state")
+                    && is_struct(global.timeline_state)
+                    && variable_struct_exists(global.timeline_state, "measure_ms"))
+                    ? max(1, real(global.timeline_state.measure_ms))
+                    : 1000;
+                _next_start_loop = real(_e_loop.start_ms) + _fallback_loop_ms;
+            }
+            _e_loop.end_ms = _next_start_loop;
+            _e_loop.status = 0;
+            result.entries[_lei] = _e_loop;
+        }
+
+        var _loop_pickup = {};
+        for (var _pi_loop = 0; _pi_loop < array_length(result.parts); _pi_loop++) {
+            _loop_pickup[$ string(result.parts[_pi_loop])] = false;
+        }
+        result.pickup_by_part = _loop_pickup;
         return result;
     }
 
@@ -4413,6 +5994,7 @@ function gv_build_measure_nav_map(_planned_events) {
         array_push(result.entries, {
             measure: measure_num,
             part: part_num,
+            iteration: 0,
             start_ms: start_ms,
             end_ms: start_ms,
             status: 0
@@ -4619,6 +6201,515 @@ function gv_loop_set_blank_measure_enabled(_enabled) {
 /// @description Return a sorted array of measure numbers that are currently selected for looping.
 /// @returns {array}  Sorted array of measure numbers.
 /// @reads  global.timeline_state.loop_selected_measures
+function gv_loop_make_selection_key(_measure, _part = 1) {
+    var m = floor(real(_measure));
+    var p = floor(real(_part));
+    if (p < 1) p = 1;
+    return string(p) + ":" + string(m);
+}
+
+/// @function gv_loop_parse_selection_key(_key)
+/// @description Parse a persisted loop-selection key into `{part, measure, valid}`. Supports legacy measure-only keys.
+/// @param {string} _key  Selection key (`part:measure`) or legacy (`measure`).
+/// @returns {struct}  Parsed key info.
+function gv_loop_parse_selection_key(_key) {
+    var s = string(_key ?? "");
+    var out = { part: 1, measure: -1, valid: false };
+    if (s == "") return out;
+
+    var colon_pos = string_pos(":", s);
+    if (colon_pos > 0) {
+        var p_text = string_copy(s, 1, colon_pos - 1);
+        var m_text = string_delete(s, 1, colon_pos);
+        out.part = max(1, floor(real(p_text)));
+        out.measure = floor(real(m_text));
+        out.valid = (out.measure >= 1);
+        return out;
+    }
+
+    out.part = 1;
+    out.measure = floor(real(s));
+    out.valid = (out.measure >= 1);
+    return out;
+}
+
+/// @function gv_loop_get_selected_measure_refs()
+/// @description Return selected loop targets as part-aware refs.
+/// @returns {array}  Array of `{part, measure, key, nav_idx, owner_nav_idx, timeline_start_ms, timeline_end_ms, owner_start_ms, owner_end_ms, start_ms, end_ms}`.
+/// @reads  global.timeline_state.loop_selected_measures, global.timeline_state.measure_nav_entries, global.playback_events
+function gv_loop_get_selected_measure_refs() {
+    var out = [];
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
+    if (!variable_struct_exists(global.timeline_state, "loop_selected_measures")
+        || !is_struct(global.timeline_state.loop_selected_measures)) {
+        return out;
+    }
+
+    var sel = global.timeline_state.loop_selected_measures;
+    var entries = (variable_struct_exists(global.timeline_state, "measure_nav_entries")
+        && is_array(global.timeline_state.measure_nav_entries))
+        ? global.timeline_state.measure_nav_entries
+        : [];
+    var ownership_entries = [];
+    if (is_undefined(scr_button_build_measure_nav_map_for_ownership) == false
+        && variable_global_exists("playback_events")
+        && is_array(global.playback_events)
+        && array_length(global.playback_events) > 0) {
+        var _own_map = scr_button_build_measure_nav_map_for_ownership(global.playback_events);
+        if (is_struct(_own_map)
+            && variable_struct_exists(_own_map, "entries")
+            && is_array(variable_struct_get(_own_map, "entries"))) {
+            ownership_entries = variable_struct_get(_own_map, "entries");
+        }
+    }
+
+    var ownership_by_key = {};
+    for (var oi = 0; oi < array_length(ownership_entries); oi++) {
+        var oe = ownership_entries[oi];
+        if (!is_struct(oe)) continue;
+        var op = max(1, floor(real(oe.part ?? 1)));
+        var om = floor(real(oe.measure ?? -1));
+        if (om < 1) continue;
+        var ok = gv_loop_make_selection_key(om, op);
+        if (!variable_struct_exists(ownership_by_key, ok)) {
+            ownership_by_key[$ ok] = {
+                owner_nav_idx: oi,
+                start_ms: real(oe.start_ms ?? -1),
+                end_ms: real(oe.end_ms ?? -1)
+            };
+        }
+    }
+    var keys = variable_struct_get_names(sel);
+    if (!is_array(keys)) return out;
+
+    for (var i = 0; i < array_length(keys); i++) {
+        var key = string(keys[i]);
+        if (!variable_struct_exists(sel, key) || !sel[$ key]) continue;
+        var parsed = gv_loop_parse_selection_key(key);
+        if (!is_struct(parsed) || !(parsed.valid ?? false)) continue;
+
+        var p = floor(real(parsed.part ?? 1));
+        var m = floor(real(parsed.measure ?? -1));
+        if (m < 1) continue;
+
+        var nav_idx = -1;
+        var start_ms = -1;
+        var end_ms = -1;
+        for (var ei = 0; ei < array_length(entries); ei++) {
+            var e = entries[ei];
+            if (!is_struct(e)) continue;
+            var ep = max(1, floor(real(e.part ?? 1)));
+            var em = floor(real(e.measure ?? -1));
+            if (ep != p || em != m) continue;
+            nav_idx = ei;
+            start_ms = real(e.start_ms ?? -1);
+            end_ms = real(e.end_ms ?? -1);
+            break;
+        }
+
+        var own_key = gv_loop_make_selection_key(m, p);
+        var owner_nav_idx = -1;
+        var owner_start_ms = -1;
+        var owner_end_ms = -1;
+        if (variable_struct_exists(ownership_by_key, own_key)) {
+            var own_ref = ownership_by_key[$ own_key];
+            if (is_struct(own_ref)) {
+                owner_nav_idx = floor(real(own_ref.owner_nav_idx ?? -1));
+                owner_start_ms = real(own_ref.start_ms ?? -1);
+                owner_end_ms = real(own_ref.end_ms ?? -1);
+            }
+        }
+
+        var timeline_start_ms = start_ms;
+        var timeline_end_ms = end_ms;
+        var effective_start_ms = start_ms;
+        var effective_end_ms = end_ms;
+        var owner_valid = owner_start_ms >= 0 && owner_end_ms > owner_start_ms + 0.001;
+        var timeline_valid = effective_start_ms >= 0 && effective_end_ms > effective_start_ms + 0.001;
+        if (timeline_valid && owner_valid) {
+            effective_start_ms = min(effective_start_ms, owner_start_ms);
+            effective_end_ms = max(effective_end_ms, owner_end_ms);
+        } else if (!timeline_valid && owner_valid) {
+            effective_start_ms = owner_start_ms;
+            effective_end_ms = owner_end_ms;
+        }
+
+        array_push(out, {
+            part: p,
+            measure: m,
+            key: gv_loop_make_selection_key(m, p),
+            nav_idx: nav_idx,
+            owner_nav_idx: owner_nav_idx,
+            timeline_start_ms: timeline_start_ms,
+            timeline_end_ms: timeline_end_ms,
+            owner_start_ms: owner_start_ms,
+            owner_end_ms: owner_end_ms,
+            start_ms: effective_start_ms,
+            end_ms: effective_end_ms
+        });
+    }
+
+    if (array_length(out) <= 1) return out;
+    for (var a = 1; a < array_length(out); a++) {
+        var v = out[a];
+        var b = a - 1;
+        while (b >= 0) {
+            var bn = floor(real(out[b].nav_idx ?? -1));
+            var vn = floor(real(v.nav_idx ?? -1));
+            if (bn >= 0 && vn >= 0) {
+                if (bn <= vn) break;
+                out[b + 1] = out[b];
+                b--;
+                continue;
+            }
+
+            var bp = floor(real(out[b].part ?? 1));
+            var bm = floor(real(out[b].measure ?? -1));
+            var vp = floor(real(v.part ?? 1));
+            var vm = floor(real(v.measure ?? -1));
+            if (bp < vp || (bp == vp && bm <= vm)) break;
+            out[b + 1] = out[b];
+            b--;
+        }
+        out[b + 1] = v;
+    }
+    return out;
+}
+
+/// @function gv_loop_resolve_boundary_endpoints(_selected_refs)
+/// @description Resolve canonical loop boundary endpoints (start/end) from selected measure refs using timeline windows first, then effective windows; applies optional beat-level refinement when configured.
+/// @param {array} _selected_refs Selected refs from gv_loop_get_selected_measure_refs().
+/// @returns {struct} {valid, start_ms, end_ms, start_boundary, end_boundary, source}
+/// @reads global.timeline_state.measure_nav_entries, global.timeline_state.loop_boundary_refinement, global.playback_events
+/// @writes none
+/// @objects none
+/// @callers scr_button_loop_build_playback_events
+function gv_loop_resolve_boundary_endpoints(_selected_refs) {
+    var out = {
+        valid: false,
+        start_ms: -1,
+        end_ms: -1,
+        source: "none",
+        start_boundary: {
+            part: 1,
+            measure: -1,
+            beat: 1,
+            beat_fraction: 0,
+            nav_idx: -1,
+            time_ms: -1,
+            source: "none"
+        },
+        end_boundary: {
+            part: 1,
+            measure: -1,
+            beat: 1,
+            beat_fraction: 0,
+            nav_idx: -1,
+            time_ms: -1,
+            source: "none"
+        }
+    };
+
+    if (!is_array(_selected_refs) || array_length(_selected_refs) <= 0) return out;
+
+    var _first = _selected_refs[0];
+    var _last = _selected_refs[array_length(_selected_refs) - 1];
+    if (!is_struct(_first) || !is_struct(_last)) return out;
+
+    var _timeline_start_ms = real(_first[$ "timeline_start_ms"] ?? -1);
+    var _timeline_end_ms = real(_last[$ "timeline_end_ms"] ?? -1);
+    var _effective_start_ms = real(_first[$ "start_ms"] ?? -1);
+    var _effective_end_ms = real(_last[$ "end_ms"] ?? -1);
+    var _owner_start_ms = real(_first[$ "owner_start_ms"] ?? -1);
+    var _owner_end_ms = real(_last[$ "owner_end_ms"] ?? -1);
+
+    var _start_ms = _timeline_start_ms;
+    var _end_ms = _timeline_end_ms;
+    var _source = "timeline_refs";
+
+    var _timeline_valid = _start_ms >= 0 && _end_ms > _start_ms + 0.001;
+    var _effective_valid = _effective_start_ms >= 0 && _effective_end_ms > _effective_start_ms + 0.001;
+    var _owner_valid_start = _owner_start_ms >= 0;
+    var _owner_valid_end = _owner_end_ms >= 0;
+
+    if (_timeline_valid) {
+        if (_owner_valid_start) _start_ms = min(_start_ms, _owner_start_ms);
+        if (_owner_valid_end) _end_ms = max(_end_ms, _owner_end_ms);
+        if (_start_ms != _timeline_start_ms || _end_ms != _timeline_end_ms) {
+            _source = "timeline_owner_envelope";
+        }
+    } else if (_effective_valid) {
+        _start_ms = _effective_start_ms;
+        _end_ms = _effective_end_ms;
+        _source = "effective_refs";
+    }
+
+    if (_start_ms < 0 || _end_ms <= _start_ms + 0.001) return out;
+
+    var _start_part = max(1, floor(real(_first[$ "part"] ?? 1)));
+    var _start_measure = floor(real(_first[$ "measure"] ?? -1));
+    var _start_nav_idx = floor(real(_first[$ "nav_idx"] ?? -1));
+
+    out.start_ms = _start_ms;
+    out.end_ms = _end_ms;
+    out.source = _source;
+    out.start_boundary = {
+        part: _start_part,
+        measure: _start_measure,
+        beat: 1,
+        beat_fraction: 0,
+        nav_idx: _start_nav_idx,
+        time_ms: _start_ms,
+        source: "selected_start"
+    };
+
+    var _end_part = max(1, floor(real(_last[$ "part"] ?? 1)));
+    var _end_measure = floor(real(_last[$ "measure"] ?? -1)) + 1;
+    var _end_nav_idx = -1;
+    var _end_source = "derived_following_measure";
+
+    var _entries = (variable_global_exists("timeline_state")
+        && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "measure_nav_entries")
+        && is_array(global.timeline_state.measure_nav_entries))
+        ? global.timeline_state.measure_nav_entries
+        : [];
+
+    var _last_nav_idx = floor(real(_last[$ "nav_idx"] ?? -1));
+	var _model_next_seg = gv_tune_structure_model_find_next_segment(_end_part, floor(real(_last[$ "measure"] ?? -1)), _last_nav_idx);
+	if (is_struct(_model_next_seg)) {
+		_end_part = max(1, floor(real(_model_next_seg.part ?? _end_part)));
+		_end_measure = floor(real(_model_next_seg.source_measure ?? _end_measure));
+		_end_nav_idx = floor(real(_model_next_seg.source_nav_idx ?? -1));
+		_end_source = "canonical_model_next_segment";
+	} else if (_last_nav_idx >= 0 && (_last_nav_idx + 1) < array_length(_entries)) {
+        var _next_entry = _entries[_last_nav_idx + 1];
+        if (is_struct(_next_entry)) {
+            _end_part = max(1, floor(real(_next_entry[$ "part"] ?? _end_part)));
+            _end_measure = floor(real(_next_entry[$ "measure"] ?? _end_measure));
+            _end_nav_idx = _last_nav_idx + 1;
+            _end_source = "next_nav_entry";
+        }
+    } else {
+        var _best_idx = -1;
+        var _best_dt = 1000000000;
+        for (var _ei = 0; _ei < array_length(_entries); _ei++) {
+            var _e = _entries[_ei];
+            if (!is_struct(_e)) continue;
+            var _est = real(_e[$ "start_ms"] ?? -1);
+            if (_est < 0) continue;
+            var _dt = abs(_est - _end_ms);
+            if (_dt < _best_dt) {
+                _best_dt = _dt;
+                _best_idx = _ei;
+            }
+        }
+        if (_best_idx >= 0 && _best_dt <= 1.0) {
+            var _hit = _entries[_best_idx];
+            _end_part = max(1, floor(real(_hit[$ "part"] ?? _end_part)));
+            _end_measure = floor(real(_hit[$ "measure"] ?? _end_measure));
+            _end_nav_idx = _best_idx;
+            _end_source = "time_aligned_nav_entry";
+        }
+    }
+
+    out.end_boundary = {
+        part: _end_part,
+        measure: _end_measure,
+        beat: 1,
+        beat_fraction: 0,
+        nav_idx: _end_nav_idx,
+        time_ms: _end_ms,
+        source: _end_source
+    };
+
+    // Phase B backend wiring: optional beat-level endpoint refinement.
+    var _refine = (variable_global_exists("timeline_state")
+        && is_struct(global.timeline_state)
+        && variable_struct_exists(global.timeline_state, "loop_boundary_refinement")
+        && is_struct(global.timeline_state.loop_boundary_refinement))
+        ? global.timeline_state.loop_boundary_refinement
+        : {};
+
+    if (is_struct(_refine) && bool(_refine[$ "enabled"] ?? false)) {
+        var _events = (variable_global_exists("playback_events") && is_array(global.playback_events))
+            ? global.playback_events
+            : [];
+        if (array_length(_events) > 0) {
+            var _base_start_ms = out.start_ms;
+            var _base_end_ms = out.end_ms;
+            var _base_start_boundary = out.start_boundary;
+            var _base_end_boundary = out.end_boundary;
+
+            var _refined_start_ms = out.start_ms;
+            var _refined_end_ms = out.end_ms;
+            var _refined_start_applied = false;
+            var _refined_end_applied = false;
+
+            var _target_start_part = max(1, floor(real(_refine[$ "start_part"] ?? _start_part)));
+            var _target_start_measure = floor(real(_refine[$ "start_measure"] ?? _start_measure));
+            if (_target_start_measure < 1) _target_start_measure = _start_measure;
+            var _target_start_beat = max(1, floor(real(_refine[$ "start_beat"] ?? 1)));
+            var _target_start_frac = real(_refine[$ "start_beat_fraction"] ?? 0);
+
+            var _target_end_part = max(1, floor(real(_refine[$ "end_part"] ?? _end_part)));
+            var _target_end_measure = floor(real(_refine[$ "end_measure"] ?? _end_measure));
+            if (_target_end_measure < 1) _target_end_measure = _end_measure;
+            var _target_end_beat = max(1, floor(real(_refine[$ "end_beat"] ?? 1)));
+            var _target_end_frac = real(_refine[$ "end_beat_fraction"] ?? 0);
+
+            var _start_hit_ms = -1;
+            var _start_max_beat_seen = 0;
+            var _start_last_marker_ms = -1;
+            for (var _si = 0; _si < array_length(_events); _si++) {
+                var _sev = _events[_si];
+                if (!is_struct(_sev)) continue;
+                if (string(_sev[$ "type"] ?? "") != "marker") continue;
+
+                var _sp = max(1, floor(real(_sev[$ "owner_part"] ?? (_sev[$ "part"] ?? 1))));
+                var _sm = floor(real(_sev[$ "owner_measure"] ?? (_sev[$ "measure"] ?? -1)));
+                if (_sp != _target_start_part || _sm != _target_start_measure) continue;
+
+                var _s_mk = string(_sev[$ "marker_type"] ?? "");
+                var _s_beat = floor(real(_sev[$ "beat"] ?? 0));
+                var _s_frac = real(_sev[$ "beat_fraction"] ?? 0);
+                if (_s_mk == "beat") {
+                    _start_max_beat_seen = max(_start_max_beat_seen, _s_beat);
+                }
+                if (_s_mk == "bar" || _s_mk == "beat") {
+                    var _s_marker_t = real(_sev[$ "time"] ?? -1);
+                    if (_s_marker_t >= 0) {
+                        _start_last_marker_ms = max(_start_last_marker_ms, _s_marker_t);
+                    }
+                }
+                var _s_hit = false;
+                if (_target_start_beat == 1 && abs(_target_start_frac) <= 0.001) {
+                    _s_hit = (_s_mk == "bar") || (_s_mk == "beat" && _s_beat == 1 && abs(_s_frac) <= 0.001);
+                } else {
+                    _s_hit = (_s_mk == "beat" && _s_beat == _target_start_beat && abs(_s_frac - _target_start_frac) <= 0.001);
+                }
+                if (!_s_hit) continue;
+
+                var _st = real(_sev[$ "time"] ?? -1);
+                if (_st < 0) continue;
+                if (_start_hit_ms < 0 || _st < _start_hit_ms) _start_hit_ms = _st;
+            }
+            if (_start_hit_ms < 0
+                && _target_start_frac == 0
+                && _target_start_beat > 1
+                && _start_max_beat_seen > 0
+                && _target_start_beat == (_start_max_beat_seen + 1)) {
+                // Internal-pickup bars can export one fewer beat marker; map the
+                // implied trailing beat to the last in-measure marker time so the
+                // pickup note is included in loop start selection.
+                if (_start_last_marker_ms >= 0) {
+                    _start_hit_ms = _start_last_marker_ms;
+                }
+            }
+            if (_start_hit_ms >= 0) {
+                _refined_start_ms = _start_hit_ms;
+                out.start_boundary = {
+                    part: _target_start_part,
+                    measure: _target_start_measure,
+                    beat: _target_start_beat,
+                    beat_fraction: _target_start_frac,
+                    nav_idx: _start_nav_idx,
+                    time_ms: _start_hit_ms,
+                    source: "refined_beat"
+                };
+                _refined_start_applied = true;
+            }
+
+            var _end_hit_ms = -1;
+            var _end_max_beat_seen = 0;
+            var _end_target_start_ms = -1;
+            for (var _ei2 = 0; _ei2 < array_length(_events); _ei2++) {
+                var _eev = _events[_ei2];
+                if (!is_struct(_eev)) continue;
+                if (string(_eev[$ "type"] ?? "") != "marker") continue;
+
+                var _ep2 = max(1, floor(real(_eev[$ "owner_part"] ?? (_eev[$ "part"] ?? 1))));
+                var _em2 = floor(real(_eev[$ "owner_measure"] ?? (_eev[$ "measure"] ?? -1)));
+                if (_ep2 != _target_end_part || _em2 != _target_end_measure) continue;
+
+                var _e_mk = string(_eev[$ "marker_type"] ?? "");
+                var _e_beat = floor(real(_eev[$ "beat"] ?? 0));
+                var _e_frac = real(_eev[$ "beat_fraction"] ?? 0);
+                if (_e_mk == "beat") {
+                    _end_max_beat_seen = max(_end_max_beat_seen, _e_beat);
+                }
+                var _e_hit = false;
+                if (_target_end_beat == 1 && abs(_target_end_frac) <= 0.001) {
+                    _e_hit = (_e_mk == "bar") || (_e_mk == "beat" && _e_beat == 1 && abs(_e_frac) <= 0.001);
+                } else {
+                    _e_hit = (_e_mk == "beat" && _e_beat == _target_end_beat && abs(_e_frac - _target_end_frac) <= 0.001);
+                }
+                if (!_e_hit) continue;
+
+                var _et = real(_eev[$ "time"] ?? -1);
+                if (_et < 0) continue;
+                if (_end_target_start_ms < 0 || _et < _end_target_start_ms) _end_target_start_ms = _et;
+            }
+
+            if (_end_target_start_ms >= 0) {
+                _end_hit_ms = _end_target_start_ms;
+            }
+
+            if (_end_hit_ms < 0
+                && _target_end_frac == 0
+                && _target_end_beat > 1
+                && _end_max_beat_seen > 0
+                && _target_end_beat == (_end_max_beat_seen + 1)) {
+                for (var _en = 0; _en < array_length(_events); _en++) {
+                    var _neev = _events[_en];
+                    if (!is_struct(_neev)) continue;
+                    if (string(_neev[$ "type"] ?? "") != "marker") continue;
+                    var _np2 = max(1, floor(real(_neev[$ "owner_part"] ?? (_neev[$ "part"] ?? 1))));
+                    var _nm2 = floor(real(_neev[$ "owner_measure"] ?? (_neev[$ "measure"] ?? -1)));
+                    if (_np2 != _target_end_part || _nm2 != (_target_end_measure + 1)) continue;
+                    var _nmk2 = string(_neev[$ "marker_type"] ?? "");
+                    var _nb2 = floor(real(_neev[$ "beat"] ?? 0));
+                    var _nf2 = real(_neev[$ "beat_fraction"] ?? 0);
+                    var _is_next_boundary2 = (_nmk2 == "bar") || (_nmk2 == "beat" && _nb2 == 1 && abs(_nf2) <= 0.001);
+                    if (!_is_next_boundary2) continue;
+                    var _nt2 = real(_neev[$ "time"] ?? -1);
+                    if (_nt2 < 0) continue;
+                    if (_end_hit_ms < 0 || _nt2 < _end_hit_ms) _end_hit_ms = _nt2;
+                }
+            }
+            if (_end_hit_ms >= 0) {
+                _refined_end_ms = _end_hit_ms;
+                out.end_boundary = {
+                    part: _target_end_part,
+                    measure: _target_end_measure,
+                    beat: _target_end_beat,
+                    beat_fraction: _target_end_frac,
+                    nav_idx: _end_nav_idx,
+                    time_ms: _end_hit_ms,
+                    source: "refined_beat"
+                };
+                _refined_end_applied = true;
+            }
+
+            if (_refined_end_ms > _refined_start_ms + 0.001) {
+                out.start_ms = _refined_start_ms;
+                out.end_ms = _refined_end_ms;
+                if (_refined_start_applied) out.source += "+start_beat";
+                if (_refined_end_applied) out.source += "+end_beat";
+            } else {
+                out.start_ms = _base_start_ms;
+                out.end_ms = _base_end_ms;
+                out.start_boundary = _base_start_boundary;
+                out.end_boundary = _base_end_boundary;
+                out.source += "+refine_invalid_fallback";
+            }
+        }
+    }
+
+    out.valid = true;
+    return out;
+}
+
 function gv_loop_get_selected_measures() {
     var out = [];
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
@@ -4631,10 +6722,19 @@ function gv_loop_get_selected_measures() {
     var keys = variable_struct_get_names(sel);
     if (!is_array(keys)) return out;
 
+    var seen = {};
     for (var i = 0; i < array_length(keys); i++) {
         var key = string(keys[i]);
         if (!variable_struct_exists(sel, key) || !sel[$ key]) continue;
-        array_push(out, floor(real(key)));
+        var parsed = gv_loop_parse_selection_key(key);
+        if (!is_struct(parsed) || !(parsed.valid ?? false)) continue;
+
+        var m = floor(real(parsed.measure ?? -1));
+        if (m < 1) continue;
+        var mkey = string(m);
+        if (variable_struct_exists(seen, mkey)) continue;
+        seen[$ mkey] = true;
+        array_push(out, m);
     }
 
     if (array_length(out) <= 1) return out;
@@ -4657,12 +6757,13 @@ function gv_loop_has_selected_measures() {
     return array_length(gv_loop_get_selected_measures()) > 0;
 }
 
-/// @function gv_loop_measure_is_selected(_measure)
+/// @function gv_loop_measure_is_selected(_measure, _part)
 /// @description Return true if a specific measure number is in the loop selection set.
 /// @param {real} _measure  Measure number (1-based).
+/// @param {real} _part  Optional part number (defaults to 1).
 /// @returns {bool}
 /// @reads  global.timeline_state.loop_selected_measures
-function gv_loop_measure_is_selected(_measure) {
+function gv_loop_measure_is_selected(_measure, _part = 1) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
     if (!variable_struct_exists(global.timeline_state, "loop_selected_measures")
         || !is_struct(global.timeline_state.loop_selected_measures)) {
@@ -4670,42 +6771,163 @@ function gv_loop_measure_is_selected(_measure) {
     }
     var m = floor(real(_measure));
     if (m < 1) return false;
-    var key = string(m);
-    return variable_struct_exists(global.timeline_state.loop_selected_measures, key)
-        && global.timeline_state.loop_selected_measures[$ key];
+    var p = max(1, floor(real(_part)));
+    var key_pm = gv_loop_make_selection_key(m, p);
+    if (variable_struct_exists(global.timeline_state.loop_selected_measures, key_pm)
+        && global.timeline_state.loop_selected_measures[$ key_pm]) {
+        return true;
+    }
+
+    // Backward-compat for persisted legacy selection keys.
+    var legacy_key = string(m);
+    return variable_struct_exists(global.timeline_state.loop_selected_measures, legacy_key)
+        && global.timeline_state.loop_selected_measures[$ legacy_key];
 }
 
 /// @function gv_loop_clear_selected_measures()
 /// @description Clear all loop measure selections and reset the last-selected tracker.
 /// @returns {bool}  false if timeline_state absent.
-/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure
+/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure, global.timeline_state.loop_boundary_refinement
 function gv_loop_clear_selected_measures() {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
     global.timeline_state.loop_selected_measures = {};
     global.timeline_state.loop_last_selected_measure = -1;
+    global.timeline_state.loop_last_selected_part = 1;
+    global.timeline_state.loop_last_selected_key = "";
+    global.timeline_state.loop_last_selected_nav_idx = -1;
+    global.timeline_state.loop_boundary_refinement = {
+        enabled: false,
+        start_part: 1,
+        start_measure: -1,
+        start_beat: 1,
+        start_beat_fraction: 0,
+        end_part: 1,
+        end_measure: -1,
+        end_beat: 1,
+        end_beat_fraction: 0
+    };
     return true;
 }
 
-/// @function gv_loop_select_measure(_measure, _selected)
+/// @function gv_loop_sync_boundary_refinement_from_selection()
+/// @description Seed loop boundary refinement defaults from current selected measure refs (no UI dependency).
+/// @returns {bool} true when refinement was refreshed from a non-empty selection.
+/// @reads global.timeline_state.loop_selected_measures, global.timeline_state.loop_boundary_refinement
+/// @writes global.timeline_state.loop_boundary_refinement
+/// @objects none
+/// @callers gv_loop_select_measure, gv_loop_select_measure_range, gv_loop_select_nav_range
+function gv_loop_sync_boundary_refinement_from_selection() {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+
+    var refs = gv_loop_get_selected_measure_refs();
+    if (!is_array(refs) || array_length(refs) <= 0) {
+        global.timeline_state.loop_boundary_refinement = {
+            enabled: false,
+            start_part: 1,
+            start_measure: -1,
+            start_beat: 1,
+            start_beat_fraction: 0,
+            end_part: 1,
+            end_measure: -1,
+            end_beat: 1,
+            end_beat_fraction: 0
+        };
+        return false;
+    }
+
+    var first_ref = refs[0];
+    var last_ref = refs[array_length(refs) - 1];
+    if (!is_struct(first_ref) || !is_struct(last_ref)) return false;
+
+    var start_part = max(1, floor(real(first_ref[$ "part"] ?? 1)));
+    var start_measure = floor(real(first_ref[$ "measure"] ?? -1));
+    var start_beat = 1;
+    var start_frac = 0;
+
+    var end_part = max(1, floor(real(last_ref[$ "part"] ?? 1)));
+    var end_measure = max(1, floor(real(last_ref[$ "measure"] ?? 1)));
+    var end_beat = gv_loop_get_measure_beat_count(end_part, end_measure);
+    var end_frac = 0;
+
+    var previous_refine = (variable_struct_exists(global.timeline_state, "loop_boundary_refinement")
+        && is_struct(global.timeline_state.loop_boundary_refinement))
+        ? global.timeline_state.loop_boundary_refinement
+        : { enabled: false };
+
+    // Resolve baseline boundaries without refinement influence, then mirror those
+    // endpoints into the refinement payload used by future UI controls.
+    var tmp_refine = previous_refine;
+    tmp_refine[$ "enabled"] = false;
+    global.timeline_state.loop_boundary_refinement = tmp_refine;
+
+    var boundary_ctx = gv_loop_resolve_boundary_endpoints(refs);
+    if (is_struct(boundary_ctx) && bool(boundary_ctx[$ "valid"] ?? false)) {
+        var sb = boundary_ctx[$ "start_boundary"];
+        var eb = boundary_ctx[$ "end_boundary"];
+        if (is_struct(sb)) {
+            start_part = max(1, floor(real(sb[$ "part"] ?? start_part)));
+            start_measure = floor(real(sb[$ "measure"] ?? start_measure));
+            start_beat = max(1, floor(real(sb[$ "beat"] ?? start_beat)));
+            start_frac = real(sb[$ "beat_fraction"] ?? start_frac);
+        }
+        if (is_struct(eb)) {
+            end_part = max(1, floor(real(eb[$ "part"] ?? end_part)));
+            end_measure = floor(real(eb[$ "measure"] ?? end_measure));
+            end_beat = max(1, floor(real(eb[$ "beat"] ?? end_beat)));
+            end_frac = real(eb[$ "beat_fraction"] ?? end_frac);
+        }
+    }
+
+    if (start_measure < 1) start_measure = 1;
+    if (end_measure < 1) end_measure = start_measure + 1;
+
+    global.timeline_state.loop_boundary_refinement = {
+        enabled: true,
+        start_part: start_part,
+        start_measure: start_measure,
+        start_beat: start_beat,
+        start_beat_fraction: start_frac,
+        end_part: end_part,
+        end_measure: end_measure,
+        end_beat: end_beat,
+        end_beat_fraction: end_frac
+    };
+    return true;
+}
+
+/// @function gv_loop_select_measure(_measure, _selected, _part)
 /// @description Set the selection state of a single measure for looping.
 /// @param {real} _measure   Measure number (1-based).
 /// @param {bool} _selected  true to select; false to deselect.
+/// @param {real} _part  Optional part number (defaults to 1).
+/// @param {bool} _sync_defaults  Optional; when true, refresh boundary refinement defaults from selection.
 /// @returns {bool}  false if invalid measure or state absent.
 /// @reads  global.timeline_state.loop_selected_measures
-/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure
-function gv_loop_select_measure(_measure, _selected) {
+/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure, global.timeline_state.loop_boundary_refinement
+function gv_loop_select_measure(_measure, _selected, _part = 1, _sync_defaults = true) {
     var m = floor(real(_measure));
     if (m < 1) return false;
+    var p = max(1, floor(real(_part)));
 
     if (!variable_struct_exists(global.timeline_state, "loop_selected_measures")
         || !is_struct(global.timeline_state.loop_selected_measures)) {
         global.timeline_state.loop_selected_measures = {};
     }
 
-    var key = string(m);
+    var key = gv_loop_make_selection_key(m, p);
     global.timeline_state.loop_selected_measures[$ key] = (_selected == true);
+    // Clear stale legacy key for this measure when writing explicit part-aware state.
+    var legacy_key = string(m);
+    if (variable_struct_exists(global.timeline_state.loop_selected_measures, legacy_key)) {
+        global.timeline_state.loop_selected_measures[$ legacy_key] = false;
+    }
     if (_selected) {
         global.timeline_state.loop_last_selected_measure = m;
+        global.timeline_state.loop_last_selected_part = p;
+        global.timeline_state.loop_last_selected_key = key;
+    }
+    if (_sync_defaults) {
+        gv_loop_sync_boundary_refinement_from_selection();
     }
     return true;
 }
@@ -4717,13 +6939,15 @@ function gv_loop_select_measure(_measure, _selected) {
 /// @param {bool} _additive If true, keep existing selections; if false, clear first.
 /// @returns {bool}  false if invalid inputs or state absent.
 /// @reads  global.timeline_state.loop_selected_measures
-/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure
-function gv_loop_select_measure_range(_m1, _m2, _additive) {
+/// @writes global.timeline_state.loop_selected_measures, global.timeline_state.loop_last_selected_measure, global.timeline_state.loop_boundary_refinement
+function gv_loop_select_measure_range(_m1, _m2, _additive, _part1 = 1, _part2 = 1) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
 
     var a = floor(real(_m1));
     var b = floor(real(_m2));
     if (a < 1 || b < 1) return false;
+    var p1 = max(1, floor(real(_part1)));
+    var p2 = max(1, floor(real(_part2)));
     var lo = min(a, b);
     var hi = max(a, b);
 
@@ -4731,11 +6955,83 @@ function gv_loop_select_measure_range(_m1, _m2, _additive) {
         gv_loop_clear_selected_measures();
     }
 
+    if (p1 != p2) {
+        gv_loop_select_measure(a, true, p1, false);
+        gv_loop_select_measure(b, true, p2, false);
+        global.timeline_state.loop_last_selected_measure = b;
+        global.timeline_state.loop_last_selected_part = p2;
+        global.timeline_state.loop_last_selected_key = gv_loop_make_selection_key(b, p2);
+        gv_loop_sync_boundary_refinement_from_selection();
+        return true;
+    }
+
     for (var m = lo; m <= hi; m++) {
-        gv_loop_select_measure(m, true);
+        gv_loop_select_measure(m, true, p1, false);
     }
 
     global.timeline_state.loop_last_selected_measure = b;
+    global.timeline_state.loop_last_selected_part = p1;
+    global.timeline_state.loop_last_selected_key = gv_loop_make_selection_key(b, p1);
+    gv_loop_sync_boundary_refinement_from_selection();
+    return true;
+}
+
+/// @function gv_loop_select_nav_range(_nav_idx_a, _nav_idx_b, _additive)
+/// @description Select loop tiles by local nav-index span so part-local measure numbering stays unambiguous.
+/// @param {real} _nav_idx_a  Start nav index.
+/// @param {real} _nav_idx_b  End nav index.
+/// @param {bool} _additive  true keeps existing selection.
+/// @returns {bool}  false if nav entries unavailable.
+function gv_loop_select_nav_range(_nav_idx_a, _nav_idx_b, _additive) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "measure_nav_entries")
+        || !is_array(global.timeline_state.measure_nav_entries)) {
+        return false;
+    }
+
+    var entries = global.timeline_state.measure_nav_entries;
+    var n = array_length(entries);
+    if (n <= 0) return false;
+
+    var a = clamp(floor(real(_nav_idx_a)), 0, n - 1);
+    var b = clamp(floor(real(_nav_idx_b)), 0, n - 1);
+    var lo = min(a, b);
+    var hi = max(a, b);
+
+    if (!_additive) {
+        gv_loop_clear_selected_measures();
+    }
+
+    var selected_any = false;
+    for (var i = lo; i <= hi; i++) {
+        var e = entries[i];
+        if (!is_struct(e)) continue;
+        var m = floor(real(e[$ "measure"] ?? -1));
+        if (m < 1) continue;
+        var p = floor(real(e[$ "part"] ?? 1));
+        if (p < 1) p = 1;
+        gv_loop_select_measure(m, true, p, false);
+        selected_any = true;
+    }
+
+    if (selected_any) {
+        var end_entry = entries[b];
+        if (is_struct(end_entry)) {
+            var end_m = floor(real(end_entry[$ "measure"] ?? -1));
+            var end_p = max(1, floor(real(end_entry[$ "part"] ?? 1)));
+            if (end_m >= 1) {
+                global.timeline_state.loop_last_selected_measure = end_m;
+                global.timeline_state.loop_last_selected_part = end_p;
+                global.timeline_state.loop_last_selected_key = gv_loop_make_selection_key(end_m, end_p);
+                global.timeline_state.loop_last_selected_nav_idx = b;
+            }
+        }
+    }
+
+    if (selected_any) {
+        gv_loop_sync_boundary_refinement_from_selection();
+    }
+
     return true;
 }
 
@@ -4844,36 +7140,65 @@ function gv_measure_nav_hit_test(_mx, _my) {
         if (_my < real(h.y1 ?? -1) || _my > real(h.y2 ?? -1)) continue;
         return {
             kind: "measure",
-            measure: floor(real(h.measure ?? -1))
+            measure: floor(real(h.measure ?? -1)),
+            part: max(1, floor(real(h.part ?? 1))),
+            nav_idx: floor(real(h.nav_idx ?? -1))
         };
     }
 
     return undefined;
 }
 
-/// @function gv_review_jump_to_measure(_measure)
+/// @function gv_review_jump_to_measure(_measure, _part, _nav_idx, _measure_key)
 /// @description Jump the review playhead to the start of a specific measure.
 /// @param {real} _measure  Target measure number (1-based).
+/// @param {real} [_part]  Target part number (default 1).
+/// @param {real} [_nav_idx]  Target local nav index (default -1).
+/// @param {string} [_measure_key]  Canonical measure key (`part:measure[:nav]`) when available.
 /// @returns {bool}  true if jump succeeded.
 /// @reads  global.timeline_state.playback_complete, global.timeline_state.measure_nav_entries, global.timeline_state.review_end_ms, global.timeline_state.measure_ms
 /// @writes global.timeline_state.review_mode, global.timeline_state.playhead_ms, global.timeline_state.review_measure_offset
-function gv_review_jump_to_measure(_measure) {
+function gv_review_jump_to_measure(_measure, _part = 1, _nav_idx = -1, _measure_key = "") {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
     if (!variable_struct_exists(global.timeline_state, "playback_complete") || !global.timeline_state.playback_complete) return false;
     if (!variable_struct_exists(global.timeline_state, "measure_nav_entries") || !is_array(global.timeline_state.measure_nav_entries)) return false;
 
     var target_measure = floor(real(_measure));
     if (target_measure < 1) return false;
+    var target_part = max(1, floor(real(_part)));
+    var target_nav_idx = floor(real(_nav_idx));
+    var target_measure_key = string(_measure_key);
+
+    if (target_measure_key == "") {
+        target_measure_key = string(target_part) + ":" + string(target_measure);
+    }
+
+    // Canonical mapping path first.
+    var key_with_nav = (target_nav_idx >= 0) ? (target_measure_key + ":" + string(target_nav_idx)) : target_measure_key;
+    var target_ms = undefined;
+    var win = map_context_to_window(key_with_nav);
+    if (!(is_struct(win) && bool(win.found ?? false)) && target_nav_idx >= 0) {
+        win = map_context_to_window(target_measure_key);
+    }
+    if (is_struct(win) && bool(win.found ?? false)) {
+        var mapped_start = real(win.start_ms ?? -1);
+        if (mapped_start >= 0) target_ms = mapped_start;
+    }
 
     var entries = global.timeline_state.measure_nav_entries;
-    var target_ms = undefined;
-    var n = array_length(entries);
-    for (var i = 0; i < n; i++) {
-        var e = entries[i];
-        if (!is_struct(e)) continue;
-        if (floor(real(e.measure ?? -1)) != target_measure) continue;
-        target_ms = real(e.start_ms ?? 0);
-        break;
+    if (is_undefined(target_ms)) {
+        var n = array_length(entries);
+        for (var i = 0; i < n; i++) {
+            if (target_nav_idx >= 0 && i != target_nav_idx) continue;
+            var e = entries[i];
+            if (!is_struct(e)) continue;
+            var em = floor(real(e.measure ?? -1));
+            var ep = max(1, floor(real(e.part ?? 1)));
+            if (em != target_measure) continue;
+            if (target_nav_idx < 0 && ep != target_part) continue;
+            target_ms = real(e.start_ms ?? 0);
+            break;
+        }
     }
     if (is_undefined(target_ms)) return false;
 
@@ -4978,6 +7303,8 @@ function gv_measure_nav_handle_click(_mx, _my) {
             return true;
         case "measure":
             var m = variable_struct_exists(hit, "measure") ? floor(real(hit[$ "measure"])) : -1;
+            var p = variable_struct_exists(hit, "part") ? max(1, floor(real(hit[$ "part"]))) : 1;
+            var nav_idx = variable_struct_exists(hit, "nav_idx") ? floor(real(hit[$ "nav_idx"])) : -1;
             if (m < 1) return false;
 
             // score_popup_measure is managed by gv_review_handle_click (on press).
@@ -4986,22 +7313,48 @@ function gv_measure_nav_handle_click(_mx, _my) {
             if (loop_mode) {
                 var shift_down = keyboard_check(vk_shift);
                 if (shift_down) {
-                    var last_m = variable_struct_exists(global.timeline_state, "loop_last_selected_measure")
-                        ? floor(real(global.timeline_state.loop_last_selected_measure))
+                    var last_nav_idx = variable_struct_exists(global.timeline_state, "loop_last_selected_nav_idx")
+                        ? floor(real(global.timeline_state.loop_last_selected_nav_idx))
                         : -1;
-                    if (last_m >= 1) {
-                        gv_loop_select_measure_range(last_m, m, true);
+                    if (last_nav_idx >= 0 && nav_idx >= 0) {
+                        gv_loop_select_nav_range(last_nav_idx, nav_idx, true);
                     } else {
-                        gv_loop_select_measure(m, true);
+                        gv_loop_select_measure(m, true, p);
                     }
                 } else {
-                    gv_loop_select_measure_range(m, m, false);
+                    var _already_selected = gv_loop_measure_is_selected(m, p);
+                    var _last_nav_idx = variable_struct_exists(global.timeline_state, "loop_last_selected_nav_idx")
+                        ? floor(real(global.timeline_state.loop_last_selected_nav_idx))
+                        : -1;
+                    if (nav_idx >= 0) {
+                        // Two-click range UX: first click sets anchor, second click on a
+                        // different tile expands to contiguous range without requiring Shift.
+                        if (!_already_selected && _last_nav_idx >= 0 && _last_nav_idx != nav_idx) {
+                            gv_loop_select_nav_range(_last_nav_idx, nav_idx, false);
+                        } else {
+                            gv_loop_select_nav_range(nav_idx, nav_idx, false);
+                        }
+                    } else {
+                        var _last_m = variable_struct_exists(global.timeline_state, "loop_last_selected_measure")
+                            ? floor(real(global.timeline_state.loop_last_selected_measure))
+                            : -1;
+                        var _last_p = variable_struct_exists(global.timeline_state, "loop_last_selected_part")
+                            ? max(1, floor(real(global.timeline_state.loop_last_selected_part)))
+                            : p;
+                        if (!_already_selected && _last_m >= 1 && (_last_m != m || _last_p != p)) {
+                            gv_loop_select_measure_range(_last_m, m, false, _last_p, p);
+                        } else {
+                            gv_loop_select_measure_range(m, m, false, p, p);
+                        }
+                    }
                 }
                 return true;
             }
 
             if (playback_complete) {
-                return gv_review_jump_to_measure(m);
+                var click_key = string(p) + ":" + string(m);
+                if (nav_idx >= 0) click_key += ":" + string(nav_idx);
+                return gv_review_jump_to_measure(m, p, nav_idx, click_key);
             }
             return false;
         case "seg_prev":
@@ -5191,7 +7544,51 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
         return;
     }
 
-    var entries = global.timeline_state.measure_nav_entries;
+    var _panel_source = gv_tune_structure_model_build_panel_entries(global.timeline_state.measure_nav_entries);
+    var entries = is_struct(_panel_source) ? (_panel_source.entries ?? global.timeline_state.measure_nav_entries) : global.timeline_state.measure_nav_entries;
+    var _entry_source_idx_map = is_struct(_panel_source) ? (_panel_source.source_idx_map ?? []) : [];
+    if (!is_array(_entry_source_idx_map) || array_length(_entry_source_idx_map) != array_length(entries)) {
+        _entry_source_idx_map = [];
+        for (var _esi = 0; _esi < array_length(entries); _esi++) {
+            _entry_source_idx_map[_esi] = _esi;
+        }
+    }
+
+    var _is_set_mode = variable_global_exists("playback_context")
+        && is_struct(global.playback_context)
+        && string(global.playback_context[$ "mode"] ?? "") == "set";
+    var _live_loop_runtime = (!_is_set_mode)
+        && variable_global_exists("loop_runtime_active")
+        && bool(global.loop_runtime_active);
+    var _has_loop_review = variable_struct_exists(global.timeline_state, "loop_iteration_scores")
+        && is_array(global.timeline_state.loop_iteration_scores)
+        && array_length(global.timeline_state.loop_iteration_scores) > 0;
+    var _panel_single_tune_loop = (!_is_set_mode) && (_live_loop_runtime || _has_loop_review);
+
+    // Single-tune loop sessions should always render a canonical one-pass structure.
+    // Expanding measure_nav_entries by iteration is valid runtime timing data, but it is
+    // not a suitable display model for the tune-structure panel.
+    if (_panel_single_tune_loop) {
+        var _canonical_entries = [];
+        var _canonical_source_idx = [];
+        var _canonical_seen = {};
+        for (var _ci = 0; _ci < array_length(entries); _ci++) {
+            var _ce = entries[_ci];
+            if (!is_struct(_ce)) continue;
+            var _cm = floor(real(_ce[$ "measure"] ?? -1));
+            var _cp = max(1, floor(real(_ce[$ "part"] ?? 1)));
+            if (_cm < 0) continue;
+            var _ckey = string(_cp) + ":" + string(_cm);
+            if (variable_struct_exists(_canonical_seen, _ckey)) continue;
+            _canonical_seen[$ _ckey] = true;
+            array_push(_canonical_entries, _ce);
+            array_push(_canonical_source_idx, _ci);
+        }
+        if (array_length(_canonical_entries) > 0) {
+            entries = _canonical_entries;
+            _entry_source_idx_map = _canonical_source_idx;
+        }
+    }
     if (array_length(entries) <= 0) {
         global.timeline_state.measure_nav_tile_hitboxes = [];
         if (!variable_struct_exists(global.timeline_state, "measure_nav_controls") || !is_struct(global.timeline_state.measure_nav_controls)) {
@@ -5333,6 +7730,9 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
     // Tune-structure visual tuning comes from timeline config so appearance can be adjusted centrally.
     var ts_cfg = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) ? global.timeline_cfg : undefined;
+    var use_canonical_model_labels = is_struct(ts_cfg)
+        && variable_struct_exists(ts_cfg, "use_canonical_tune_structure_model")
+        && bool(ts_cfg.use_canonical_tune_structure_model);
     var ts_current_base_color = (is_struct(ts_cfg) && variable_struct_exists(ts_cfg, "tune_structure_current_base_color"))
         ? ts_cfg.tune_structure_current_base_color
         : make_color_rgb(104, 100, 76);
@@ -5390,12 +7790,16 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     }
 
     var part_entries = {};
+    var _show_pickup_rows = is_struct(ts_cfg)
+        && variable_struct_exists(ts_cfg, "tune_structure_show_pickup_rows")
+        && bool(ts_cfg.tune_structure_show_pickup_rows);
     for (var pe = 0; pe < array_length(entries); pe++) {
         var e = entries[pe];
         if (!is_struct(e)) continue;
-        // Pickup entries (measure < 1) are excluded from the structure panel.
-        // They are intentionally not counted, not displayed, and not clickable.
-        if (floor(real(e.measure ?? -1)) < 1) continue;
+        var _entry_measure_num = floor(real(e.measure ?? -1));
+        var _entry_row_kind = string(e.display_row_kind ?? "full_row");
+        var _is_pickup_row = (_entry_measure_num < 1) || (_entry_row_kind == "pickup_row");
+        if (_is_pickup_row && !_show_pickup_rows) continue;
         var p = floor(real(e.part ?? 1));
         if (p < 1) p = 1;
         var pkey = string(p);
@@ -5403,7 +7807,10 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             part_entries[$ pkey] = [];
         }
         var arr = part_entries[$ pkey];
-        array_push(arr, { entry: e, source_idx: pe });
+        var _source_idx_abs = (pe >= 0 && pe < array_length(_entry_source_idx_map))
+            ? floor(real(_entry_source_idx_map[pe]))
+            : pe;
+        array_push(arr, { entry: e, source_idx: _source_idx_abs });
         part_entries[$ pkey] = arr;
     }
 
@@ -5506,35 +7913,78 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
     }
 
     var display_ms = real(global.timeline_state.playhead_ms ?? 0);
-    var current_measure = gv_get_current_planned_measure(display_ms);
+    var nav_display_ms = display_ms;
+    if (_panel_single_tune_loop && array_length(entries) > 0) {
+        var _canon_start_ms = real(entries[0][$ "start_ms"] ?? 0);
+        if (_live_loop_runtime
+            && variable_struct_exists(global.timeline_state, "loop_session")
+            && is_struct(global.timeline_state.loop_session)
+            && bool(global.timeline_state.loop_session[$ "active"] ?? false)) {
+            var _panel_ls = global.timeline_state.loop_session;
+            var _panel_pass = max(1, real(_panel_ls[$ "pass_duration_ms"] ?? 0));
+            var _panel_core = max(1, real(_panel_ls[$ "core_pass_duration_ms"] ?? _panel_pass));
+            _panel_core = min(_panel_core, _panel_pass);
+            var _panel_spacer = bool(_panel_ls[$ "spacer_enabled"] ?? false)
+                ? max(0, real(_panel_ls[$ "spacer_duration_ms"] ?? 0))
+                : 0;
+            var _panel_cycle = _panel_pass + _panel_spacer;
+            if (_panel_cycle > 1 && display_ms >= _canon_start_ms) {
+                var _panel_dt = display_ms - _canon_start_ms;
+                var _panel_mod = _panel_dt mod _panel_cycle;
+                if (_panel_mod < 0) _panel_mod += _panel_cycle;
+                if (_panel_mod >= _panel_pass) {
+                    nav_display_ms = _canon_start_ms + max(0, _panel_core - 0.001);
+                } else {
+                    if (_panel_mod >= _panel_core) _panel_mod = max(0, _panel_core - 0.001);
+                    nav_display_ms = _canon_start_ms + _panel_mod;
+                }
+            }
+        } else if (_has_loop_review
+            && variable_struct_exists(global.timeline_state, "review_selected_loop_window")
+            && is_struct(global.timeline_state.review_selected_loop_window)) {
+            var _review_win = global.timeline_state.review_selected_loop_window;
+            var _review_start = real(_review_win[$ "start_ms"] ?? -1);
+            var _review_end = real(_review_win[$ "end_ms"] ?? -1);
+            if (_review_start >= 0 && _review_end > _review_start + 0.001) {
+                var _review_local = clamp(display_ms - _review_start, 0, max(0, _review_end - _review_start - 0.001));
+                nav_display_ms = _canon_start_ms + _review_local;
+            }
+        }
+    }
+    var current_resolved = gv_resolve_measure_context(nav_display_ms);
+    var current_measure = floor(real(current_resolved.measure ?? -1));
     var gameplay_static = variable_global_exists("GV_TUNESTRUCTURE_GAMEPLAY_STATIC")
         && global.GV_TUNESTRUCTURE_GAMEPLAY_STATIC;
     // No forced fallback Ã¢â‚¬â€ current_measure=-1 means pickup/pre-tune phase; no tile highlighted.
+
+    var current_source_idx = -1;
+    var current_best_source_idx = -1;
+    var _current_entry_n = array_length(entries);
+    for (var _cei = 0; _cei < _current_entry_n; _cei++) {
+        var _ce = entries[_cei];
+        if (!is_struct(_ce)) continue;
+        var _cm = floor(real(_ce.measure ?? -1));
+        if (_cm < 1) continue;
+        var _cs = real(_ce.start_ms ?? 0);
+        var _ce_ms = real(_ce.end_ms ?? _cs);
+
+        if (nav_display_ms < _cs) break;
+
+        current_best_source_idx = (_cei >= 0 && _cei < array_length(_entry_source_idx_map))
+            ? floor(real(_entry_source_idx_map[_cei]))
+            : _cei;
+        if (nav_display_ms < _ce_ms) {
+            current_source_idx = current_best_source_idx;
+            break;
+        }
+    }
+    if (current_source_idx < 0) current_source_idx = current_best_source_idx;
 
     // During active gameplay the tune-structure panel is intentionally static;
     // the current-measure highlight is composited separately as a lightweight overlay.
     if (!playback_complete && current_measure >= 1 && max_scroll > 0) {
         // Auto-follow uses one source of truth: active local measure-nav entry by playhead time.
-        var ags_active_source_idx = -1;
-        var ags_best_source_idx = -1;
-        var ags_entry_n = array_length(entries);
-        for (var ags_ei = 0; ags_ei < ags_entry_n; ags_ei++) {
-            var ags_e = entries[ags_ei];
-            if (!is_struct(ags_e)) continue;
-            var ags_m = floor(real(ags_e.measure ?? -1));
-            if (ags_m < 1) continue;
-            var ags_s = real(ags_e.start_ms ?? 0);
-            var ags_ed = real(ags_e.end_ms ?? ags_s);
-
-            if (display_ms < ags_s) break;
-
-            ags_best_source_idx = ags_ei;
-            if (display_ms < ags_ed) {
-                ags_active_source_idx = ags_ei;
-                break;
-            }
-        }
-        if (ags_active_source_idx < 0) ags_active_source_idx = ags_best_source_idx;
+        var ags_active_source_idx = current_source_idx;
 
         var ags_count = 0;
         var ags_target_row = -1;
@@ -5689,12 +8139,16 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                     var _section_slot = rows_part_entries[_section_start_idx];
                     if (is_struct(_section_slot) && variable_struct_exists(_section_slot, "entry") && is_struct(_section_slot.entry)) {
                         var _section_measure = floor(real(_section_slot.entry.measure ?? -1));
-                        if (_section_measure >= 1) {
+                        var _section_measure_display = _section_measure;
+                        if (use_canonical_model_labels && variable_struct_exists(_section_slot, "source_idx")) {
+                            _section_measure_display = gv_tune_structure_model_resolve_musical_measure_for_nav_idx(_section_slot.source_idx, _section_measure);
+                        }
+                        if (_section_measure_display >= 1) {
                             draw_set_alpha(0.95);
                             draw_set_color(make_color_rgb(188, 190, 205));
                             draw_set_halign(fa_right);
                             draw_set_valign(fa_middle);
-                            draw_text_transformed(section_label_x, row_y + (tile_h * 0.5), string(_section_measure), 0.68, 0.68, 0);
+                            draw_text_transformed(section_label_x, row_y + (tile_h * 0.5), string(_section_measure_display), 0.68, 0.68, 0);
                             draw_set_alpha(1);
                         }
                     }
@@ -5721,11 +8175,32 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                 var entry_end_ms = real(entry.end_ms ?? 0);
                 // After playback completes, all measures stay completed regardless of review playhead.
                 var is_completed = (!gameplay_static) && (playback_complete || (display_ms >= entry_end_ms));
-                var is_current = (!gameplay_static) && (entry_measure == current_measure) && !is_completed;
-                var is_loop_selected = gv_loop_measure_is_selected(entry_measure);
+                var is_current = false;
+                if (!gameplay_static && !is_completed) {
+                    if (current_source_idx >= 0 && source_idx >= 0) {
+                        is_current = (source_idx == current_source_idx);
+                    } else {
+                        is_current = (entry_measure == current_measure);
+                    }
+                }
+                var entry_part = floor(real(entry.part ?? 1));
+                if (entry_part < 1) entry_part = 1;
+                var is_loop_selected = (!playback_complete) && gv_loop_measure_is_selected(entry_measure, entry_part);
+                var entry_measure_key = string(entry_part) + ":" + string(entry_measure);
+                var entry_nav_idx = source_idx;
+                var entry_measure_key_nav = (entry_nav_idx >= 0)
+                    ? (entry_measure_key + ":" + string(entry_nav_idx))
+                    : entry_measure_key;
+                var selected_measure_key = variable_struct_exists(global.timeline_state, "score_popup_measure_key")
+                    ? string(global.timeline_state.score_popup_measure_key)
+                    : "";
+                var selected_nav_idx = variable_struct_exists(global.timeline_state, "score_popup_nav_idx")
+                    ? floor(real(global.timeline_state.score_popup_nav_idx))
+                    : -1;
                 var is_score_selected = playback_complete
-                    && variable_struct_exists(global.timeline_state, "score_popup_measure")
-                    && floor(real(global.timeline_state.score_popup_measure)) == entry_measure;
+                    && (selected_measure_key != ""
+                        && (selected_measure_key == entry_measure_key_nav
+                            || (selected_nav_idx < 0 && selected_measure_key == entry_measure_key)));
 
                 var loop_base_color = make_color_rgb(120, 78, 28);
                 var loop_overlay_color = make_color_rgb(234, 148, 42);
@@ -5761,7 +8236,13 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
                     var completed_fill_alpha = ts_played_fill_alpha;
                     var scoring_style_idx = asset_get_index("scoring_get_measure_visual_style");
                     if (script_exists(scoring_style_idx)) {
-                        var completed_style = script_execute(scoring_style_idx, entry_measure, ts_played_fill_color, ts_played_fill_alpha);
+                        var completed_style = script_execute(scoring_style_idx,
+                            entry_measure,
+                            ts_played_fill_color,
+                            ts_played_fill_alpha,
+                            entry_part,
+                            source_idx,
+                            string(entry_part) + ":" + string(entry_measure));
                         if (is_struct(completed_style) && (completed_style.has_score ?? false)) {
                             completed_fill_color = completed_style.color;
                             completed_fill_alpha = completed_style.alpha;
@@ -5788,6 +8269,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
 
                 array_push(tile_hits, {
                     measure: entry_measure,
+                    part: entry_part,
                     nav_idx: source_idx,
                     x1: tx1 + hitbox_x_bias,
                     y1: ty1 + hitbox_y_bias,
@@ -5825,6 +8307,10 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             var fm = (is_struct(fe) && variable_struct_exists(fe, "measure"))
                 ? floor(real(fe.measure))
                 : (f + 1);
+            var fm_display = fm;
+            if (use_canonical_model_labels) {
+                fm_display = gv_tune_structure_model_resolve_musical_measure_for_nav_idx(f, fm);
+            }
 
             draw_set_alpha(0.92);
             draw_set_color(make_color_rgb(80, 80, 88));
@@ -5836,7 +8322,7 @@ function gv_draw_tune_structure_panel(_x1, _y1, _x2, _y2) {
             draw_set_color(c_white);
             draw_set_halign(fa_center);
             draw_set_valign(fa_middle);
-            draw_text((fx1 + fx2) * 0.5, (fy1 + fy2) * 0.5, "M" + string(fm));
+            draw_text((fx1 + fx2) * 0.5, (fy1 + fy2) * 0.5, "M" + string(fm_display));
 
             array_push(tile_hits, {
                 measure: fm,
@@ -5946,7 +8432,9 @@ function gv_draw_tune_structure_current_overlay() {
     if (!variable_struct_exists(global.timeline_state, "measure_nav_tile_hitboxes") || !is_array(global.timeline_state.measure_nav_tile_hitboxes)) return;
 
     var display_ms = real(global.timeline_state.playhead_ms ?? 0);
-    var current_measure = gv_get_current_planned_measure(display_ms);
+    var current_resolved = gv_resolve_measure_context(display_ms);
+    var current_measure = floor(real(current_resolved.measure ?? -1));
+    var current_nav_idx = floor(real(current_resolved.nav_idx ?? -1));
     if (current_measure < 1) return;
 
     var ts_cfg = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) ? global.timeline_cfg : undefined;
@@ -5973,7 +8461,12 @@ function gv_draw_tune_structure_current_overlay() {
     for (var i = 0; i < array_length(hits); i++) {
         var hit = hits[i];
         if (!is_struct(hit)) continue;
-        if (floor(real(hit.measure ?? -1)) != current_measure) continue;
+        var hit_nav_idx = variable_struct_exists(hit, "nav_idx") ? floor(real(hit.nav_idx)) : -1;
+        if (current_nav_idx >= 0) {
+            if (hit_nav_idx != current_nav_idx) continue;
+        } else {
+            if (floor(real(hit.measure ?? -1)) != current_measure) continue;
+        }
 
         var tx1 = real(hit.x1 ?? 0);
         var ty1 = real(hit.y1 ?? 0);
@@ -6002,8 +8495,8 @@ function gv_draw_tune_structure_current_overlay() {
 /// @description Handle a click anywhere in the post-play review canvas: routes to scoring popup close, judge row selection, or measure jump in the structure panel.
 /// @param {real} _mx/_my  Mouse coordinates.
 /// @returns {bool}  true if the click was consumed.
-/// @reads  global.timeline_state.playback_complete/measure_nav_entries/score_popup_measure
-/// @writes global.timeline_state.score_selected_judge/score_popup_measure/playhead_ms
+/// @reads  global.timeline_state.playback_complete/measure_nav_entries/score_popup_measure_key/score_popup_nav_idx
+/// @writes global.timeline_state.score_selected_judge/score_popup_measure_key/score_popup_nav_idx/score_popup_measure/playhead_ms
 function gv_review_handle_click(_mx, _my) {
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
     if (!variable_struct_exists(global.timeline_state, "playback_complete") || !global.timeline_state.playback_complete) return false;
@@ -6013,9 +8506,19 @@ function gv_review_handle_click(_mx, _my) {
     var _hit_pre = gv_measure_nav_hit_test(_mx, _my);
     if (is_struct(_hit_pre) && string(variable_struct_exists(_hit_pre, "kind") ? _hit_pre[$ "kind"] : "") == "measure") {
         var _m_pre = variable_struct_exists(_hit_pre, "measure") ? floor(real(_hit_pre[$ "measure"])) : -1;
+        var _p_pre = variable_struct_exists(_hit_pre, "part") ? max(1, floor(real(_hit_pre[$ "part"]))) : 1;
+        var _n_pre = variable_struct_exists(_hit_pre, "nav_idx") ? floor(real(_hit_pre[$ "nav_idx"])) : -1;
+        var _key_pre = (_m_pre >= 1) ? (string(_p_pre) + ":" + string(_m_pre)) : "";
+        var _key_nav_pre = (_n_pre >= 0 && _key_pre != "")
+            ? (_key_pre + ":" + string(_n_pre))
+            : _key_pre;
         if (_m_pre >= 1) {
-            var _prev_sel = variable_struct_exists(global.timeline_state, "score_popup_measure")
-                ? floor(real(global.timeline_state.score_popup_measure)) : -1;
+            var _prev_nav = variable_struct_exists(global.timeline_state, "score_popup_nav_idx")
+                ? floor(real(global.timeline_state.score_popup_nav_idx))
+                : -1;
+            var _prev_key = variable_struct_exists(global.timeline_state, "score_popup_measure_key")
+                ? string(global.timeline_state.score_popup_measure_key)
+                : "";
             if (!variable_struct_exists(global.timeline_state, "score_selected_judge")) {
                 var _default_judge = (variable_global_exists("judge_settings_store")
                     && is_struct(global.judge_settings_store)
@@ -6025,25 +8528,20 @@ function gv_review_handle_click(_mx, _my) {
                 if (_default_judge == "") _default_judge = "ms_overlap";
                 global.timeline_state.score_selected_judge = _default_judge;
             }
-            if (_prev_sel == _m_pre) {
-                global.timeline_state.score_popup_measure = -1; // deselect â€” whole-tune view
+            if ((_prev_key != ""
+                    && (_prev_key == _key_nav_pre
+                    || (_prev_nav < 0 && _prev_key == _key_pre)))) {
+                gv_scoring_set_selected_measure_key("", -1); // deselect â€” whole-tune view
                 return true; // don't also jump
             } else {
-                global.timeline_state.score_popup_measure = _m_pre; // select new
-                // Sync title/segment for set mode based on the clicked measure's time
-                var _entries = variable_struct_exists(global.timeline_state, "measure_nav_entries")
-                    ? global.timeline_state.measure_nav_entries : [];
-                if (is_array(_entries)) {
-                    for (var _ei = 0; _ei < array_length(_entries); _ei++) {
-                        var _e = _entries[_ei];
-                        if (is_struct(_e) && floor(real(_e[$ "measure"] ?? -1)) == _m_pre) {
-                            global.timeline_state.playhead_ms = real(_e[$ "start_ms"] ?? global.timeline_state.playhead_ms);
-                            gv_sync_now_line_display();
-                            break;
-                        }
-                    }
+                gv_scoring_set_selected_measure_key(_key_nav_pre, _n_pre); // select new
+                if (gv_review_jump_to_measure(_m_pre, _p_pre, _n_pre, _key_nav_pre)) {
+                    gv_sync_now_line_display();
+                    return true;
                 }
-                // fall through so gv_measure_nav_handle_click can jump to it
+
+                // Click was on a valid measure tile; consume even if jump target is unavailable.
+                return true;
             }
         }
     }
@@ -6189,8 +8687,14 @@ function gv_handle_notebeam_click(_mx, _my, _x1, _y1, _x2, _y2) {
         var player_span = hit.player_span;
         if (!is_struct(player_span)) break;
 
+        var player_span_index = variable_struct_exists(hit, "player_span_index")
+            ? floor(real(hit.player_span_index))
+            : -1;
+
         var planned_span = undefined;
-        if (variable_struct_exists(global.timeline_state, "planned_spans") && is_array(global.timeline_state.planned_spans)) {
+        if (!is_struct(planned_span)
+            && variable_struct_exists(global.timeline_state, "planned_spans")
+            && is_array(global.timeline_state.planned_spans)) {
             planned_span = gv_find_best_planned_overlap(global.timeline_state.planned_spans, player_span);
         }
 
@@ -6202,7 +8706,11 @@ function gv_handle_notebeam_click(_mx, _my, _x1, _y1, _x2, _y2) {
             anchor_x: hit_cx,
             anchor_y: hit_cy,
             player_span: player_span,
-            planned_span: planned_span
+            planned_span: planned_span,
+            player_span_index: player_span_index,
+            matched_source_kind: "",
+            matched_target_event_id: "",
+            matched_target_span_index: -1
         };
         return true;
     }
@@ -6293,7 +8801,7 @@ function gv_handle_notebeam_scoring_panel_click(_mx, _my, _x1, _y1, _x2, _y2) {
         if (variable_global_exists("judge_settings_store") && is_struct(global.judge_settings_store)) {
             global.judge_settings_store.selected_judge_id = judge_id;
         }
-        var _save_settings_idx = asset_get_index("scoring_player_settings_save_for_player");
+        var _save_settings_idx = asset_get_index("scoring_judge_settings_save_for_player");
         if (script_exists(_save_settings_idx)) {
             script_execute(_save_settings_idx);
         }
@@ -6330,26 +8838,79 @@ function gv_draw_notebeam_note_popup(_canvas_x1, _canvas_y1, _canvas_x2, _canvas
     var player_end = floor(real(player_span.end_ms ?? player_start));
     var player_duration = max(0, player_end - player_start);
 
+    var popup_player_span_index = variable_struct_exists(popup, "player_span_index")
+        ? floor(real(popup.player_span_index))
+        : -1;
+    var popup_target_span_index = variable_struct_exists(popup, "matched_target_span_index")
+        ? floor(real(popup.matched_target_span_index))
+        : -1;
+    var player_source_event_id = variable_struct_exists(player_span, "source_event_id")
+        ? string(player_span.source_event_id)
+        : "";
+    var score_summary = gv_scoring_call_script("scoring_get_note_popup_score_summary", player_span, planned_span, "", popup_player_span_index);
+    var score_line = "judge score: -";
+    var judge_line = "judge: -";
+    var detail_line = "";
+    if (is_struct(score_summary)) {
+        judge_line = "judge: " + string(variable_struct_exists(score_summary, "judge_name") ? variable_struct_get(score_summary, "judge_name") : "-");
+        score_line = "judge score: " + string(variable_struct_exists(score_summary, "score_text") ? variable_struct_get(score_summary, "score_text") : "-")
+            + " (" + string(variable_struct_exists(score_summary, "grade") ? variable_struct_get(score_summary, "grade") : "-") + ")";
+        detail_line = string(variable_struct_exists(score_summary, "detail_text") ? variable_struct_get(score_summary, "detail_text") : "");
+    }
+
     var line1 = "intended note: none";
     var line2 = "status: no intended overlap";
-    var line3 = "player dur.: " + string(player_duration) + " ms";
-    var line4 = "intended dur.: --";
-    var line5 = "intended s/e: --";
-    var line6 = "player s/e: " + string(player_start) + " / " + string(player_end);
+    var line3 = score_line;
+    var line4 = judge_line;
+    var line5 = "player dur.: " + string(player_duration) + " ms";
+    var line6 = "intended dur.: --";
+    var line7 = "intended s/e: --";
+    var line8 = "player s/e: " + string(player_start) + " / " + string(player_end);
+    var line9 = "planned id: --";
+    var line10 = "played id: --";
+    var matched_source_kind = variable_struct_exists(popup, "matched_source_kind")
+        ? string(popup.matched_source_kind)
+        : "";
     var has_planned = is_struct(planned_span);
     if (has_planned) {
         var planned_label = gv_notebeam_note_label(planned_span);
+        var planned_event_id = variable_struct_exists(planned_span, "event_id")
+            ? string(variable_struct_get(planned_span, "event_id"))
+            : "";
+        var planned_global_span_index = variable_struct_exists(planned_span, "global_span_index")
+            ? floor(real(variable_struct_get(planned_span, "global_span_index")))
+            : popup_target_span_index;
         var planned_start = floor(real(variable_struct_exists(planned_span, "start_ms") ? variable_struct_get(planned_span, "start_ms") : 0));
         var planned_end = floor(real(variable_struct_exists(planned_span, "end_ms") ? variable_struct_get(planned_span, "end_ms") : planned_start));
         var planned_duration = max(0, planned_end - planned_start);
         line1 = "intended note: " + planned_label + " (player " + player_label + ")";
         line2 = "status: overlaps intended";
-        line4 = "intended dur.: " + string(planned_duration) + " ms";
-        line5 = "intended s/e: " + string(planned_start) + " / " + string(planned_end);
+        line5 = "player dur.: " + string(player_duration) + " ms";
+        line6 = "intended dur.: " + string(planned_duration) + " ms";
+        line7 = "intended s/e: " + string(planned_start) + " / " + string(planned_end);
+        line8 = "player s/e: " + string(player_start) + " / " + string(player_end);
+        line9 = "planned id: "
+            + (planned_event_id != "" ? planned_event_id : "--")
+            + " | span#"
+            + (planned_global_span_index >= 0 ? string(planned_global_span_index) : "--");
     }
 
+    if (!has_planned && (matched_source_kind == "embellishment_unit" || matched_source_kind == "emb_cluster")) {
+        line1 = "intended event: embellishment unit";
+        line2 = "status: matched embellishment unit";
+    }
+
+    if (detail_line != "") {
+        line2 = "status: " + detail_line;
+    }
+
+    line10 = "played id: "
+        + (player_source_event_id != "" ? player_source_event_id : "--")
+        + " | span#"
+        + (popup_player_span_index >= 0 ? string(popup_player_span_index) : "--");
+
     draw_set_font(fnt_setting);
-    var lines = [line1, line2, line3, line4, line5, line6];
+    var lines = [line1, line2, line3, line4, line5, line6, line7, line8, line9, line10];
     var text_scale = 0.75;
     var text_w = 0;
     var line_h = max(8, (string_height("Ag") * text_scale) + 2);
@@ -7114,20 +9675,142 @@ function gv_get_current_planned_measure(_playhead_ms) {
     var _single_tune_loop_runtime = !_is_set_mode
                 && variable_global_exists("loop_runtime_active")
                 && bool(global.loop_runtime_active);
-    if (_single_tune_loop_runtime) {
-        var _loop_cache = (variable_struct_exists(global.timeline_state, "loop_runtime_cache")
-            && is_struct(global.timeline_state.loop_runtime_cache))
-            ? global.timeline_state.loop_runtime_cache
-            : undefined;
+    var _loop_session_active = false;
+    var _loop_session = undefined;
+    if (variable_struct_exists(global.timeline_state, "loop_session")
+        && is_struct(global.timeline_state.loop_session)) {
+        _loop_session = global.timeline_state.loop_session;
+        _loop_session_active = variable_struct_exists(_loop_session, "active")
+            && bool(variable_struct_get(_loop_session, "active"));
+    }
+    if (_single_tune_loop_runtime && _loop_session_active) {
+        var _ls_start = max(0, real(variable_struct_exists(_loop_session, "start_ms")
+            ? variable_struct_get(_loop_session, "start_ms") : 0));
+        var _ls_pass_ms = max(1, real(variable_struct_exists(_loop_session, "pass_duration_ms")
+            ? variable_struct_get(_loop_session, "pass_duration_ms") : 0));
+        var _ls_core_pass_ms = max(1, real(variable_struct_exists(_loop_session, "core_pass_duration_ms")
+            ? variable_struct_get(_loop_session, "core_pass_duration_ms") : _ls_pass_ms));
+        _ls_core_pass_ms = min(_ls_core_pass_ms, _ls_pass_ms);
+        var _ls_spacer_enabled = variable_struct_exists(_loop_session, "spacer_enabled")
+            && bool(variable_struct_get(_loop_session, "spacer_enabled"));
+        var _ls_spacer_ms = _ls_spacer_enabled
+            ? max(0, real(variable_struct_exists(_loop_session, "spacer_duration_ms")
+                ? variable_struct_get(_loop_session, "spacer_duration_ms") : 0))
+            : 0;
+        var _ls_cycle_ms = _ls_pass_ms + _ls_spacer_ms;
 
-        if (is_struct(_loop_cache) && bool(_loop_cache[$ "valid"] ?? false)) {
-            var _iter1_start = real(_loop_cache[$ "iter1_start_ms"] ?? -1);
-            var _loop_cycle_ms = real(_loop_cache[$ "loop_cycle_ms"] ?? 0);
-            if (_loop_cycle_ms > 1 && _iter1_start >= 0 && _query_ms >= _iter1_start) {
-                var _dt = _query_ms - _iter1_start;
-                var _mod = _dt mod _loop_cycle_ms;
-                if (_mod < 0) _mod += _loop_cycle_ms;
-                _query_ms = _iter1_start + _mod;
+        if (_query_ms >= _ls_start && _ls_cycle_ms > 1) {
+            var _ls_dt = _query_ms - _ls_start;
+            var _ls_mod = _ls_dt mod _ls_cycle_ms;
+            if (_ls_mod < 0) _ls_mod += _ls_cycle_ms;
+
+            // Spacer phase has no active measure/highlight identity.
+            if (_ls_mod >= _ls_pass_ms) {
+                global.timeline_state.measure_highlight_last_measure = -1;
+                global.timeline_state.measure_highlight_last_nav_idx = -1;
+                global.timeline_state.measure_highlight_last_struct_idx = -1;
+                global.timeline_state.current_measure = -1;
+                return -1;
+            }
+
+            // Support-tail portion should keep measure identity pinned to the
+            // selected loop range end (no next-measure visual jump).
+            if (_ls_mod >= _ls_core_pass_ms) {
+                _ls_mod = max(0, _ls_core_pass_ms - 0.001);
+            }
+
+            _query_ms = _ls_start + _ls_mod;
+        }
+
+        // Layered loop contract: resolve by timeline segments first (time placement),
+        // then return identity from segment owner fields.
+        if (variable_struct_exists(_loop_session, "timeline_segments")
+            && is_array(variable_struct_get(_loop_session, "timeline_segments"))) {
+            var _ls_segments = variable_struct_get(_loop_session, "timeline_segments");
+            var _seg_hit_measure = -1;
+            var _seg_hit_nav_idx = -1;
+            var _seg_best_measure = -1;
+            var _seg_best_nav_idx = -1;
+
+            for (var _si = 0; _si < array_length(_ls_segments); _si++) {
+                var _seg = _ls_segments[_si];
+                if (!is_struct(_seg)) continue;
+                var _ss = real(variable_struct_exists(_seg, "start_ms") ? variable_struct_get(_seg, "start_ms") : -1);
+                var _se = real(variable_struct_exists(_seg, "end_ms") ? variable_struct_get(_seg, "end_ms") : -1);
+                if (_ss < 0 || _se <= _ss + 0.001) continue;
+
+                var _sm = floor(real(variable_struct_exists(_seg, "owner_measure")
+                    ? variable_struct_get(_seg, "owner_measure")
+                    : (variable_struct_exists(_seg, "measure") ? variable_struct_get(_seg, "measure") : -1)));
+                var _sn = floor(real(variable_struct_exists(_seg, "nav_idx") ? variable_struct_get(_seg, "nav_idx") : -1));
+                if (_sm < 1) continue;
+
+                if (_query_ms >= _ss) {
+                    _seg_best_measure = _sm;
+                    _seg_best_nav_idx = _sn;
+                }
+                if (_query_ms >= _ss && _query_ms < _se) {
+                    _seg_hit_measure = _sm;
+                    _seg_hit_nav_idx = _sn;
+                    break;
+                }
+            }
+
+            if (_seg_hit_measure < 1 && _seg_best_measure >= 1) {
+                _seg_hit_measure = _seg_best_measure;
+                _seg_hit_nav_idx = _seg_best_nav_idx;
+            }
+
+            if (_seg_hit_measure >= 1) {
+                global.timeline_state.measure_highlight_last_measure = _seg_hit_measure;
+                global.timeline_state.measure_highlight_last_nav_idx = _seg_hit_nav_idx;
+                global.timeline_state.measure_highlight_last_struct_idx = -1;
+                global.timeline_state.current_measure = _seg_hit_measure;
+                return _seg_hit_measure;
+            }
+        }
+
+        // In active loop runtime, selected refs are canonical for current-measure
+        // identity. Use them first to avoid drift from global nav-table heuristics.
+        if (variable_struct_exists(_loop_session, "selected_refs")
+            && is_array(variable_struct_get(_loop_session, "selected_refs"))) {
+            var _ls_refs = variable_struct_get(_loop_session, "selected_refs");
+            var _ls_measure = -1;
+            var _ls_best_measure = -1;
+            var _ls_nav_idx = -1;
+            var _ls_best_nav_idx = -1;
+
+            for (var _ri = 0; _ri < array_length(_ls_refs); _ri++) {
+                var _ref = _ls_refs[_ri];
+                if (!is_struct(_ref)) continue;
+                var _rs = real(variable_struct_exists(_ref, "start_ms") ? variable_struct_get(_ref, "start_ms") : -1);
+                var _re = real(variable_struct_exists(_ref, "end_ms") ? variable_struct_get(_ref, "end_ms") : -1);
+                var _rm = floor(real(variable_struct_exists(_ref, "measure") ? variable_struct_get(_ref, "measure") : -1));
+                var _rn = floor(real(variable_struct_exists(_ref, "nav_idx") ? variable_struct_get(_ref, "nav_idx") : -1));
+                if (_rm < 1 || _rs < 0 || _re <= _rs + 0.001) continue;
+
+                if (_query_ms >= _rs) {
+                    _ls_best_measure = _rm;
+                    _ls_best_nav_idx = _rn;
+                }
+                if (_query_ms >= _rs && _query_ms < _re) {
+                    _ls_measure = _rm;
+                    _ls_nav_idx = _rn;
+                    break;
+                }
+            }
+
+            if (_ls_measure < 1 && _ls_best_measure >= 1) {
+                _ls_measure = _ls_best_measure;
+                _ls_nav_idx = _ls_best_nav_idx;
+            }
+
+            if (_ls_measure >= 1) {
+                global.timeline_state.measure_highlight_last_measure = _ls_measure;
+                global.timeline_state.measure_highlight_last_nav_idx = _ls_nav_idx;
+                global.timeline_state.measure_highlight_last_struct_idx = -1;
+                global.timeline_state.current_measure = _ls_measure;
+                return _ls_measure;
             }
         }
     }
@@ -7815,7 +10498,7 @@ function gv_on_player_note_off(_note_midi, _channel, _time_ms, _note_canonical =
     var duration_ms = end_ms - start_ms;
     var noise_filter_ms = (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "filter_noise_ms"))
         ? max(0, real(global.timeline_cfg.filter_noise_ms))
-        : 15;
+        : 10;
 
     global.timeline_state.pending_player[$ key] = undefined;
 
@@ -8409,12 +11092,19 @@ function gv_timeline_ensure_beat_positions() {
     var _active_seg = variable_global_exists("playback_context") && is_struct(global.playback_context)
         ? floor(real(global.playback_context[$ "active_segment"] ?? -1))
         : -1;
+    var _is_set_mode = variable_global_exists("playback_context")
+        && is_struct(global.playback_context)
+        && string(global.playback_context[$ "mode"] ?? "") == "set";
+    var _single_tune_loop_runtime = !_is_set_mode
+        && variable_global_exists("loop_runtime_active")
+        && bool(global.loop_runtime_active);
 
     var _cache_sig = "v4|" + string(n)
         + "|" + string(_nav_n)
         + "|" + string(_nav_first)
         + "|" + string(_nav_last)
         + "|" + string(_nav_last_measure)
+        + "|loop=" + string(_single_tune_loop_runtime)
         + "|" + string(_active_seg);
     if (variable_global_exists("timeline_beat_positions_signature")
         && string(global.timeline_beat_positions_signature) == _cache_sig
@@ -8422,7 +11112,7 @@ function gv_timeline_ensure_beat_positions() {
         && is_array(global.timeline_beat_positions)) return;
 
     var result = [];
-    var _last_labeled_measure = -1;
+    var _last_labeled_measure_key = "";
     var _has_bar_markers = false;
     for (var _scan_i = 0; _scan_i < n; _scan_i++) {
         var _scan_ev = events[_scan_i];
@@ -8458,14 +11148,21 @@ function gv_timeline_ensure_beat_positions() {
                 && floor(real(ev.beat ?? 0)) == 1
                 && floor(real(ev.measure ?? 0)) == 1) {
                 _is_boundary = true;
-                _labeled_measure1_fallback = true;
+                if (!_single_tune_loop_runtime) {
+                    _labeled_measure1_fallback = true;
+                }
             }
         } else {
             _is_boundary = (_marker_type == "beat" && floor(real(ev.beat ?? 0)) == 1);
         }
         if (_is_boundary) {
-            var _nm = floor(real(ev.measure ?? 0));
-            if (_nav_n > 0) {
+            var _iter = _single_tune_loop_runtime
+                ? max(0, floor(real(ev.loop_iteration ?? 0)))
+                : 0;
+            var _nm = _single_tune_loop_runtime
+                ? floor(real(ev.owner_measure ?? ev.measure ?? 0))
+                : floor(real(ev.measure ?? 0));
+            if (!_single_tune_loop_runtime && _nav_n > 0) {
                 var _lo = 0;
                 var _hi = _nav_n - 1;
                 var _idx = -1;
@@ -8483,12 +11180,20 @@ function gv_timeline_ensure_beat_positions() {
                     _nm = floor(real(_nav_entries[_idx].measure ?? _nm));
                 }
             }
-            if (_nm >= 1 && _nm != _last_labeled_measure) {
+            var _label_key = _single_tune_loop_runtime
+                ? (string(_iter) + ":" + string(_nm))
+                : string(_nm);
+            if (_nm >= 1 && _label_key != _last_labeled_measure_key) {
                 label = "M" + string(_nm);
-                _last_labeled_measure = _nm;
+                _last_labeled_measure_key = _label_key;
             }
         }
-        array_push(result, { time_ms: t, is_major: is_major, label: label });
+        array_push(result, {
+            time_ms: t,
+            is_major: is_major,
+            label: label,
+            iteration: _single_tune_loop_runtime ? max(0, floor(real(ev.loop_iteration ?? 0))) : 0
+        });
     }
 
     global.timeline_beat_positions = result;
@@ -8928,12 +11633,18 @@ function gv_draw_structure_row(_rx1, _ry1, _rx2, _ry2, _playhead_ms) {
         if (beat_num < 1) continue;
 
         var measure_num = floor(real(ev.measure ?? 0));
+        var measure_num_display = measure_num;
+        var _use_canonical_model = variable_struct_exists(cfg, "use_canonical_tune_structure_model")
+            && bool(variable_struct_get(cfg, "use_canonical_tune_structure_model"));
+        if (_use_canonical_model) {
+            measure_num_display = gv_tune_structure_model_resolve_musical_measure_at_time(marker_time, measure_num);
+        }
         var label = "";
         if (marker_type == "bar") {
-            label = "M" + string(measure_num);
+            label = "M" + string(measure_num_display);
         } else if (!has_bar_markers && beat_num == 1) {
             // Fallback for legacy/diagnostic streams that do not include bar markers.
-            label = "M" + string(measure_num);
+            label = "M" + string(measure_num_display);
         } else if (label_every_beat) {
             label = "B" + string(beat_num);
         }
@@ -9149,6 +11860,14 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             var _single_tune_loop_runtime = !_set_mode
                 && variable_global_exists("loop_runtime_active")
                 && bool(global.loop_runtime_active);
+            var _loop_session_draw = undefined;
+            var _loop_session_draw_active = false;
+            if (variable_struct_exists(global.timeline_state, "loop_session")
+                && is_struct(global.timeline_state.loop_session)) {
+                _loop_session_draw = global.timeline_state.loop_session;
+                _loop_session_draw_active = variable_struct_exists(_loop_session_draw, "active")
+                    && bool(variable_struct_get(_loop_session_draw, "active"));
+            }
             var _loop_cache_draw = (variable_struct_exists(global.timeline_state, "loop_runtime_cache")
                 && is_struct(global.timeline_state.loop_runtime_cache))
                 ? global.timeline_state.loop_runtime_cache
@@ -9162,22 +11881,61 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             // Build per-measure start times from planned events.
             // In set mode, include all segments so future tunes can scroll into view.
             var _events = gv_get_planned_events_for_viz();
-            if (_single_tune_loop_runtime
-                && is_struct(_loop_cache_draw)
-                && bool(_loop_cache_draw[$ "valid"] ?? false)) {
-                _iter1_start_cached = real(_loop_cache_draw[$ "iter1_start_ms"] ?? -1);
-                _loop_cycle_cached = real(_loop_cache_draw[$ "loop_cycle_ms"] ?? 0);
-                if (_loop_cycle_cached > 1 && _iter1_start_cached >= 0 && _playhead >= _iter1_start_cached) {
+            if (_single_tune_loop_runtime && _loop_session_draw_active) {
+                var _ls_start_draw = max(0, real(variable_struct_exists(_loop_session_draw, "start_ms")
+                    ? variable_struct_get(_loop_session_draw, "start_ms") : 0));
+                var _ls_pass_draw = max(1, real(variable_struct_exists(_loop_session_draw, "pass_duration_ms")
+                    ? variable_struct_get(_loop_session_draw, "pass_duration_ms") : 0));
+                var _ls_core_pass_draw = max(1, real(variable_struct_exists(_loop_session_draw, "core_pass_duration_ms")
+                    ? variable_struct_get(_loop_session_draw, "core_pass_duration_ms") : _ls_pass_draw));
+                _ls_core_pass_draw = min(_ls_core_pass_draw, _ls_pass_draw);
+                var _ls_spacer_draw_enabled = variable_struct_exists(_loop_session_draw, "spacer_enabled")
+                    && bool(variable_struct_get(_loop_session_draw, "spacer_enabled"));
+                var _ls_spacer_draw = _ls_spacer_draw_enabled
+                    ? max(0, real(variable_struct_exists(_loop_session_draw, "spacer_duration_ms")
+                        ? variable_struct_get(_loop_session_draw, "spacer_duration_ms") : 0))
+                    : 0;
+                _iter1_start_cached = _ls_start_draw;
+                _loop_cycle_cached = _ls_pass_draw + _ls_spacer_draw;
+                if (_loop_cycle_cached > 1 && _playhead >= _iter1_start_cached) {
                     var _loop_dt_cached = _playhead - _iter1_start_cached;
                     var _loop_mod_cached = _loop_dt_cached mod _loop_cycle_cached;
                     if (_loop_mod_cached < 0) _loop_mod_cached += _loop_cycle_cached;
-                    _playhead = _iter1_start_cached + _loop_mod_cached;
+
+                    // During spacer, hide score projection entirely.
+                    if (_loop_mod_cached >= _ls_pass_draw) {
+                        _use_loop_projection = false;
+                    } else {
+                        if (_loop_mod_cached >= _ls_core_pass_draw) {
+                            _loop_mod_cached = max(0, _ls_core_pass_draw - 0.001);
+                        }
+                        _playhead = _iter1_start_cached + _loop_mod_cached;
+                        nav_display_ms = _playhead;
+                        _use_loop_projection = true;
+
+                        var _window_start = _playhead - _ms_behind;
+                        var _window_end = _playhead + _ms_ahead;
+                        _proj_min_k = floor((_window_start - _iter1_start_cached) / _loop_cycle_cached) - 1;
+                        _proj_max_k = floor((_window_end - _iter1_start_cached) / _loop_cycle_cached) + 1;
+                    }
+                }
+            } else if (_single_tune_loop_runtime
+                && is_struct(_loop_cache_draw)
+                && bool(_loop_cache_draw[$ "valid"] ?? false)) {
+                // Backward-compatible fallback for legacy loop sessions.
+                _iter1_start_cached = real(_loop_cache_draw[$ "phase_start_ms"] ?? (_loop_cache_draw[$ "iter1_start_ms"] ?? -1));
+                _loop_cycle_cached = real(_loop_cache_draw[$ "loop_cycle_ms"] ?? 0);
+                if (_loop_cycle_cached > 1 && _iter1_start_cached >= 0 && _playhead >= _iter1_start_cached) {
+                    var _loop_dt_cached_fallback = _playhead - _iter1_start_cached;
+                    var _loop_mod_cached_fallback = _loop_dt_cached_fallback mod _loop_cycle_cached;
+                    if (_loop_mod_cached_fallback < 0) _loop_mod_cached_fallback += _loop_cycle_cached;
+                    _playhead = _iter1_start_cached + _loop_mod_cached_fallback;
                     _use_loop_projection = true;
 
-                    var _window_start = _playhead - _ms_behind;
-                    var _window_end = _playhead + _ms_ahead;
-                    _proj_min_k = floor((_window_start - _iter1_start_cached) / _loop_cycle_cached) - 1;
-                    _proj_max_k = floor((_window_end - _iter1_start_cached) / _loop_cycle_cached) + 1;
+                    var _window_start_fallback = _playhead - _ms_behind;
+                    var _window_end_fallback = _playhead + _ms_ahead;
+                    _proj_min_k = floor((_window_start_fallback - _iter1_start_cached) / _loop_cycle_cached) - 1;
+                    _proj_max_k = floor((_window_end_fallback - _iter1_start_cached) / _loop_cycle_cached) + 1;
                 }
             }
             var _measure_starts = array_create(0); // [{m,p,b,t,seq,seg_idx,seg_title,seg_start_ms,seg_end_ms}]
@@ -9223,6 +11981,8 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             var _skip_met = variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG);
             var _met_ch   = _skip_met ? real(global.METRONOME_CONFIG.channel) : -999;
 
+            var _score_target_tune_channel = gv_get_target_tune_channel();
+
             // Preferred path: consume precomputed score render plan when valid.
             if (variable_struct_exists(global.timeline_state, "score_render_plan")
                 && is_struct(global.timeline_state.score_render_plan)
@@ -9234,10 +11994,12 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 var _plan_items = _plan[$ "items"] ?? [];
                 var _plan_loop = bool(_plan[$ "built_for_loop"] ?? false);
                 var _plan_events = floor(real(_plan[$ "source_event_count"] ?? -1));
+                var _plan_target_channel = floor(real(_plan[$ "target_tune_channel"] ?? -1));
                 var _current_events = is_array(_events) ? array_length(_events) : 0;
                 if (bool(_plan[$ "valid"] ?? false)
                     && _plan_mode == _expect_mode
                     && _plan_loop == _single_tune_loop_runtime
+                    && (_set_mode || _plan_target_channel == _score_target_tune_channel)
                     && is_array(_plan_items)
                     && array_length(_plan_items) > 0
                     && (_plan_events < 0 || _plan_events == _current_events)) {
@@ -9266,10 +12028,13 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     ? array_length(global.score_snippet_durations)
                     : 0;
                 var _score_cache_has_pickup = variable_global_exists("score_has_pickup") && bool(global.score_has_pickup);
+                var _selected_playable_measure_count = gv_count_selected_channel_score_measures(_events);
 
                 _score_layout_cache_key = string(_zoom_preset_idx)
                     + "|" + string_format(_ms_ahead, 0, 3)
                     + "|" + string_format(_ms_behind, 0, 3)
+                    + "|ch=" + string(_score_target_tune_channel)
+                    + "|selm=" + string(_selected_playable_measure_count)
                     + "|" + string(_score_cache_event_count)
                     + "|" + string(_score_cache_pbmap_count)
                     + "|" + string(_score_cache_dur_count)
@@ -9298,14 +12063,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             }
 
             if (!_score_layout_cache_hit) {
-            if (!_set_mode
-                && _single_tune_loop_runtime
-                && is_struct(_loop_cache_draw)
-                && bool(_loop_cache_draw[$ "valid"] ?? false)
-                && is_array(_loop_cache_draw[$ "measure_starts"])
-                && array_length(_loop_cache_draw[$ "measure_starts"]) > 0) {
-                _measure_starts = _loop_cache_draw[$ "measure_starts"];
-            } else if (_set_mode) {
+            if (_set_mode) {
                 for (var _sidx = 0; _sidx < _set_seg_count; _sidx++) {
                     var _seg = _set_segments[_sidx];
                     if (!is_struct(_seg)) continue;
@@ -9537,7 +12295,136 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
 
                     _seg_measure_counts[_sidx] = _seg_seq;
                 }
-            } else if (!_single_tune_loop_runtime && is_array(_events)) {
+            } else if (_single_tune_loop_runtime
+                && is_struct(_loop_session_draw)
+                && variable_struct_exists(_loop_session_draw, "timeline_segments")
+                && is_array(variable_struct_get(_loop_session_draw, "timeline_segments"))
+                && array_length(variable_struct_get(_loop_session_draw, "timeline_segments")) > 0) {
+                var _tls = variable_struct_get(_loop_session_draw, "timeline_segments");
+                var _has_pickup_map = variable_global_exists("score_has_pickup") && bool(global.score_has_pickup);
+                var _loop_runtime_start_ms = real(_loop_session_draw[$ "start_ms"] ?? -1);
+
+                // Prelude measures must still render before the loop body starts.
+                // Build one canonical prelude pass from active events, then mark it
+                // as non-repeating so loop phase projection does not replicate it.
+                if (is_array(_events) && _loop_runtime_start_ms > 0) {
+                    var _prelude_seen = {};
+                    for (var _pei = 0; _pei < array_length(_events); _pei++) {
+                        var _pev = _events[_pei];
+                        if (!is_struct(_pev)) continue;
+                        var _ptype = string(_pev[$ "type"] ?? "");
+                        var _is_start = false;
+                        if (_ptype == "marker") {
+                            var _pmt = string(_pev[$ "marker_type"] ?? "");
+                            var _pbeat = floor(real(_pev[$ "beat"] ?? 0));
+                            var _pfrac = real(_pev[$ "beat_fraction"] ?? 0);
+                            _is_start = (_pmt == "bar") || (_pmt == "beat" && _pbeat == 1 && abs(_pfrac) <= 0.001);
+                        }
+                        if (!_is_start) continue;
+
+                        var _pt = gv_evt_time_ms(_pev);
+                        if (_pt >= _loop_runtime_start_ms - 0.001) break;
+
+                        var _pm = floor(real(_pev[$ "measure"] ?? -999));
+                        if (_pm <= 0) continue;
+                        var _pp = max(1, floor(real(_pev[$ "part"] ?? 1)));
+                        var _pkey = string(_pp) + ":" + string(_pm);
+                        if (variable_struct_exists(_prelude_seen, _pkey)) continue;
+                        _prelude_seen[$ _pkey] = true;
+
+                        var _pseq = (_pm == 0) ? 0 : (_pm - (_has_pickup_map ? 0 : 1));
+                        array_push(_measure_starts, {
+                            m: _pm,
+                            p: _pp,
+                            b: 1,
+                            t: _pt,
+                            seq: _pseq,
+                            seg_idx: -1,
+                            seg_title: "",
+                            seg_start_ms: _pt,
+                            seg_end_ms: _loop_runtime_start_ms,
+                            loop_repeatable: false
+                        });
+                    }
+                }
+
+                for (var _tsi = 0; _tsi < array_length(_tls); _tsi++) {
+                    var _segm = _tls[_tsi];
+                    if (!is_struct(_segm)) continue;
+
+                    var _ts = real(_segm[$ "start_ms"] ?? -1);
+                    var _te = real(_segm[$ "end_ms"] ?? -1);
+                    if (_ts < 0 || _te <= _ts + 0.001) continue;
+
+                    var _m_owner = floor(real(_segm[$ "owner_measure"] ?? (_segm[$ "measure"] ?? -1)));
+                    if (_m_owner < 0) continue;
+                    var _p_owner = max(1, floor(real(_segm[$ "part"] ?? 1)));
+
+                    var _seq_owner = -1;
+                    if (_m_owner == 0) {
+                        _seq_owner = 0;
+                    } else if (_m_owner > 0) {
+                        _seq_owner = _m_owner - (_has_pickup_map ? 0 : 1);
+                    }
+
+                    array_push(_measure_starts, {
+                        m: _m_owner,
+                        p: _p_owner,
+                        b: 1,
+                        t: _ts,
+                        seq: _seq_owner,
+                        seg_idx: -1,
+                        seg_title: "",
+                        seg_start_ms: _ts,
+                        seg_end_ms: _te,
+                        loop_repeatable: true
+                    });
+                }
+
+                if (array_length(_measure_starts) > 1) {
+                    array_sort(_measure_starts, function(a, b) {
+                        var at = real(a[$ "t"] ?? 0);
+                        var bt = real(b[$ "t"] ?? 0);
+                        if (at != bt) return at - bt;
+                        var am = floor(real(a[$ "m"] ?? -1));
+                        var bm = floor(real(b[$ "m"] ?? -1));
+                        return am - bm;
+                    });
+                }
+
+                var _loop_compact = [];
+                for (var _lci = 0; _lci < array_length(_measure_starts); _lci++) {
+                    var _cur = _measure_starts[_lci];
+                    if (!is_struct(_cur)) continue;
+                    if (array_length(_loop_compact) > 0) {
+                        var _prev = _loop_compact[array_length(_loop_compact) - 1];
+                        var _prev_m = floor(real(_prev[$ "m"] ?? -1));
+                        var _cur_m = floor(real(_cur[$ "m"] ?? -1));
+                        var _prev_t = real(_prev[$ "t"] ?? -1);
+                        var _cur_t = real(_cur[$ "t"] ?? -1);
+                        if (_prev_m == _cur_m && abs(_cur_t - _prev_t) <= 0.001) continue;
+                    }
+                    array_push(_loop_compact, _cur);
+                }
+                _measure_starts = _loop_compact;
+
+                static _loop_score_map_last_log_ms = -1000000;
+                var _loop_score_now_ms = timing_get_engine_now_ms();
+                if ((_loop_score_now_ms - _loop_score_map_last_log_ms) >= 1500) {
+                    _loop_score_map_last_log_ms = _loop_score_now_ms;
+                    var _map_preview = "";
+                    var _map_preview_n = min(array_length(_measure_starts), 5);
+                    for (var _mpi = 0; _mpi < _map_preview_n; _mpi++) {
+                        var _mp = _measure_starts[_mpi];
+                        if (!is_struct(_mp)) continue;
+                        if (_mpi > 0) _map_preview += " | ";
+                        _map_preview += "m=" + string(floor(real(_mp[$ "m"] ?? -1)));
+                        _map_preview += " seq=" + string(floor(real(_mp[$ "seq"] ?? -1)));
+                        _map_preview += " t=" + string(floor(real(_mp[$ "t"] ?? -1)));
+                    }
+                    diag_log_append_line("[LOOP_SCORE_MAP] source=timeline_segments starts=" + _map_preview, "perf_benchmark.log", false);
+                }
+            } else if (is_array(_events)) {
                 var _ne = array_length(_events);
                 var _has_marker_timing = false;
                 for (var _mi_probe = 0; _mi_probe < _ne; _mi_probe++) {
@@ -9599,6 +12486,18 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     _seq++;
                 }
             }
+
+            // Single-tune loop fallback: if no starts were derived from active events,
+            // reuse loop runtime cache starts as a last resort.
+            if (!_set_mode
+                && _single_tune_loop_runtime
+                && array_length(_measure_starts) <= 0
+                && is_struct(_loop_cache_draw)
+                && bool(_loop_cache_draw[$ "valid"] ?? false)
+                && is_array(_loop_cache_draw[$ "measure_starts"])
+                && array_length(_loop_cache_draw[$ "measure_starts"]) > 0) {
+                _measure_starts = _loop_cache_draw[$ "measure_starts"];
+            }
             _nm = array_length(_measure_starts);
             _fallback_measure_ms = 1000;
             if (_nm >= 2) {
@@ -9620,6 +12519,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             // playback_to_image, build measure starts directly from score structure rather than
             // event-marker timing. This removes split-bar ambiguity entirely.
             if (!_set_mode && !_single_tune_loop_runtime && _structural_duration_count > 0 && _nm > 0) {
+                var _selected_playable_measure_count_draw = gv_count_selected_channel_score_measures(_events);
                 var _units_per_measure = variable_global_exists("score_units_per_measure")
                     ? real(global.score_units_per_measure)
                     : 0;
@@ -9634,6 +12534,11 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 
                 // Check if first snippet is a pickup: flag comes from the exported JSON.
                 var _first_is_pickup = (variable_global_exists("score_has_pickup") ? global.score_has_pickup : false);
+                var _structural_cap_count = _structural_duration_count;
+                if (_selected_playable_measure_count_draw > 0) {
+                    var _cap_with_pickup_draw = _selected_playable_measure_count_draw + (_first_is_pickup ? 1 : 0);
+                    _structural_cap_count = min(_structural_duration_count, _cap_with_pickup_draw);
+                }
                 
                 var _structural_measure_starts = [];
                 var _observed_first_measure_raw = floor(real(variable_struct_get(_measure_starts[0], "m")));
@@ -9643,7 +12548,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 var _missing_lead_count = _observed_first_measure - 1;
                 if (_missing_lead_count > 0) {
                     var _lead_back_ms = 0;
-                    var _lead_limit = min(_missing_lead_count, _structural_duration_count);
+                    var _lead_limit = min(_missing_lead_count, _structural_cap_count);
                     for (var _lead_i = 0; _lead_i < _lead_limit; _lead_i++) {
                         _lead_back_ms += max(1, real(_structural_durations[_lead_i]) * _ms_per_unit);
                     }
@@ -9660,7 +12565,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 // and does not consume a measure number.
                 var _next_measure_num = 1;
                 
-                for (var _sd_i = 0; _sd_i < _structural_duration_count; _sd_i++) {
+                for (var _sd_i = 0; _sd_i < _structural_cap_count; _sd_i++) {
                     var _duration_units = real(_structural_durations[_sd_i]);
                     // Only snippet 0 can represent an opening pickup; later short snippets are real measures.
                     var _is_pickup_snippet = (_sd_i == 0)
@@ -9702,8 +12607,9 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 
                 // Store structural measure starts globally so measure navigator uses correct numbering
                 global.timeline_state.structural_measure_starts = _measure_starts;
-            } else {
-                // Fallback: clear structural measure starts if not using structural timing
+            } else if (!_single_tune_loop_runtime) {
+                // Keep pre-loop structural starts during loop runtime so score-image
+                // lookup can reuse canonical measure->seq identity across repeats.
                 global.timeline_state.structural_measure_starts = [];
             }
 
@@ -9794,6 +12700,10 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     reason: "draw_rebuild",
                     mode: _set_mode ? "set" : "tune",
                     built_for_loop: _single_tune_loop_runtime,
+                    target_tune_channel: _score_target_tune_channel,
+                    selected_channel_measure_count: (!_set_mode && !_single_tune_loop_runtime)
+                        ? gv_count_selected_channel_score_measures(_events)
+                        : -1,
                     source_event_count: is_array(_events) ? array_length(_events) : 0,
                     built_at_ms: timing_get_engine_now_ms(),
                     fallback_measure_ms: _fallback_measure_ms,
@@ -9809,6 +12719,24 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
             var _score_plan_debug_enabled = variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log")
                 && global.timeline_cfg.score_render_plan_debug_log;
             static _score_draw_phase_last_log_ms = -1000000;
+            var _canonical_seq_by_measure = {};
+            if (_single_tune_loop_runtime
+                && variable_struct_exists(global.timeline_state, "structural_measure_starts")
+                && is_array(global.timeline_state.structural_measure_starts)) {
+                var _canon_starts = global.timeline_state.structural_measure_starts;
+                for (var _csi = 0; _csi < array_length(_canon_starts); _csi++) {
+                    var _cs = _canon_starts[_csi];
+                    if (!is_struct(_cs)) continue;
+                    var _cm = floor(real(_cs[$ "m"] ?? -1));
+                    var _cseq = floor(real(_cs[$ "seq"] ?? -1));
+                    if (_cm < 0 || _cseq < 0) continue;
+                    var _ck = string(_cm);
+                    if (!variable_struct_exists(_canonical_seq_by_measure, _ck)) {
+                        _canonical_seq_by_measure[$ _ck] = _cseq;
+                    }
+                }
+            }
+
             var _score_phase_sample_this_frame = false;
             var _score_phase_interval_ms = variable_struct_exists(global.timeline_cfg, "score_render_plan_debug_log_interval_ms")
                 ? max(250, real(global.timeline_cfg.score_render_plan_debug_log_interval_ms))
@@ -9869,8 +12797,26 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     || (_seg_end_ms > _seg_start_ms && abs(_playhead - _seg_end_ms) <= _score_debug_boundary_window_ms);
             }
             _score_debug_enabled = _score_debug_enabled && _score_debug_focus_ok && _score_debug_near_boundary;
+            var _score_debug_show_labels = _score_debug_enabled
+                && (!variable_struct_exists(global.timeline_cfg, "score_lane_debug_show_labels")
+                    || global.timeline_cfg.score_lane_debug_show_labels);
+            var _score_debug_show_source = _score_debug_enabled
+                && variable_struct_exists(global.timeline_cfg, "score_lane_debug_show_source")
+                && global.timeline_cfg.score_lane_debug_show_source;
             var _score_debug_line = "";
             var _score_debug_views = 0;
+            var _score_probe_has_now = false;
+            var _score_probe_best_delta = 1000000000;
+            var _score_probe_now_measure = -1;
+            var _score_probe_now_part = -1;
+            var _score_probe_now_img = -1;
+            var _score_probe_now_k = 0;
+            var _score_probe_now_start = 0;
+            var _score_probe_now_end = 0;
+            var _score_probe_warn_text = "";
+            var _score_probe_boundary_margin_ms = variable_struct_exists(global.timeline_cfg, "score_lane_debug_warn_boundary_margin_ms")
+                ? max(0, real(global.timeline_cfg.score_lane_debug_warn_boundary_margin_ms))
+                : 32;
             var _visible_start_ms = _playhead - _ms_behind;
             var _visible_end_ms = _playhead + _ms_ahead;
             static _score_debug_last_line = "";
@@ -9977,6 +12923,7 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 }
 
                 if (is_struct(_override_bundle)) {
+                    var _score_sprite_source = "override";
                     var _override_sprites = _override_bundle[$ "sprites"] ?? [];
                     var _override_meta = _override_bundle[$ "meta"] ?? [];
                     var _override_pbmap = _override_bundle[$ "playback_map"] ?? [];
@@ -9991,54 +12938,83 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     _spr = _override_sprites[_spr_idx];
                     _meta = (_spr_idx < array_length(_override_meta)) ? _override_meta[_spr_idx] : undefined;
                 } else {
+                    var _score_sprite_source = "raw";
                     // Priority 1: explicit playback_to_image mapping (new pipeline).
-                    // Index directly by seq (0-based, per-segment, repeat-expanded).
-                    // In single-tune loop runtime, prefer measure-index lookup so
-                    // looped subsets (e.g. 9-12) repeat the same image sequence each pass.
+                    // In loop runtime, key by canonical measure identity first so repeated
+                    // passes reuse the same score image index as non-loop playback.
                     var _pbmap_len = is_array(_base_pbmap) ? array_length(_base_pbmap) : 0;
-                    var _pb_lookup_seq = _ms.seq;
+                    var _has_pickup_for_lookup = variable_global_exists("score_has_pickup")
+                        && bool(global.score_has_pickup);
+                    var _canonical_measure = floor(real(_ms[$ "m"] ?? -1));
+                    var _canonical_seq_from_measure = -1;
                     if (_single_tune_loop_runtime) {
-                        var _loop_has_pickup = variable_global_exists("score_has_pickup")
-                            && bool(global.score_has_pickup);
-                        var _loop_measure = floor(real(_ms.m ?? 0));
-                        if (_loop_measure > 0) {
-                            _pb_lookup_seq = _loop_has_pickup
-                                ? _loop_measure
-                                : (_loop_measure - 1);
+                        var _canon_key = string(_canonical_measure);
+                        if (variable_struct_exists(_canonical_seq_by_measure, _canon_key)) {
+                            _canonical_seq_from_measure = floor(real(_canonical_seq_by_measure[$ _canon_key]));
                         }
                     }
+                    if (_canonical_measure == 0) {
+                        _canonical_seq_from_measure = 0;
+                    } else if (_canonical_seq_from_measure < 0 && _canonical_measure > 0) {
+                        _canonical_seq_from_measure = _canonical_measure - (_has_pickup_for_lookup ? 0 : 1);
+                    }
+                    var _primary_lookup_seq = _single_tune_loop_runtime
+                        ? _canonical_seq_from_measure
+                        : floor(real(_ms[$ "seq"] ?? -1));
                     if (_pbmap_len > 0) {
-                        _spr_idx = (_pb_lookup_seq >= 0 && _pb_lookup_seq < _pbmap_len) ? _base_pbmap[_pb_lookup_seq] : _pb_lookup_seq;
+                        var _pb_lookup_seq = -1;
+                        var _pb_candidate0 = floor(real(_primary_lookup_seq));
+                        var _pb_candidate1 = floor(real(_canonical_seq_from_measure));
+                        var _pb_candidate2 = floor(real(_ms[$ "seq"] ?? -1));
+                        var _pb_candidate3 = floor(real(_ms[$ "m"] ?? -1)) - 1;
+                        var _pb_candidates = [_pb_candidate0, _pb_candidate1, _pb_candidate2, _pb_candidate3];
+                        for (var _pbi = 0; _pbi < array_length(_pb_candidates); _pbi++) {
+                            var _pb_key = floor(real(_pb_candidates[_pbi]));
+                            if (_pb_key < 0 || _pb_key >= _pbmap_len) continue;
+                            _pb_lookup_seq = _pb_key;
+                            _score_sprite_source = (_pbi == 0) ? "pbmap_primary"
+                                : ((_pbi == 1) ? "pbmap_measure_primary"
+                                : ((_pbi == 2) ? "pbmap_seq" : "pbmap_measure"));
+                            break;
+                        }
+                        _spr_idx = (_pb_lookup_seq >= 0 && _pb_lookup_seq < _pbmap_len)
+                            ? _base_pbmap[_pb_lookup_seq]
+                            : _primary_lookup_seq;
+                        if (_pb_lookup_seq < 0 || _pb_lookup_seq >= _pbmap_len) _score_sprite_source = "pbmap_raw";
                     } else {
                         // Priority 2: legacy measure_map (maps expanded full-measure seq to physical image index).
                         var _map_len = (variable_global_exists("score_measure_map")) ? array_length(global.score_measure_map) : 0;
                         if (_map_len > 0) {
-                            var _has_pickup_start = (_nm > 0) && (_measure_starts[0].m == 0);
-                            if (_ms.m == 0) {
+                            var _has_pickup_start = _single_tune_loop_runtime
+                                ? _has_pickup_for_lookup
+                                : ((_nm > 0) && (_measure_starts[0].m == 0));
+                            if (floor(real(_ms[$ "m"] ?? -1)) == 0) {
                                 // If map length == sprite count, image 0 already serves measure 1 (with pickup included).
                                 // In that case, skip drawing synthetic measure 0 to avoid drawing the same image twice.
                                 if (_effective_spr_count > _map_len) {
                                     _spr_idx = 0;
+                                    _score_sprite_source = "map_pickup";
                                 } else {
                                     continue;
                                 }
                             } else {
-                                var _map_key = _ms.seq - (_has_pickup_start ? 1 : 0);
-                                if (_single_tune_loop_runtime) {
-                                    var _loop_has_pickup_map = variable_global_exists("score_has_pickup")
-                                        && bool(global.score_has_pickup);
-                                    var _loop_measure_key = floor(real(_ms.m ?? 0));
-                                    if (_loop_measure_key > 0) {
-                                        _map_key = _loop_has_pickup_map
-                                            ? _loop_measure_key
-                                            : (_loop_measure_key - 1);
-                                    }
-                                }
-                                if (!(_map_key >= 0 && _map_key < _map_len)) {
-                                    // Fallback for manifests keyed by measure number.
-                                    _map_key = _ms.m - 1;
+                                var _map_candidate0 = floor(real(_primary_lookup_seq));
+                                var _map_candidate1 = floor(real(_canonical_seq_from_measure));
+                                var _map_candidate2 = floor(real(_ms[$ "seq"] ?? -1)) - (_has_pickup_start ? 1 : 0);
+                                var _map_candidate3 = floor(real(_ms[$ "m"] ?? -1)) - 1;
+                                var _map_candidates = [_map_candidate0, _map_candidate1, _map_candidate2, _map_candidate3];
+                                var _map_key = -1;
+                                for (var _mci = 0; _mci < array_length(_map_candidates); _mci++) {
+                                    var _candidate = floor(real(_map_candidates[_mci]));
+                                    if (_candidate < 0 || _candidate >= _map_len) continue;
+                                    _map_key = _candidate;
+                                    _score_sprite_source = (_mci == 0) ? "map_primary"
+                                        : ((_mci == 1) ? "map_measure_primary"
+                                        : ((_mci == 2) ? "map_seq" : "map_measure"));
+                                    break;
                                 }
                                 _spr_idx = (_map_key >= 0 && _map_key < _map_len) ? global.score_measure_map[_map_key] : (_spr_idx);
+                                if (_map_key < 0 || _map_key >= _map_len) _score_sprite_source = "raw";
                             }
                         }
                         // Priority 3 (fallback): raw seq — works for tunes with no repeats
@@ -10049,8 +13025,9 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     _spr = _base_sprites[_spr_idx];
                 }
 
-                var _k_start = _use_loop_projection ? _proj_min_k : 0;
-                var _k_end = _use_loop_projection ? _proj_max_k : 0;
+                var _row_repeatable = !variable_struct_exists(_ms, "loop_repeatable") || bool(_ms[$ "loop_repeatable"]);
+                var _k_start = (_use_loop_projection && _row_repeatable) ? _proj_min_k : 0;
+                var _k_end = (_use_loop_projection && _row_repeatable) ? _proj_max_k : 0;
 
                 if (!_use_loop_projection) {
                     if (_t_end < _visible_start_ms) continue;
@@ -10074,9 +13051,47 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                         _score_debug_line += " b=" + string(_ms.b);
                         _score_debug_line += " seq=" + string(_ms.seq);
                         _score_debug_line += " img=" + string(_spr_idx);
+                        if (_score_debug_show_source) {
+                            _score_debug_line += " src=" + _score_sprite_source;
+                        }
                         _score_debug_line += " k=" + string(_k);
                         _score_debug_line += " t=" + string(floor(_draw_t_start)) + "-" + string(floor(_draw_t_end));
                         _score_debug_views++;
+                    }
+
+                    // Focused image-call trace: capture selected sprite index at now-line
+                    // for M16-M18 in both non-loop and loop modes.
+                    var _trace_measure = floor(real(_ms[$ "m"] ?? -1));
+                    if (_trace_measure >= 16 && _trace_measure <= 18
+                        && _playhead >= _draw_t_start && _playhead < _draw_t_end) {
+                        static _score_img_trace_last_ms = -1000000;
+                        var _trace_now = timing_get_engine_now_ms();
+                        if ((_trace_now - _score_img_trace_last_ms) >= 500) {
+                            _score_img_trace_last_ms = _trace_now;
+                            var _trace_mode = _single_tune_loop_runtime ? "loop" : "nonloop";
+                            var _trace_line = "[SCORE_IMG_TRACE] mode=" + _trace_mode;
+                            _trace_line += " m=" + string(_trace_measure);
+                            _trace_line += " seq=" + string(floor(real(_ms[$ "seq"] ?? -1)));
+                            _trace_line += " img=" + string(_spr_idx);
+                            _trace_line += " src=" + _score_sprite_source;
+                            _trace_line += " t=" + string(floor(_draw_t_start)) + "-" + string(floor(_draw_t_end));
+                            diag_log_append_line(_trace_line, "perf_benchmark.log", false);
+                        }
+                    }
+
+                    if (_score_debug_show_labels && _single_tune_loop_runtime && (_playhead >= _draw_t_start) && (_playhead < _draw_t_end)) {
+                        var _probe_mid = (_draw_t_start + _draw_t_end) * 0.5;
+                        var _probe_delta = abs(_playhead - _probe_mid);
+                        if (!_score_probe_has_now || _probe_delta < _score_probe_best_delta) {
+                            _score_probe_has_now = true;
+                            _score_probe_best_delta = _probe_delta;
+                            _score_probe_now_measure = floor(real(_ms[$ "m"] ?? -1));
+                            _score_probe_now_part = floor(real(_ms[$ "p"] ?? 1));
+                            _score_probe_now_img = _spr_idx;
+                            _score_probe_now_k = _k;
+                            _score_probe_now_start = _draw_t_start;
+                            _score_probe_now_end = _draw_t_end;
+                        }
                     }
                     var _score_phase_draw_t0_us = _score_phase_sample_this_frame ? get_timer() : 0;
 
@@ -10136,6 +13151,28 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                     draw_set_alpha(1);
                     draw_sprite_part_ext(_spr, 0, _part_x, 0, _part_w, _spr_h, _cx1, _y_offset, _scale_x, _scale_y, c_white, 1);
 
+                    if (_score_debug_show_labels) {
+                        var _label_m = floor(real(_ms[$ "m"] ?? -1));
+                        var _label_p = floor(real(_ms[$ "p"] ?? 1));
+                        var _label_txt = "P" + string(_label_p) + " M" + string(_label_m) + " I" + string(_spr_idx);
+                        if (_use_loop_projection) {
+                            _label_txt += " K" + string(_k);
+                        }
+                        // Keep labels readable: only annotate the image under the now-line.
+                        if (now_x >= _cx1 && now_x <= _cx2) {
+                            var _label_x = _cx1 + 2;
+                            var _label_y = staff_y1 + 2;
+                            var _label_w = string_width(_label_txt) + 4;
+                            var _label_h = string_height(_label_txt) + 2;
+                            draw_set_alpha(0.72);
+                            draw_set_color(c_black);
+                            draw_rectangle(_label_x - 1, _label_y - 1, _label_x + _label_w, _label_y + _label_h, false);
+                            draw_set_alpha(1);
+                            draw_set_color(make_color_rgb(246, 232, 164));
+                            draw_text(_label_x, _label_y, _label_txt);
+                        }
+                    }
+
                     // Optional beat-anchor guides from score metadata.
                     // Anchors are emitted in image-space X coordinates and scale with the sprite.
                     var _anchors_enabled = !variable_struct_exists(global.timeline_cfg, "score_lane_anchor_guides_enabled")
@@ -10179,17 +13216,55 @@ function gv_draw_timeline_canvas_overlay(_x1, _y1, _x2, _y2) {
                 _score_phase_loop_total_us = get_timer() - _score_phase_loop_t0_us;
             }
 
+            if (_score_debug_show_labels && _single_tune_loop_runtime && _score_probe_has_now) {
+                // Compare against the same loop-normalized playhead used for score-lane render.
+                var _probe_resolved = gv_resolve_measure_context(_playhead);
+                var _probe_expected_measure = floor(real(_probe_resolved.measure ?? -1));
+                var _probe_boundary_dist = min(abs(_playhead - _score_probe_now_start), abs(_score_probe_now_end - _playhead));
+                var _probe_near_boundary = (_probe_boundary_dist <= _score_probe_boundary_margin_ms);
+                if (_probe_expected_measure >= 1
+                    && _score_probe_now_measure >= 1
+                    && _probe_expected_measure != _score_probe_now_measure
+                    && !_probe_near_boundary) {
+                    _score_probe_warn_text = "LOOP MAP WARN exp M" + string(_probe_expected_measure)
+                        + " got P" + string(_score_probe_now_part) + " M" + string(_score_probe_now_measure)
+                        + " I" + string(_score_probe_now_img)
+                        + " K" + string(_score_probe_now_k);
+
+                    var _warn_w = string_width(_score_probe_warn_text) + 8;
+                    var _warn_h = string_height(_score_probe_warn_text) + 6;
+                    var _warn_x2 = x2 - 4;
+                    var _warn_x1 = max(x1 + 4, _warn_x2 - _warn_w);
+                    var _warn_y1 = staff_y1 + 4;
+                    var _warn_y2 = _warn_y1 + _warn_h;
+                    draw_set_alpha(0.82);
+                    draw_set_color(make_color_rgb(120, 24, 24));
+                    draw_rectangle(_warn_x1, _warn_y1, _warn_x2, _warn_y2, false);
+                    draw_set_alpha(1);
+                    draw_set_color(make_color_rgb(255, 224, 144));
+                    draw_text(_warn_x1 + 4, _warn_y1 + 2, _score_probe_warn_text);
+                }
+            }
+
             if (_score_debug_enabled) {
                 var _score_log = "[SCORE_LANE] ph=" + string(floor(_playhead));
+                _score_log += " raw=" + string(floor(_playhead_raw));
                 _score_log += " vis=" + string(_score_debug_views);
                 _score_log += " seg=" + string(_seg_idx);
                 if (_seg_title != "") _score_log += " title=" + _seg_title;
                 _score_log += " dbg_win=" + string(floor(_score_debug_boundary_window_ms));
                 if (_score_debug_focus_title != "") _score_log += " focus=" + _score_debug_focus_title;
+                if (_single_tune_loop_runtime) {
+                    _score_log += " loop_anchor=" + string(floor(_iter1_start_cached));
+                    _score_log += " loop_cycle=" + string(floor(_loop_cycle_cached));
+                }
                 _score_log += " sprites=" + string(_spr_count);
                 _score_log += " map=" + string((variable_global_exists("score_measure_map")) ? array_length(global.score_measure_map) : 0);
                 _score_log += " pbmap=" + string((variable_global_exists("score_playback_map")) ? array_length(global.score_playback_map) : 0);
                 if (_seg_start_ms >= 0) _score_log += " seg_ms=" + string(floor(_seg_start_ms)) + "-" + string(floor(_seg_end_ms));
+                if (_score_probe_warn_text != "") {
+                    _score_log += " WARN=" + _score_probe_warn_text;
+                }
                 if (_score_debug_views > 0) {
                     _score_log += " :: " + _score_debug_line;
                 }
@@ -10573,6 +13648,19 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
         // Mode 0=raw, 1=segmented, 2=planned underlay, 3=history markers
         var use_live_blue_beams = review_mode_active && (postplay_overlay_mode != 1);
         var player_beam_render_color = use_live_blue_beams ? live_player_beam_color : player_beam_color;
+        // Legacy matcher focus mode is retired in overlap-only flow; keep local flag for safe reads.
+        var note_match_focus_enabled = false;
+        var match_focus_active = false;
+        var match_focus_player_span_index = -1;
+        var match_focus_target_event_id = "";
+        var match_focus_target_span_index = -1;
+        var match_focus_source_kind = "";
+        var match_focus_target_expected_ms = 0;
+        var match_focus_target_lane_idx = -1;
+        var match_focus_player_color = live_player_beam_color;
+        var match_focus_player_dim_color = make_color_rgb(92, 98, 108);
+        var match_focus_planned_color = make_color_rgb(234, 214, 94);
+        var match_focus_planned_dim_color = make_color_rgb(188, 188, 192);
         history_markers_enabled = review_mode_active
             && (!variable_struct_exists(global.timeline_cfg, "notebeam_history_enabled") || global.timeline_cfg.notebeam_history_enabled)
             && !diag_disable_history
@@ -10605,6 +13693,9 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
             && is_array(planned_spans)
             && array_length(planned_spans) > 0
             && gv_planned_spans_have_focus_channel(planned_spans);
+        if (note_match_focus_enabled && match_focus_active) {
+            can_compare_overlap = false;
+        }
         overlap_match_count = 0;
         overlap_miss_count = 0;
         overlap_bleed_count = 0;
@@ -10797,8 +13888,10 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
             && is_array(global.timeline_state.player_in)) {
             var diag_player_start_us = diag_enabled ? get_timer() : 0;
             var player_spans = global.timeline_state.player_in;
-            // In review mode, always use the full run trace captured during live play.
-            if (review_mode_active
+            // Keep hitbox indices aligned with scorer assignment indices:
+            // scorer uses review_full_trace whenever available.
+            var use_trace_for_matching = review_mode_active || popup_clicks_enabled || can_compare_overlap;
+            if (use_trace_for_matching
                 && variable_struct_exists(global.timeline_state, "review_full_trace")
                 && is_array(global.timeline_state.review_full_trace)
                 && array_length(global.timeline_state.review_full_trace) > 0) {
@@ -10957,8 +14050,18 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                         else if (player_tstate == 1) overlap_bleed_count += 1;
                         else overlap_miss_count += 1;
                     } else {
-                        draw_set_alpha(player_beam_alpha);
-                        draw_set_color(player_beam_render_color);
+                            var focus_player_hit = match_focus_active && (j == match_focus_player_span_index);
+                            var focus_player_dim = match_focus_active && !focus_player_hit;
+                            if (focus_player_hit) {
+                                draw_set_alpha(player_beam_alpha);
+                                draw_set_color(match_focus_player_color);
+                            } else if (focus_player_dim) {
+                                draw_set_alpha(player_beam_alpha * 0.72);
+                                draw_set_color(match_focus_player_dim_color);
+                            } else {
+                                draw_set_alpha(player_beam_alpha);
+                                draw_set_color(player_beam_render_color);
+                            }
                         draw_line_width(qlx, qy_draw, qrx, qy_draw, lane_beam_draw_width2);
                     }
                 }
@@ -11002,7 +14105,8 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                                             y1: hit_y1 + hitbox_y_bias,
                                             x2: miss_rx + hitbox_x_bias,
                                             y2: hit_y2 + hitbox_y_bias,
-                                            player_span: miss_span
+                                            player_span: miss_span,
+                                            player_span_index: j
                                         });
                                     }
                                 }
@@ -11028,7 +14132,8 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                                         y1: hit_y1 + hitbox_y_bias,
                                         x2: match_rx + hitbox_x_bias,
                                         y2: hit_y2 + hitbox_y_bias,
-                                        player_span: match_span
+                                        player_span: match_span,
+                                        player_span_index: j
                                     });
                                 }
 
@@ -11057,7 +14162,8 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                                         y1: hit_y1 + hitbox_y_bias,
                                         x2: tail_rx + hitbox_x_bias,
                                         y2: hit_y2 + hitbox_y_bias,
-                                        player_span: tail_span
+                                        player_span: tail_span,
+                                        player_span_index: j
                                     });
                                 }
                             }
@@ -11067,7 +14173,8 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                                 y1: hit_y1 + hitbox_y_bias,
                                 x2: qrx + hitbox_x_bias,
                                 y2: hit_y2 + hitbox_y_bias,
-                                player_span: ps2
+                                player_span: ps2,
+                                player_span_index: j
                             });
                         }
                     }
@@ -11264,7 +14371,7 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
 
             draw_set_alpha(1);
         }
-        else if (review_mode_active && postplay_overlay_mode == 2) {
+        else if (review_mode_active && (postplay_overlay_mode == 2 || (note_match_focus_enabled && match_focus_active))) {
             // Mode 2: Planned notes Ã¢â‚¬â€ render planned spans in the history sub-row
             var _pov_n = array_length(planned_spans);
             for (var _pov_i = 0; _pov_i < _pov_n; _pov_i++) {
@@ -11297,8 +14404,36 @@ function gv_draw_notebeam_canvas_core(_x1, _y1, _x2, _y2) {
                 if (_pov_y2 < _pov_y1) _pov_y2 = _pov_y1;
                 var _pov_mid_y = clamp(real(_pov_m.history_mid_y), y1 + 1, y2 - 1);
                 var _pov_w = max(1, _pov_y2 - _pov_y1);
-                draw_set_alpha(history_end_alpha);
-                draw_set_color(history_end_color);
+                var _pov_is_focus = false;
+                if (match_focus_active) {
+                    if (match_focus_target_span_index >= 0 && _pov_i == match_focus_target_span_index) {
+                        _pov_is_focus = true;
+                    } else {
+                        var _pov_event_id = string(_pov_span.event_id ?? "");
+                        if (match_focus_target_event_id != "" && _pov_event_id == match_focus_target_event_id) {
+                            _pov_is_focus = true;
+                        } else if (match_focus_source_kind == "embellishment_unit" || match_focus_source_kind == "emb_cluster") {
+                            var _pov_lane_idx = variable_struct_exists(_pov_span, "lane_idx")
+                                ? floor(real(_pov_span.lane_idx))
+                                : gv_note_to_lane_index(_pov_span.note_canonical ?? "", _pov_span.note_midi ?? -1, _pov_span.channel ?? -1);
+                            var _pov_dist = abs(_pov_start - match_focus_target_expected_ms);
+                            _pov_is_focus = (_pov_lane_idx == match_focus_target_lane_idx) && (_pov_dist <= 200);
+                        }
+                    }
+                }
+
+                if (match_focus_active) {
+                    if (_pov_is_focus) {
+                        draw_set_alpha(history_end_alpha);
+                        draw_set_color(match_focus_planned_color);
+                    } else {
+                        draw_set_alpha(history_end_alpha * 0.58);
+                        draw_set_color(match_focus_planned_dim_color);
+                    }
+                } else {
+                    draw_set_alpha(history_end_alpha);
+                    draw_set_color(history_end_color);
+                }
                 draw_line_width(_pov_lx, _pov_mid_y, _pov_rx, _pov_mid_y, _pov_w);
             }
             draw_set_alpha(1);

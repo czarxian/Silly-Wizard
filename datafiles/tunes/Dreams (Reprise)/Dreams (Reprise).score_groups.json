@@ -1,0 +1,12 @@
+{
+  "default_part_channel": 2,
+  "groups": [
+    {
+      "group": "part3",
+      "part_channel": 3,
+      "part_channels": [3],
+      "part_label": "P2",
+      "subdir": "part3"
+    }
+  ]
+}

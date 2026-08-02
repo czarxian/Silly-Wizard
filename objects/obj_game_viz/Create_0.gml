@@ -29,7 +29,7 @@ global.timeline_cfg = {
     player_channels: [0],
     player_channel: -1,         // -1 = accept all incoming channels
     playhead_audio_lag_ms: 0,  // Delay visual playhead to better match audible MIDI output latency
-    filter_noise_ms: 15,
+    filter_noise_ms: 10,
     core_min_ms: 100,
     padding_px: 8,
     row_gap_px: 26,

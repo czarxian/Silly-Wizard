@@ -28,6 +28,13 @@ if (_ui_name_value == "loop_score_matrix_canvas") {
 	var _loop_layer_id = layer_get_id("loop_score_overview_layer");
 	if (_loop_layer_id == -1 || !layer_get_visible(_loop_layer_id)) exit;
 
+	if (mouse_check_button_pressed(mb_left)) {
+		var _loop_click_idx = asset_get_index("scoring_loop_overview_handle_click");
+		if (script_exists(_loop_click_idx)) {
+			script_execute(_loop_click_idx, mouse_x, mouse_y, bbox_left, bbox_top, bbox_right, bbox_bottom);
+		}
+	}
+
 	var _scroll_delta = 0;
 	if (mouse_wheel_up()) _scroll_delta = -1;
 	if (mouse_wheel_down()) _scroll_delta = 1;

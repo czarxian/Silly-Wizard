@@ -94,6 +94,18 @@ Private MissingEmbellishmentsMap As Object
 Const EPSILON As Double = 0.000001
 Const ROUND_DECIMALS As Long = 9
 
+' Score image export sizing defaults (used when worksheet metadata does not override).
+' Goal: keep rendered measure widths close to the expected on-screen time viewport at default BPM.
+Const SCORE_EXPORT_DEFAULT_VIEW_AHEAD_MS As Double = 4500#
+Const SCORE_EXPORT_DEFAULT_VIEW_BEHIND_MS As Double = 2250#
+Const SCORE_EXPORT_DEFAULT_BPM As Double = 84#
+Const SCORE_EXPORT_DEFAULT_VIEWPORT_PX As Double = 800#
+Const SCORE_EXPORT_DEFAULT_IMAGE_WIDTH_MIN As Long = 360
+Const SCORE_EXPORT_DEFAULT_IMAGE_WIDTH_MAX As Long = 1400
+' abcjs typically fills ~80% of the image width with actual note content; the rest is margin.
+' Dividing the slot-width estimate by this ratio compensates so content aligns with the viewport slot.
+Const SCORE_EXPORT_CONTENT_FILL_RATIO As Double = 0.8#
+
 ' ============================================================
 ' ENTRY POINT
 ' ============================================================
@@ -118,6 +130,7 @@ Public Sub ParseAllParts()
     Set ws = ActiveSheet  ' Operates on whichever sheet is active — no longer locked to "Tune"
 
     ResetMissingEmbellishmentTracking
+    MergeSplitBarsForScore = False
 
     ' ---- Locate and parse metadata row ----
     Dim metadataABC As String
@@ -141,6 +154,7 @@ Public Sub ParseAllParts()
     If metadataABC <> "" Then
         ParseABCMetadata ws, metadataABC
     End If
+    MergeSplitBarsForScore = ParseMetadataBoolean(GetMetadataValue(ws, "score_merge_split_bars"))
     CalculateRhythmicConstants ws
 
     ' ---- Pre-parse structural validation ----
@@ -298,6 +312,138 @@ Private Function ParsePartSegment(ws As Worksheet, ByVal partType As String, ByV
     ParsePartSegment = addedCount
 
     partSummary = partSummary & "  " & partType & " (" & resolvedVoice & "): " & addedCount & " rows" & vbCrLf
+End Function
+
+Private Function ParseMetadataPositiveNumber(ByVal rawValue As Variant, ByVal fallbackValue As Double) As Double
+    Dim s As String
+    s = Trim$(CStr(rawValue))
+    If s = "" Then
+        ParseMetadataPositiveNumber = fallbackValue
+        Exit Function
+    End If
+    If Not IsNumeric(s) Then
+        ParseMetadataPositiveNumber = fallbackValue
+        Exit Function
+    End If
+
+    ParseMetadataPositiveNumber = CDbl(s)
+    If ParseMetadataPositiveNumber <= 0# Then ParseMetadataPositiveNumber = fallbackValue
+End Function
+
+Private Function ParseTempoDefaultBPM(ByVal tempoRaw As Variant, _
+                                      ByRef beatUnitFraction As Double, _
+                                      ByVal defaultBeatUnitFraction As Double) As Double
+    Dim s As String
+    s = Trim$(CStr(tempoRaw))
+
+    beatUnitFraction = defaultBeatUnitFraction
+    If beatUnitFraction <= 0# Then beatUnitFraction = 0.25
+
+    If s = "" Then
+        ParseTempoDefaultBPM = SCORE_EXPORT_DEFAULT_BPM
+        Exit Function
+    End If
+
+    Dim eqPos As Long
+    eqPos = InStr(1, s, "=", vbTextCompare)
+    If eqPos > 0 Then
+        Dim leftPart As String
+        Dim rightPart As String
+        leftPart = Trim$(Left$(s, eqPos - 1))
+        rightPart = Trim$(Mid$(s, eqPos + 1))
+
+        If leftPart <> "" Then
+            Dim parsedFrac As Double
+            parsedFrac = ParseFraction(leftPart)
+            If parsedFrac > 0# Then beatUnitFraction = parsedFrac
+        End If
+
+        If IsNumeric(rightPart) Then
+            ParseTempoDefaultBPM = CDbl(rightPart)
+        Else
+            ParseTempoDefaultBPM = SCORE_EXPORT_DEFAULT_BPM
+        End If
+    ElseIf IsNumeric(s) Then
+        ParseTempoDefaultBPM = CDbl(s)
+    Else
+        ParseTempoDefaultBPM = SCORE_EXPORT_DEFAULT_BPM
+    End If
+
+    If ParseTempoDefaultBPM <= 0# Then ParseTempoDefaultBPM = SCORE_EXPORT_DEFAULT_BPM
+End Function
+
+Private Function ResolveScoreExportImageWidth(ByVal ws As Worksheet) As Long
+    ' Metadata overrides (all optional):
+    ' - score_viewport_ahead_ms
+    ' - score_viewport_behind_ms
+    ' - score_viewport_px
+    ' - score_image_width_min
+    ' - score_image_width_max
+    ' - score_image_width (fixed width override)
+
+    Dim fixedWidth As Double
+    fixedWidth = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_image_width"), 0#)
+    If fixedWidth > 0# Then
+        ResolveScoreExportImageWidth = CLng(Round(fixedWidth))
+        Exit Function
+    End If
+
+    Dim viewAheadMs As Double
+    Dim viewBehindMs As Double
+    Dim viewportPx As Double
+    Dim minWidth As Double
+    Dim maxWidth As Double
+
+    viewAheadMs = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_viewport_ahead_ms"), SCORE_EXPORT_DEFAULT_VIEW_AHEAD_MS)
+    viewBehindMs = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_viewport_behind_ms"), SCORE_EXPORT_DEFAULT_VIEW_BEHIND_MS)
+    viewportPx = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_viewport_px"), SCORE_EXPORT_DEFAULT_VIEWPORT_PX)
+    minWidth = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_image_width_min"), SCORE_EXPORT_DEFAULT_IMAGE_WIDTH_MIN)
+    maxWidth = ParseMetadataPositiveNumber(GetMetadataValue(ws, "score_image_width_max"), SCORE_EXPORT_DEFAULT_IMAGE_WIDTH_MAX)
+
+    If maxWidth < minWidth Then
+        Dim tmpW As Double
+        tmpW = minWidth
+        minWidth = maxWidth
+        maxWidth = tmpW
+    End If
+
+    Dim tsNum As Double
+    Dim tsDen As Double
+    tsNum = ParseMetadataPositiveNumber(GetMetadataValue(ws, "time_sig_num"), 4#)
+    tsDen = ParseMetadataPositiveNumber(GetMetadataValue(ws, "time_sig_den"), 4#)
+
+    Dim beatUnitFraction As Double
+    Dim defaultBeatFraction As Double
+    defaultBeatFraction = 1# / tsDen
+
+    Dim bpm As Double
+    bpm = ParseTempoDefaultBPM(GetMetadataValue(ws, "tempo_default"), beatUnitFraction, defaultBeatFraction)
+
+    Dim measureWhole As Double
+    measureWhole = tsNum / tsDen
+    If beatUnitFraction <= 0# Then beatUnitFraction = defaultBeatFraction
+    If beatUnitFraction <= 0# Then beatUnitFraction = 0.25
+
+    Dim beatsPerMeasureAtTempo As Double
+    beatsPerMeasureAtTempo = measureWhole / beatUnitFraction
+    If beatsPerMeasureAtTempo <= 0# Then beatsPerMeasureAtTempo = tsNum
+
+    Dim measureMs As Double
+    measureMs = beatsPerMeasureAtTempo * (60000# / bpm)
+
+    Dim viewportMs As Double
+    viewportMs = viewAheadMs + viewBehindMs
+    If viewportMs <= 0# Then viewportMs = SCORE_EXPORT_DEFAULT_VIEW_AHEAD_MS + SCORE_EXPORT_DEFAULT_VIEW_BEHIND_MS
+
+    Dim pxPerMs As Double
+    pxPerMs = viewportPx / viewportMs
+
+    Dim suggestedWidth As Double
+    suggestedWidth = (measureMs * pxPerMs) / SCORE_EXPORT_CONTENT_FILL_RATIO
+    If suggestedWidth < minWidth Then suggestedWidth = minWidth
+    If suggestedWidth > maxWidth Then suggestedWidth = maxWidth
+
+    ResolveScoreExportImageWidth = CLng(Round(suggestedWidth))
 End Function
 
 Private Function NormalizeStandaloneTransitionABC(ByVal abcText As String) As String
@@ -981,6 +1127,16 @@ Private Function ParseNonNegativeMetadataNumber(ByVal rawValue As Variant) As Do
 
     ParseNonNegativeMetadataNumber = CDbl(s)
     If ParseNonNegativeMetadataNumber < 0# Then ParseNonNegativeMetadataNumber = 0#
+End Function
+
+Private Function ParseMetadataBoolean(ByVal rawValue As Variant) As Boolean
+    Dim s As String
+    s = LCase$(Trim$(CStr(rawValue)))
+
+    Select Case s
+        Case "true", "1", "yes", "y", "on"
+            ParseMetadataBoolean = True
+    End Select
 End Function
 
 ' Returns True if the ABC header block contains a header line for the given letter (e.g. "M", "L", "K").
@@ -2811,6 +2967,33 @@ Public Sub ExportMeasureImages(Optional abcFilePath As String = "", _
     Dim width As Long
     width = IIf(imageWidth > 0, imageWidth, 800)
 
+    ' Clear generated artifacts so stale images do not survive a re-export.
+    If Dir(outDir, vbDirectory) = "" Then
+        On Error Resume Next
+        MkDir outDir
+        If Err.Number <> 0 Then
+            MsgBox "Could not create output folder:" & vbCrLf & outDir & vbCrLf & Err.Description, vbExclamation, "Export Error"
+            Exit Sub
+        End If
+        On Error GoTo 0
+    End If
+    ClearGeneratedScoreOutputs outDir
+
+    ' Pass current render intent through to abc_to_png.js via a small temp JSON file.
+    Dim settingsFile As String
+    Dim settingsJson As String
+    Dim ffSettings As Integer
+    settingsFile = Environ("TEMP") & "\abc_to_png_settings.json"
+    settingsJson = "{""image_width"":" & CStr(width) & ",""merge_split_bars"":" & IIf(MergeSplitBarsForScore, "true", "false") & "}"
+    On Error Resume Next
+    ffSettings = FreeFile
+    Open settingsFile For Output As #ffSettings
+    Print #ffSettings, settingsJson
+    Close #ffSettings
+    If Err.Number <> 0 Then settingsFile = ""
+    Err.Clear
+    On Error GoTo 0
+
     ' ---- Locate node.exe ----
     Dim nodePath As String
     nodePath = "C:\Program Files\nodejs\node.exe"
@@ -2838,7 +3021,11 @@ Public Sub ExportMeasureImages(Optional abcFilePath As String = "", _
     Open batFile For Output As #ffBat
     Print #ffBat, "@echo off"
     Print #ffBat, "SET PATH=C:\tools\;" & "%" & "PATH" & "%"
-    Print #ffBat, """" & nodePath & """ """ & scriptPath & """ """ & abcFile & """ """ & outDir & """ " & width
+    If settingsFile <> "" Then
+        Print #ffBat, """" & nodePath & """ """ & scriptPath & """ """ & abcFile & """ """ & outDir & """ " & width & " """ & settingsFile & """"
+    Else
+        Print #ffBat, """" & nodePath & """ """ & scriptPath & """ """ & abcFile & """ """ & outDir & """ " & width
+    End If
     Close #ffBat
 
     ' ---- Run ----
@@ -2869,6 +3056,25 @@ Public Sub ExportMeasureImages(Optional abcFilePath As String = "", _
 
 End Sub
 
+Private Sub ClearGeneratedScoreOutputs(ByVal outDir As String)
+    If Dir(outDir, vbDirectory) = "" Then Exit Sub
+
+    Dim patterns As Variant
+    patterns = Array("*.png", "*.svg", "score_images.json")
+
+    Dim i As Long
+    For i = LBound(patterns) To UBound(patterns)
+        Dim fileName As String
+        fileName = Dir(outDir & "\" & CStr(patterns(i)))
+        Do While fileName <> ""
+            On Error Resume Next
+            Kill outDir & "\" & fileName
+            On Error GoTo 0
+            fileName = Dir()
+        Loop
+    Next i
+End Sub
+
 ' ============================================================
 ' COMBINED EXPORT — JSON + ABC + SCORE IMAGES IN ONE STEP
 ' ============================================================
@@ -2890,6 +3096,7 @@ Public Sub ExportTuneAll()
 
     Dim ws As Worksheet
     Set ws = ActiveSheet
+    MergeSplitBarsForScore = ParseMetadataBoolean(GetMetadataValue(ws, "score_merge_split_bars"))
 
     ' ---- Read tune title from metadata ----
     Dim tuneTitle As String
@@ -2980,13 +3187,16 @@ Public Sub ExportTuneAll()
     Print #ff, scoreSnippetsJSON
     Close #ff
 
+    Dim scoreImageWidth As Long
+    scoreImageWidth = ResolveScoreExportImageWidth(ws)
+
     ' ---- Step 4: Render score images from snippets ----
     Application.StatusBar = "Step 4/4 - Rendering score images..."
-    Call ExportMeasureImages(scoreSnippetsFile, scoreDir, 800)
+    Call ExportMeasureImages(scoreSnippetsFile, scoreDir, scoreImageWidth)
 
     ' ---- Step 4b: Render optional per-part score image bundles ----
     Dim scoreGroupsJSON As String
-    scoreGroupsJSON = BuildScoreImageGroupsJSON(ws, abcContent, tuneDir, scoreDir, tuneName)
+    scoreGroupsJSON = BuildScoreImageGroupsJSON(ws, abcContent, tuneDir, scoreDir, tuneName, scoreImageWidth)
     If Trim$(scoreGroupsJSON) <> "" Then
         Dim scoreGroupsFile As String
         scoreGroupsFile = tuneDir & tuneName & ".score_groups.json"
@@ -3016,7 +3226,7 @@ Private Function BuildScoreSnippetsJSON(ws As Worksheet, ByVal fullABC As String
     End If
 End Function
 
-Private Function BuildScoreImageGroupsJSON(ws As Worksheet, ByVal fullABC As String, ByVal tuneDir As String, ByVal scoreDir As String, ByVal tuneName As String) As String
+Private Function BuildScoreImageGroupsJSON(ws As Worksheet, ByVal fullABC As String, ByVal tuneDir As String, ByVal scoreDir As String, ByVal tuneName As String, ByVal imageWidth As Long) As String
     Dim header As String
     header = ExtractABCHeaderBlock(fullABC)
 
@@ -3100,7 +3310,7 @@ NextGroupPartRow:
         Print #ff, groupSnippetsJSON
         Close #ff
 
-        Call ExportMeasureImages(groupSnippetsFile, groupDir, 800)
+        Call ExportMeasureImages(groupSnippetsFile, groupDir, imageWidth)
 
         If Not firstGroup Then json = json & "," & vbCrLf
         firstGroup = False
@@ -3121,7 +3331,7 @@ End Function
 Private Function ResolveScoreGroupPartChannel(ByVal partType As String) As Long
     Select Case LCase$(Trim$(partType))
         Case "melody"
-            ResolveScoreGroupPartChannel = 2
+            ResolveScoreGroupPartChannel = 0
         Case "harmony1"
             ResolveScoreGroupPartChannel = 3
         Case "harmony2"
@@ -3321,7 +3531,7 @@ Private Function BuildSnippetBundleJSON(ByVal header As String, ByVal bodyABC As
                 segEnd = 0
                 nextUnits = GetNextSegmentUnits(flatTokens, i + 1, segEnd)
 
-                If Abs((currentMeasureUnits + nextUnits) - UnitsPerMeasure) <= tol Then
+                If MergeSplitBarsForScore And Abs((currentMeasureUnits + nextUnits) - UnitsPerMeasure) <= tol Then
                     ' Mid-game-measure ABC barline — drop it, keep accumulating
                     ' (the two partial bars form one game measure)
                 Else

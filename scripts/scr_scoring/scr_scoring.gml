@@ -87,7 +87,16 @@ function scoring_measure_entries_from_timeline() {
     if (variable_struct_exists(global.timeline_state, "measure_nav_entries")
         && is_array(variable_struct_get(global.timeline_state, "measure_nav_entries"))
         && array_length(variable_struct_get(global.timeline_state, "measure_nav_entries")) > 0) {
-        return variable_struct_get(global.timeline_state, "measure_nav_entries");
+        var src = variable_struct_get(global.timeline_state, "measure_nav_entries");
+        var out = [];
+        for (var i = 0; i < array_length(src); i++) {
+            var e = src[i];
+            if (!is_struct(e)) continue;
+            var copy = e;
+            if (!variable_struct_exists(copy, "nav_idx")) copy.nav_idx = i;
+            array_push(out, copy);
+        }
+        return out;
     }
 
     return entries;
@@ -201,9 +210,206 @@ function scoring_judge_display_name(_judge_id) {
     var jid = string(_judge_id);
     switch (jid) {
         case "ms_overlap_uncal": return "Matching ms uncal";
-        case "ms_overlap_emb_window": return "Matching ms emb";
     }
     return "Matching ms calibrated";
+}
+
+/// @function scoring_judge_normalize_id(_judge_id)
+/// @description Normalize deprecated judge ids to active equivalents.
+/// @param {string} _judge_id Judge id
+/// @returns {string} Normalized judge id
+function scoring_judge_normalize_id(_judge_id) {
+    var jid = string(_judge_id);
+    switch (jid) {
+        // Blank-slate reset: legacy non-overlap judges currently normalize to calibrated overlap.
+        case "ms_overlap_emb_window":
+        case "event_match_core":
+        case "note_match":
+        case "on_beat":
+        case "on_beat_note":
+        case "on_beat_note_early":
+        case "on_beat_note_late":
+        case "on_beat_grace":
+        case "on_beat_grace_early":
+        case "on_beat_grace_late":
+            return "ms_overlap";
+    }
+    return jid;
+}
+
+/// @function scoring_judge_settings_get_bucket_id(_judge_id)
+/// @description Resolve the shared settings bucket id for a judge id.
+/// @param {string} _judge_id Judge id
+/// @returns {string} Settings bucket id
+function scoring_judge_settings_get_bucket_id(_judge_id) {
+    var jid = scoring_judge_normalize_id(_judge_id);
+    if (jid == "ms_overlap_uncal") return "ms_overlap";
+    return "ms_overlap";
+}
+
+/// @function scoring_settings_merge(_defaults, _overrides)
+/// @description Return a shallow merge of two settings structs, with _overrides taking precedence.
+/// @param {struct} _defaults Base struct
+/// @param {struct} _overrides Override struct
+/// @returns {struct} Merged settings struct
+function scoring_settings_merge(_defaults, _overrides) {
+    var out = {};
+    if (is_struct(_defaults)) {
+        var dkeys = struct_get_names(_defaults);
+        for (var di = 0; di < array_length(dkeys); di++) {
+            var dk = dkeys[di];
+            out[$ dk] = _defaults[$ dk];
+        }
+    }
+    if (is_struct(_overrides)) {
+        var okeys = struct_get_names(_overrides);
+        for (var oi = 0; oi < array_length(okeys); oi++) {
+            var ok = okeys[oi];
+            out[$ ok] = _overrides[$ ok];
+        }
+    }
+    return out;
+}
+
+/// @function scoring_struct_get_or_default(_s, _key, _default)
+/// @description Return struct field value when present, otherwise fallback default.
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Field name
+/// @param {*} _default Fallback value
+/// @returns {*} Existing field value or default
+function scoring_struct_get_or_default(_s, _key, _default) {
+    if (!is_struct(_s)) return _default;
+    if (!variable_struct_exists(_s, _key)) return _default;
+    return variable_struct_get(_s, _key);
+}
+
+/// @function scoring_struct_get_real_default(_s, _key, _default)
+/// @description Return real(field) when present, otherwise real(default).
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Field name
+/// @param {real} _default Fallback value
+/// @returns {real} Real value
+function scoring_struct_get_real_default(_s, _key, _default) {
+    return real(scoring_struct_get_or_default(_s, _key, _default));
+}
+
+/// @function scoring_struct_get_int_default(_s, _key, _default)
+/// @description Return floor(real(field)) when present, otherwise floor(real(default)).
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Field name
+/// @param {real} _default Fallback value
+/// @returns {real} Integer-like value
+function scoring_struct_get_int_default(_s, _key, _default) {
+    return floor(scoring_struct_get_real_default(_s, _key, _default));
+}
+
+/// @function scoring_struct_get_bool_default(_s, _key, _default)
+/// @description Return bool(field) when present, otherwise bool(default).
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Field name
+/// @param {bool} _default Fallback value
+/// @returns {bool} Boolean value
+function scoring_struct_get_bool_default(_s, _key, _default) {
+    return bool(scoring_struct_get_or_default(_s, _key, _default));
+}
+
+/// @function scoring_struct_get_string_default(_s, _key, _default)
+/// @description Return string(field) when present, otherwise string(default).
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Field name
+/// @param {string} _default Fallback value
+/// @returns {string} String value
+function scoring_struct_get_string_default(_s, _key, _default) {
+    return string(scoring_struct_get_or_default(_s, _key, _default));
+}
+
+/// @function scoring_struct_require_real(_s, _key, _context)
+/// @description Fail fast when a required numeric field is missing; otherwise return real(field).
+/// @param {struct|undefined} _s Source struct
+/// @param {string} _key Required field name
+/// @param {string} _context Error context prefix
+/// @returns {real} Required numeric value
+function scoring_struct_require_real(_s, _key, _context) {
+    if (!is_struct(_s) || !variable_struct_exists(_s, _key)) {
+        show_error(_context + ": missing required field " + _key, true);
+    }
+    return real(variable_struct_get(_s, _key));
+}
+
+/// @function scoring_event_match_normalize_settings(_settings)
+/// @description Build a complete event-match settings struct with all expected keys populated.
+/// @param {struct|undefined} _settings Raw settings
+/// @returns {struct} Normalized event-match settings
+function scoring_event_match_normalize_settings(_settings) {
+    var max_delta_ms = scoring_struct_get_real_default(_settings, "event_match_max_delta_ms", -1);
+    if (max_delta_ms <= 0) {
+        max_delta_ms = scoring_struct_get_real_default(_settings, "onbeat_match_window_ms", 140);
+    }
+
+    var lead_in_ms = max(0, scoring_struct_get_real_default(_settings, "event_match_lead_in_ms", 80));
+    var tail_out_ms = max(0, scoring_struct_get_real_default(_settings, "event_match_tail_out_ms", 120));
+    var grace_anchor_lead_ms = scoring_struct_get_real_default(_settings, "grace_anchor_lead_ms", 250);
+
+    return {
+        event_match_max_delta_ms: max(1, max_delta_ms),
+        event_match_skip_target_penalty: max(1, scoring_struct_get_real_default(_settings, "event_match_skip_target_penalty", 120)),
+        event_match_skip_player_penalty: max(1, scoring_struct_get_real_default(_settings, "event_match_skip_player_penalty", 80)),
+        event_match_lane_mismatch_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_lane_mismatch_penalty", 20)),
+        event_match_interval_prior_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_interval_prior_penalty", 20)),
+        event_match_lead_in_ms: lead_in_ms,
+        event_match_tail_out_ms: tail_out_ms,
+        event_match_include_notes: scoring_struct_get_bool_default(_settings, "event_match_include_notes", true),
+        event_match_include_emb_clusters: scoring_struct_get_bool_default(_settings, "event_match_include_emb_clusters", true),
+        event_match_note_requires_beat_start: scoring_struct_get_bool_default(_settings, "event_match_note_requires_beat_start", false),
+        event_match_skip_grace_led_notes: scoring_struct_get_bool_default(_settings, "event_match_skip_grace_led_notes", false),
+        grace_anchor_lead_ms: grace_anchor_lead_ms,
+        event_match_noise_floor_ms: max(1, scoring_struct_get_real_default(_settings, "event_match_noise_floor_ms", 25)),
+        event_match_grace_order_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_grace_order_penalty", 0)),
+        event_match_pitch_implausible_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_pitch_implausible_penalty", 25)),
+        event_match_duration_implausible_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_duration_implausible_penalty", 15)),
+        event_match_noise_pair_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_noise_pair_penalty", 20)),
+        event_match_neighborhood_beats: max(0.05, scoring_struct_get_real_default(_settings, "event_match_neighborhood_beats", 0.35)),
+        event_match_min_neighborhood_ms: max(10, scoring_struct_get_real_default(_settings, "event_match_min_neighborhood_ms", 45)),
+        event_match_role_mismatch_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_role_mismatch_penalty", 250)),
+        event_match_melody_protection_multiplier: max(1.0, scoring_struct_get_real_default(_settings, "event_match_melody_protection_multiplier", 3.0)),
+        event_match_grace_neighborhood_multiplier: max(1.0, scoring_struct_get_real_default(_settings, "event_match_grace_neighborhood_multiplier", 2.0)),
+        event_match_grace_timing_cost_multiplier: max(0.1, scoring_struct_get_real_default(_settings, "event_match_grace_timing_cost_multiplier", 0.5)),
+        event_match_use_measure_windows: scoring_struct_get_bool_default(_settings, "event_match_use_measure_windows", false),
+        event_match_measure_prev_tail_ms: max(0, scoring_struct_get_real_default(_settings, "event_match_measure_prev_tail_ms", max(lead_in_ms, grace_anchor_lead_ms * 0.75))),
+        event_match_measure_next_head_ms: max(0, scoring_struct_get_real_default(_settings, "event_match_measure_next_head_ms", max(tail_out_ms, grace_anchor_lead_ms * 0.75))),
+        event_match_anchor_lane_bonus: max(0, scoring_struct_get_real_default(_settings, "event_match_anchor_lane_bonus", 10)),
+        event_match_anchor_mismatch_penalty: max(0, scoring_struct_get_real_default(_settings, "event_match_anchor_mismatch_penalty", 40))
+    };
+}
+
+/// @function scoring_judge_get_setting_defs(_judge_id)
+/// @description Return UI/edit metadata for active overlap judge settings.
+/// @param {string} _judge_id Judge id
+/// @returns {array} Array of setting definitions
+function scoring_judge_get_setting_defs(_judge_id) {
+    return [
+        { key: "count_rests", label: "Count rests", type: "bool", step: 1, min: 0, max: 1 },
+        { key: "grade_a", label: "Grade A >=", type: "int", step: 5, min: 51, max: 100 },
+        { key: "grade_b", label: "Grade B >=", type: "int", step: 5, min: 41, max: 99 },
+        { key: "grade_c", label: "Grade C >=", type: "int", step: 5, min: 31, max: 99 },
+        { key: "grade_d", label: "Grade D >=", type: "int", step: 5, min: 21, max: 99 }
+    ];
+}
+
+/// @function scoring_judge_get_effective_settings(_judge_id)
+/// @description Return effective settings for a judge by reading from the current registry.
+/// @param {string} _judge_id Judge id
+/// @returns {struct} Effective settings struct
+function scoring_judge_get_effective_settings(_judge_id) {
+    var jid = string(_judge_id);
+    var reg = scoring_judge_settings_get_registry();
+    for (var i = 0; i < array_length(reg); i++) {
+        var row = reg[i];
+        if (!is_struct(row)) continue;
+        if (string(row.id ?? "") != jid) continue;
+        if (is_struct(row.settings)) return row.settings;
+    }
+    return {};
 }
 
 /// @function scoring_judge_profile_get(_judge_id)
@@ -279,24 +485,6 @@ function scoring_judge_profile_get(_judge_id) {
             key: "visual_alignment_offset_ms",
             label: "Visual offset",
             format: "ms"
-        });
-    } else if (jid == "ms_overlap_emb_window") {
-        profile.description = "Hybrid score. Non-embellishment notes use strict calibrated overlap; embellishments use ordered in-window matching.";
-        profile.compact_order = ["score", "matching_ms", "mismatch_ms", "emb_group_count", "emb_valid_interval_count", "expected_active_ms", "total_ms"];
-        array_push(profile.variables, {
-            key: "emb_group_count",
-            label: "Emb groups",
-            format: "int"
-        });
-        array_push(profile.variables, {
-            key: "emb_valid_interval_count",
-            label: "Emb valid intervals",
-            format: "int"
-        });
-        array_push(profile.variables, {
-            key: "emb_mode",
-            label: "Emb mode",
-            format: "text"
         });
     }
 
@@ -482,14 +670,21 @@ function scoring_emb_group_active_at_time(_emb_groups, _t_ms) {
 /// @param {struct} [_settings] Scoring settings
 /// @returns {struct} Scoring result {measure,start_ms,end_ms,total_ms,matching_ms,mismatch_ms,expected_active_ms,player_active_ms,score}
 function scoring_score_measure_ms_overlap_emb_window(_measure_entry, _planned_spans, _player_spans, _emb_groups, _emb_valid_intervals, _settings = undefined) {
-    var measure_num = floor(real(_measure_entry.measure ?? -1));
-    var start_ms = real(_measure_entry.start_ms ?? 0);
-    var end_ms = max(start_ms, real(_measure_entry.end_ms ?? start_ms));
+    var measure_entry = is_struct(_measure_entry) ? _measure_entry : {};
+    var measure_num = floor(real(variable_struct_exists(measure_entry, "measure") ? measure_entry.measure : -1));
+    var part_num = floor(real(variable_struct_exists(measure_entry, "part") ? measure_entry.part : 1));
+    if (part_num < 1) part_num = 1;
+    var nav_idx = floor(real(variable_struct_exists(measure_entry, "nav_idx") ? measure_entry.nav_idx : -1));
+    var start_ms = real(variable_struct_exists(measure_entry, "start_ms") ? measure_entry.start_ms : 0);
+    var end_ms = max(start_ms, real(variable_struct_exists(measure_entry, "end_ms") ? measure_entry.end_ms : start_ms));
     var total_ms = max(0, end_ms - start_ms);
+    var measure_ref_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
 
     var result = {
         measure: measure_num,
-        part: floor(real(_measure_entry.part ?? 1)),
+        part: part_num,
+        nav_idx: nav_idx,
+        measure_ref_key: measure_ref_key,
         start_ms: start_ms,
         end_ms: end_ms,
         total_ms: total_ms,
@@ -589,14 +784,21 @@ function scoring_score_measure_ms_overlap_emb_window(_measure_entry, _planned_sp
 /// @param {struct} [_settings]     Optional scoring settings from scoring_ms_overlap_get_effective_settings
 /// @returns {struct}  Scoring result {measure, start_ms, end_ms, total_ms, matching_ms, mismatch_ms, expected_active_ms, player_active_ms, score}
 function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _player_spans, _settings = undefined) {
-    var measure_num = floor(real(_measure_entry.measure ?? -1));
-    var start_ms = real(_measure_entry.start_ms ?? 0);
-    var end_ms = max(start_ms, real(_measure_entry.end_ms ?? start_ms));
+    var measure_entry = is_struct(_measure_entry) ? _measure_entry : {};
+    var measure_num = floor(real(variable_struct_exists(measure_entry, "measure") ? measure_entry.measure : -1));
+    var part_num = floor(real(variable_struct_exists(measure_entry, "part") ? measure_entry.part : 1));
+    if (part_num < 1) part_num = 1;
+    var nav_idx = floor(real(variable_struct_exists(measure_entry, "nav_idx") ? measure_entry.nav_idx : -1));
+    var start_ms = real(variable_struct_exists(measure_entry, "start_ms") ? measure_entry.start_ms : 0);
+    var end_ms = max(start_ms, real(variable_struct_exists(measure_entry, "end_ms") ? measure_entry.end_ms : start_ms));
     var total_ms = max(0, end_ms - start_ms);
+    var measure_ref_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
 
     var result = {
         measure: measure_num,
-        part: floor(real(_measure_entry.part ?? 1)),
+        part: part_num,
+        nav_idx: nav_idx,
+        measure_ref_key: measure_ref_key,
         start_ms: start_ms,
         end_ms: end_ms,
         total_ms: total_ms,
@@ -674,23 +876,91 @@ function scoring_score_measure_ms_overlap(_measure_entry, _planned_spans, _playe
     return result;
 }
 
-/// @function scoring_measure_results_to_map(_measure_results)
-/// @description Convert an array of measure score results to a struct keyed by measure number string.
-/// @param {array} _measure_results  Array of {measure, score, ...} structs
-/// @returns {struct}  {"1": 85.2, "2": 90.0, ...}
-function scoring_measure_results_to_map(_measure_results) {
+/// @function scoring_measure_ref_key(_part_num, _measure_num, _nav_idx)
+/// @description Build canonical structural score key as `part:measure[:nav_idx]`.
+/// @param {real} _part_num  Part number (1-based)
+/// @param {real} _measure_num  Measure number (1-based)
+/// @param {real} _nav_idx  Optional nav index; omit from key when < 0
+/// @returns {string} Canonical key or "" when part/measure are invalid.
+function scoring_measure_ref_key(_part_num, _measure_num, _nav_idx = -1) {
+    var part_num = floor(real(_part_num));
+    var measure_num = floor(real(_measure_num));
+    var nav_idx = floor(real(_nav_idx));
+    if (part_num < 1 || measure_num < 1) return "";
+    if (nav_idx >= 0) return string(part_num) + ":" + string(measure_num) + ":" + string(nav_idx);
+    return string(part_num) + ":" + string(measure_num);
+}
+
+function scoring_measure_result_get_key(_m) {
+    if (!is_struct(_m)) return "";
+    if (variable_struct_exists(_m, "measure_ref_key")) {
+        var explicit_key = string(variable_struct_get(_m, "measure_ref_key"));
+        if (explicit_key != "") return explicit_key;
+    }
+
+    var part_num = floor(real(_m.part ?? -1));
+    var measure_num = floor(real(_m.measure ?? -1));
+    var nav_idx = floor(real(_m.nav_idx ?? -1));
+    return scoring_measure_ref_key(part_num, measure_num, nav_idx);
+}
+
+function scoring_measure_results_to_key_map(_measure_results) {
     var out = {};
     if (!is_array(_measure_results)) return out;
 
     for (var i = 0; i < array_length(_measure_results); i++) {
-        var m = _measure_results[i];
-        if (!is_struct(m)) continue;
-        var measure_num = floor(real(m.measure ?? -1));
+        var measure_result = _measure_results[i];
+        if (!is_struct(measure_result)) continue;
+
+        var score_value = real(measure_result.score ?? 0);
+        var measure_num = floor(real(measure_result.measure ?? -1));
         if (measure_num < 1) continue;
-        out[$ string(measure_num)] = real(m.score ?? 0);
+
+        var key = scoring_measure_result_get_key(measure_result);
+        if (key != "") {
+            out[$ key] = score_value;
+        }
+
+        var part_num = floor(real(measure_result.part ?? -1));
+        if (part_num >= 1) {
+            var seed_key = scoring_measure_ref_key(part_num, measure_num, -1);
+            if (seed_key != "" && !variable_struct_exists(out, seed_key)) {
+                out[$ seed_key] = score_value;
+            }
+        }
     }
 
     return out;
+}
+
+function scoring_measure_result_matches(_m, _measure_num, _part_num = -1, _nav_idx = -1, _measure_key = "") {
+    if (!is_struct(_m)) return false;
+
+    var target_measure = floor(real(_measure_num));
+    var target_part = floor(real(_part_num));
+    var target_nav = floor(real(_nav_idx));
+    var target_key = string(_measure_key);
+
+    var m_measure = floor(real(_m.measure ?? -1));
+    if (m_measure != target_measure) return false;
+
+    var m_part = floor(real(_m.part ?? -1));
+    var m_nav = floor(real(_m.nav_idx ?? -1));
+    var m_key = scoring_measure_result_get_key(_m);
+
+    if (target_key != "") {
+        if (m_key == target_key) return true;
+
+        if (target_part >= 1) {
+            var target_seed = scoring_measure_ref_key(target_part, target_measure, -1);
+            var m_seed = (m_part >= 1) ? scoring_measure_ref_key(m_part, m_measure, -1) : "";
+            if (target_seed != "" && target_seed == m_seed) return true;
+        }
+    }
+
+    if (target_part >= 1 && m_part >= 1 && m_part != target_part) return false;
+    if (target_nav >= 0 && m_nav >= 0 && m_nav != target_nav) return false;
+    return true;
 }
 
 /// @function scoring_apply_run_to_runtime(_run_summary)
@@ -698,7 +968,7 @@ function scoring_measure_results_to_map(_measure_results) {
 /// @param {struct} _run_summary  Scoring summary struct from scoring_build_ms_overlap_summary
 /// @param {bool} [_promote_selected]  When true, also promote this run to global top-level score fields and selected judge
 /// @reads   global.timeline_state
-/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state.score_selected_judge, global.timeline_state.score_measure_maps, global.timeline_state.score_overall_by_judge, global.timeline_state.score_raw_by_judge, global.timeline_state.score_measure_results_by_judge, global.timeline_state.score_by_segment
+/// @writes  global.scoring_last_run, global.performance_score, global.last_score, global.run_score, global.final_score, global.overall_score, global.timeline_state.score_selected_judge, global.timeline_state.score_measure_maps_by_key, global.timeline_state.score_overall_by_judge, global.timeline_state.score_raw_by_judge, global.timeline_state.score_measure_results_by_judge, global.timeline_state.score_by_segment
 /// @objects none
 /// @callers scoring_build_ms_overlap_summary
 function scoring_apply_run_to_runtime(_run_summary, _promote_selected = true) {
@@ -723,14 +993,14 @@ function scoring_apply_run_to_runtime(_run_summary, _promote_selected = true) {
     var measure_results = variable_struct_exists(_run_summary, "measure_scores")
         ? _run_summary.measure_scores
         : [];
-    var map = scoring_measure_results_to_map(measure_results);
+    var map_by_key = scoring_measure_results_to_key_map(measure_results);
 
-    if (!variable_struct_exists(global.timeline_state, "score_measure_maps") || !is_struct(global.timeline_state.score_measure_maps)) {
-        variable_struct_set(global.timeline_state, "score_measure_maps", {});
+    if (!variable_struct_exists(global.timeline_state, "score_measure_maps_by_key") || !is_struct(global.timeline_state.score_measure_maps_by_key)) {
+        variable_struct_set(global.timeline_state, "score_measure_maps_by_key", {});
     }
-    var maps = variable_struct_get(global.timeline_state, "score_measure_maps");
-    maps[$ judge_id] = map;
-    variable_struct_set(global.timeline_state, "score_measure_maps", maps);
+    var maps_by_key = variable_struct_get(global.timeline_state, "score_measure_maps_by_key");
+    maps_by_key[$ judge_id] = map_by_key;
+    variable_struct_set(global.timeline_state, "score_measure_maps_by_key", maps_by_key);
 
     if (!variable_struct_exists(global.timeline_state, "score_overall_by_judge") || !is_struct(global.timeline_state.score_overall_by_judge)) {
         variable_struct_set(global.timeline_state, "score_overall_by_judge", {});
@@ -773,14 +1043,16 @@ function scoring_apply_run_to_runtime(_run_summary, _promote_selected = true) {
             var dst_seg = merged[si];
             if (!is_struct(dst_seg)) dst_seg = {};
 
-            var src_maps = variable_struct_exists(src_seg, "score_measure_maps") && is_struct(src_seg.score_measure_maps)
-                ? src_seg.score_measure_maps
+            var src_maps_by_key = variable_struct_exists(src_seg, "score_measure_maps_by_key") && is_struct(src_seg.score_measure_maps_by_key)
+                ? src_seg.score_measure_maps_by_key
                 : {};
-            var dst_maps = variable_struct_exists(dst_seg, "score_measure_maps") && is_struct(dst_seg.score_measure_maps)
-                ? dst_seg.score_measure_maps
+            var dst_maps_by_key = variable_struct_exists(dst_seg, "score_measure_maps_by_key") && is_struct(dst_seg.score_measure_maps_by_key)
+                ? dst_seg.score_measure_maps_by_key
                 : {};
-            dst_maps[$ judge_id] = variable_struct_exists(src_maps, judge_id) ? src_maps[$ judge_id] : scoring_measure_results_to_map(src_seg.measure_scores ?? []);
-            dst_seg.score_measure_maps = dst_maps;
+            dst_maps_by_key[$ judge_id] = variable_struct_exists(src_maps_by_key, judge_id)
+                ? src_maps_by_key[$ judge_id]
+                : scoring_measure_results_to_key_map(src_seg.measure_scores ?? []);
+            dst_seg.score_measure_maps_by_key = dst_maps_by_key;
 
             var dst_results_by_judge = variable_struct_exists(dst_seg, "measure_results_by_judge") && is_struct(dst_seg.measure_results_by_judge)
                 ? dst_seg.measure_results_by_judge
@@ -920,7 +1192,6 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
     var _uncal_input_ms = 0;
 
     var planned_spans_for_score = planned_spans;
-    var _use_emb_window_judge = (judge_id == "ms_overlap_emb_window");
     if (judge_id == "ms_overlap_uncal") {
         if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
             if (variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) {
@@ -958,12 +1229,8 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
         planned_spans_for_score = filtered_planned_spans;
     }
 
-    var _emb_groups_for_score = _use_emb_window_judge
-        ? scoring_build_emb_groups_for_scoring(planned_spans_for_score)
-        : [];
-    var _emb_valid_intervals_for_score = _use_emb_window_judge
-        ? scoring_build_emb_valid_intervals(_emb_groups_for_score, player_spans)
-        : [];
+    var _emb_groups_for_score = [];
+    var _emb_valid_intervals_for_score = [];
 
     // Overall accumulators (aggregated across all scored measures)
     var measures_out = [];
@@ -1045,10 +1312,9 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             for (var _mi = 0; _mi < _seg_n; _mi++) {
                 var e = _nav.entries[_mi];
                 if (!is_struct(e)) continue;
+                if (!variable_struct_exists(e, "nav_idx")) e.nav_idx = _mi;
                 if (floor(real(e.measure ?? -1)) < 1) continue;
-                var scored = _use_emb_window_judge
-                    ? scoring_score_measure_ms_overlap_emb_window(e, _seg_planned, _seg_player, _emb_groups_for_score, _emb_valid_intervals_for_score, _settings)
-                    : scoring_score_measure_ms_overlap(e, _seg_planned, _seg_player, _settings);
+                var scored = scoring_score_measure_ms_overlap(e, _seg_planned, _seg_player, _settings);
                 if (real(scored.expected_active_ms ?? 0) < 1) continue;
                 array_push(_seg_measures, scored);
                 array_push(measures_out, scored);
@@ -1082,9 +1348,9 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
                 emb_valid_interval_count: array_length(_emb_valid_intervals_for_score)
             };
             // Store per-segment score map keyed by judge_id.
-            var _seg_map  = scoring_measure_results_to_map(_seg_measures);
-            var _seg_maps = {};
-            _seg_maps[$ judge_id] = _seg_map;
+            var _seg_map_by_key = scoring_measure_results_to_key_map(_seg_measures);
+            var _seg_maps_by_key = {};
+            _seg_maps_by_key[$ judge_id] = _seg_map_by_key;
             var _seg_results_by_judge = {};
             _seg_results_by_judge[$ judge_id] = _seg_measures;
             var _seg_overall_by_judge = {};
@@ -1092,7 +1358,7 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             var _seg_raw_by_judge = {};
             _seg_raw_by_judge[$ judge_id] = _seg_raw;
             _score_by_seg[_si] = {
-                score_measure_maps:   _seg_maps,
+                score_measure_maps_by_key: _seg_maps_by_key,
                 score_selected_judge: judge_id,
                 measure_scores:       _seg_measures,
                 measure_results_by_judge: _seg_results_by_judge,
@@ -1121,9 +1387,7 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
             var e = measure_entries[i];
             if (!is_struct(e)) continue;
             if (floor(real(e.measure ?? -1)) < 1) continue;
-            var scored = _use_emb_window_judge
-                ? scoring_score_measure_ms_overlap_emb_window(e, planned_spans_for_score, player_spans, _emb_groups_for_score, _emb_valid_intervals_for_score, _settings)
-                : scoring_score_measure_ms_overlap(e, planned_spans_for_score, player_spans, _settings);
+            var scored = scoring_score_measure_ms_overlap(e, planned_spans_for_score, player_spans, _settings);
             if (real(scored.expected_active_ms ?? 0) < 1) continue;
             array_push(measures_out, scored);
             total_ms           += real(scored.total_ms ?? 0);
@@ -1172,6 +1436,1788 @@ function scoring_build_ms_overlap_summary(_export_info = undefined, _judge_id = 
     return summary;
 }
 
+/// @function scoring_on_beat_target_is_beat_start(_span)
+/// @description Return true when a planned span starts on an intended beat boundary.
+/// @param {struct} _span Planned span
+/// @returns {bool}
+function scoring_on_beat_target_is_beat_start(_span) {
+    if (!is_struct(_span)) return false;
+    if (!variable_struct_exists(_span, "beat_fraction")) return false;
+    var bf = real(_span.beat_fraction ?? 0);
+    return abs(bf) <= 0.0001;
+}
+
+/// @function scoring_on_beat_note_has_preceding_embellishment(_planned_spans, _note_index, _lookback_ms)
+/// @description Return true when a non-emb note is immediately preceded by one or more embellishment spans.
+/// @param {array} _planned_spans Planned spans sorted by start time
+/// @param {real} _note_index Index of candidate note span
+/// @param {real} _lookback_ms Max ms lookback for preceding embellishment scan
+/// @returns {bool}
+function scoring_on_beat_note_has_preceding_embellishment(_planned_spans, _note_index, _lookback_ms) {
+    if (!is_array(_planned_spans)) return false;
+    var n = array_length(_planned_spans);
+    var idx = floor(real(_note_index));
+    if (idx < 0 || idx >= n) return false;
+
+    var note = _planned_spans[idx];
+    if (!is_struct(note)) return false;
+    if (bool(note.is_embellishment ?? false)) return false;
+
+    var anchor_ms = real(note.start_ms ?? 0);
+    var anchor_measure = floor(real(note.measure ?? -1));
+    var lookback_ms = max(0, real(_lookback_ms));
+    var found_emb = false;
+
+    for (var j = idx - 1; j >= 0; j--) {
+        var prev = _planned_spans[j];
+        if (!is_struct(prev)) continue;
+
+        var prev_start = real(prev.start_ms ?? 0);
+        if ((anchor_ms - prev_start) > lookback_ms) break;
+
+        var prev_measure = floor(real(prev.measure ?? -1));
+        if (anchor_measure >= 1 && prev_measure >= 1 && prev_measure != anchor_measure) break;
+
+        var prev_is_emb = bool(prev.is_embellishment ?? false);
+        if (!prev_is_emb) break;
+        found_emb = true;
+    }
+
+    return found_emb;
+}
+
+/// @function scoring_on_beat_collect_targets(_planned_spans, _kind, _settings)
+/// @description Build expected beat targets from planned spans for note or gracenote judges.
+/// @param {array} _planned_spans Planned spans
+/// @param {string} _kind "note" or "grace"
+/// @param {struct} _settings On-beat settings
+/// @returns {array} Array of target structs
+function scoring_on_beat_collect_targets(_planned_spans, _kind, _settings) {
+    var targets = [];
+    if (!is_array(_planned_spans)) return targets;
+
+    var kind = string(_kind);
+    var grace_anchor_lead_ms = real(_settings.grace_anchor_lead_ms ?? 250);
+
+    for (var i = 0; i < array_length(_planned_spans); i++) {
+        var span = _planned_spans[i];
+        if (!is_struct(span)) continue;
+        if (!scoring_on_beat_target_is_beat_start(span)) continue;
+
+        var is_emb = bool(span.is_embellishment ?? false);
+        var anchor_ms = real(span.start_ms ?? 0);
+
+        if (kind == "note") {
+            if (is_emb) continue;
+            if (scoring_on_beat_note_has_preceding_embellishment(_planned_spans, i, grace_anchor_lead_ms)) continue;
+            array_push(targets, {
+                measure: floor(real(span.measure ?? -1)),
+                expected_ms: anchor_ms,
+                lane_idx: floor(real(span.lane_idx ?? -1)),
+                source_event_id: string(span.event_id ?? ""),
+                source_kind: "note"
+            });
+            continue;
+        }
+
+        if (kind == "grace") {
+            if (is_emb) continue;
+            var best_idx = -1;
+            var best_dist = 999999;
+            var anchor_measure = floor(real(span.measure ?? -1));
+            for (var gi = 0; gi < array_length(_planned_spans); gi++) {
+                var g = _planned_spans[gi];
+                if (!is_struct(g)) continue;
+                if (!bool(g.is_embellishment ?? false)) continue;
+                var g_measure = floor(real(g.measure ?? -1));
+                if (anchor_measure >= 1 && g_measure >= 1 && g_measure != anchor_measure) continue;
+                var g_start = real(g.start_ms ?? 0);
+                if (g_start > anchor_ms) continue;
+                var g_dist = anchor_ms - g_start;
+                if (g_dist > grace_anchor_lead_ms) continue;
+                if (g_dist < best_dist) {
+                    best_dist = g_dist;
+                    best_idx = gi;
+                }
+            }
+            if (best_idx >= 0) {
+                var grace_span = _planned_spans[best_idx];
+                array_push(targets, {
+                    measure: floor(real(span.measure ?? -1)),
+                    expected_ms: anchor_ms,
+                    lane_idx: floor(real(grace_span.lane_idx ?? -1)),
+                    source_event_id: string(grace_span.event_id ?? ""),
+                    source_kind: "grace"
+                });
+            }
+        }
+    }
+
+    if (array_length(targets) > 1) {
+        array_sort(targets, function(_a, _b) {
+            return real(_a.expected_ms ?? 0) - real(_b.expected_ms ?? 0);
+        });
+    }
+    return targets;
+}
+
+/// @function scoring_event_match_collect_player_onsets(_player_spans)
+/// @description Build sorted player-onset rows consumed by the core event matcher.
+/// @param {array} _player_spans Player span array
+/// @returns {array} Sorted onset structs {player_index,start_ms,lane_idx,measure,source_event_id}
+function scoring_event_match_collect_player_onsets(_player_spans) {
+    var out = [];
+    if (!is_array(_player_spans)) return out;
+
+    for (var i = 0; i < array_length(_player_spans); i++) {
+        var p = _player_spans[i];
+        if (!is_struct(p)) continue;
+        var start_ms = scoring_struct_require_real(p, "start_ms", "scoring_event_match_collect_player_onsets index " + string(i));
+        var lane_idx = scoring_struct_get_int_default(p, "lane_idx", -1);
+        var measure_num = scoring_struct_get_int_default(p, "measure", -1);
+        var end_ms_p = scoring_struct_get_real_default(p, "end_ms", start_ms);
+        var dur_ms_p = max(0, end_ms_p - start_ms);
+        var grace_override = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 30;
+        var inferred_role = (dur_ms_p > 0 && dur_ms_p <= grace_override * 2.25) ? "embellishment_unit" : "note";
+        array_push(out, {
+            player_index: i,
+            start_ms: start_ms,
+            end_ms: end_ms_p,
+            dur_ms: dur_ms_p,
+            lane_idx: lane_idx,
+            measure: measure_num,
+            inferred_role: inferred_role,
+            source_event_id: "player_" + string(i)
+        });
+    }
+
+    if (array_length(out) > 1) {
+        array_sort(out, function(_a, _b) {
+            return real(_a.start_ms ?? 0) - real(_b.start_ms ?? 0);
+        });
+    }
+    return out;
+}
+
+/// @function scoring_event_match_target_neighborhood_ms(_target, _settings)
+/// @description Compute a tempo-scaled candidate neighborhood around a target onset.
+/// @param {struct} _target Target slot
+/// @param {struct} _settings Normalized settings
+/// @returns {real} Neighborhood radius in ms
+function scoring_event_match_target_neighborhood_ms(_target, _settings) {
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var bpm = scoring_struct_get_real_default(_target, "tempo_bpm", 0);
+    if (bpm <= 0 && variable_global_exists("current_bpm")) bpm = real(global.current_bpm);
+    if (bpm <= 0) bpm = 84;
+
+    var beat_ms = 60000 / max(1, bpm);
+    var beats = scoring_struct_get_real_default(settings, "event_match_neighborhood_beats", 0.35);
+    var neighborhood_ms = beat_ms * beats;
+    neighborhood_ms = max(neighborhood_ms, scoring_struct_get_real_default(settings, "event_match_min_neighborhood_ms", 45));
+    neighborhood_ms = max(neighborhood_ms, scoring_struct_get_real_default(settings, "event_match_max_delta_ms", 140) * 0.5);
+    return neighborhood_ms;
+}
+
+/// @function scoring_event_match_build_phrase_cluster_index(_planned_spans)
+/// @description Build phrase-cluster metadata by grouping consecutive embellishment spans and the following target melody note.
+/// @param {array} _planned_spans Planned span array
+/// @returns {struct} {clusters, by_span_index}
+function scoring_event_match_build_phrase_cluster_index(_planned_spans) {
+    var out = {
+        clusters: [],
+        by_span_index: {}
+    };
+    if (!is_array(_planned_spans)) return out;
+
+    var n = array_length(_planned_spans);
+    var i = 0;
+    var cluster_counter = 0;
+
+    while (i < n) {
+        var s = _planned_spans[i];
+        if (!is_struct(s)) { i++; continue; }
+        if (!scoring_struct_get_bool_default(s, "is_embellishment", false)) { i++; continue; }
+
+        var emb_indices = [];
+        var first_start_ms = scoring_struct_get_real_default(s, "start_ms", 0);
+        var last_end_ms = scoring_struct_get_real_default(s, "end_ms", first_start_ms);
+
+        var j = i;
+        while (j < n) {
+            var sj = _planned_spans[j];
+            if (!is_struct(sj)) { j++; continue; }
+            if (!scoring_struct_get_bool_default(sj, "is_embellishment", false)) break;
+            array_push(emb_indices, j);
+            var sj_end_ms = scoring_struct_get_real_default(sj, "end_ms", scoring_struct_get_real_default(sj, "start_ms", first_start_ms));
+            if (sj_end_ms > last_end_ms) last_end_ms = sj_end_ms;
+            j++;
+        }
+
+        var anchor_idx = -1;
+        while (j < n) {
+            var sn = _planned_spans[j];
+            if (!is_struct(sn)) { j++; continue; }
+            if (!scoring_struct_get_bool_default(sn, "is_embellishment", false)) {
+                anchor_idx = j;
+                break;
+            }
+            j++;
+        }
+
+        var cluster_idx = array_length(out.clusters);
+        var cluster_id = "pc" + string(cluster_counter);
+        cluster_counter += 1;
+
+        var anchor_start_ms = last_end_ms;
+        var anchor_end_ms = last_end_ms;
+        var anchor_measure = -1;
+        if (anchor_idx >= 0) {
+            var anchor_span = _planned_spans[anchor_idx];
+            anchor_start_ms = scoring_struct_get_real_default(anchor_span, "start_ms", last_end_ms);
+            anchor_end_ms = scoring_struct_get_real_default(anchor_span, "end_ms", anchor_start_ms);
+            anchor_measure = scoring_struct_get_int_default(anchor_span, "measure", -1);
+        }
+
+        array_push(out.clusters, {
+            cluster_id: cluster_id,
+            cluster_index: cluster_idx,
+            emb_span_indices: emb_indices,
+            anchor_span_index: anchor_idx,
+            window_start_ms: first_start_ms,
+            window_end_ms: max(last_end_ms, anchor_end_ms),
+            anchor_ms: anchor_start_ms,
+            target_measure: anchor_measure
+        });
+
+        for (var ei = 0; ei < array_length(emb_indices); ei++) {
+            var emb_idx = emb_indices[ei];
+            var emb_key = string(emb_idx);
+            out.by_span_index[$ emb_key] = {
+                cluster_id: cluster_id,
+                cluster_index: cluster_idx,
+                slot_role: "embellishment_unit",
+                anchor_span_index: anchor_idx
+            };
+        }
+
+        if (anchor_idx >= 0) {
+            var anchor_key = string(anchor_idx);
+            out.by_span_index[$ anchor_key] = {
+                cluster_id: cluster_id,
+                cluster_index: cluster_idx,
+                slot_role: "target_melody_note",
+                anchor_span_index: anchor_idx
+            };
+            i = anchor_idx + 1;
+        } else {
+            i = max(i + 1, j);
+        }
+    }
+
+    return out;
+}
+
+/// @function scoring_event_match_compile_slots(_planned_spans, _settings)
+/// @description Compile canonical matcher slots (notes + phrase-cluster embellishment units) from planned spans.
+/// @param {array} _planned_spans Planned span array
+/// @param {struct} _settings Event matcher settings
+/// @returns {struct} {targets, phrase_clusters}
+function scoring_event_match_compile_slots(_planned_spans, _settings) {
+    var out = {
+        targets: [],
+        phrase_clusters: []
+    };
+    if (!is_array(_planned_spans)) return out;
+
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var include_notes = scoring_struct_get_bool_default(settings, "event_match_include_notes", true);
+    var include_emb_clusters = scoring_struct_get_bool_default(settings, "event_match_include_emb_clusters", true);
+    var requires_beat_start = scoring_struct_get_bool_default(settings, "event_match_note_requires_beat_start", false);
+    var skip_grace_led = scoring_struct_get_bool_default(settings, "event_match_skip_grace_led_notes", false);
+    var grace_anchor_lead_ms = scoring_struct_get_real_default(settings, "grace_anchor_lead_ms", 250);
+
+    var cluster_index = scoring_event_match_build_phrase_cluster_index(_planned_spans);
+    if (is_struct(cluster_index) && variable_struct_exists(cluster_index, "clusters") && is_array(variable_struct_get(cluster_index, "clusters"))) {
+        out.phrase_clusters = variable_struct_get(cluster_index, "clusters");
+    }
+
+    for (var i = 0; i < array_length(_planned_spans); i++) {
+        var span = _planned_spans[i];
+        if (!is_struct(span)) continue;
+
+        var is_emb = scoring_struct_get_bool_default(span, "is_embellishment", false);
+        if (is_emb && !include_emb_clusters) continue;
+        if (!is_emb && !include_notes) continue;
+
+        if (!is_emb && requires_beat_start && !scoring_on_beat_target_is_beat_start(span)) continue;
+        if (!is_emb && skip_grace_led && scoring_on_beat_note_has_preceding_embellishment(_planned_spans, i, grace_anchor_lead_ms)) continue;
+
+        var i_key = string(i);
+        var cluster_map = (is_struct(cluster_index) && variable_struct_exists(cluster_index, "by_span_index") && is_struct(variable_struct_get(cluster_index, "by_span_index")))
+            ? variable_struct_get(cluster_index, "by_span_index")
+            : {};
+        var cluster_meta = variable_struct_exists(cluster_map, i_key) ? cluster_map[$ i_key] : undefined;
+        var phrase_cluster_id = "";
+        var phrase_cluster_index = -1;
+        var slot_role = is_emb ? "embellishment_unit" : "standalone_note";
+        if (is_struct(cluster_meta)) {
+            phrase_cluster_id = scoring_struct_get_string_default(cluster_meta, "cluster_id", "");
+            phrase_cluster_index = scoring_struct_get_int_default(cluster_meta, "cluster_index", -1);
+            slot_role = scoring_struct_get_string_default(cluster_meta, "slot_role", slot_role);
+        }
+
+        var source_kind = is_emb ? "embellishment_unit" : "note";
+        var source_global_span_index = scoring_struct_get_int_default(span, "global_span_index", i);
+        array_push(out.targets, {
+            measure: scoring_struct_get_int_default(span, "measure", -1),
+            expected_ms: scoring_struct_require_real(span, "start_ms", "scoring_event_match_compile_slots slot index " + string(i)),
+            tempo_bpm: scoring_struct_get_real_default(span, "tempo", 0),
+            lane_idx: scoring_struct_get_int_default(span, "lane_idx", -1),
+            source_event_id: scoring_struct_get_string_default(span, "event_id", ""),
+            source_kind: source_kind,
+            cluster_index: phrase_cluster_index,
+            phrase_cluster_id: phrase_cluster_id,
+            gesture_id: phrase_cluster_id,
+            gesture_role: slot_role,
+            slot_role: slot_role,
+            source_span_index: i,
+            source_global_span_index: source_global_span_index
+        });
+    }
+
+    if (array_length(out.targets) > 1) {
+        array_sort(out.targets, function(_a, _b) {
+            var dt = real(_a.expected_ms ?? 0) - real(_b.expected_ms ?? 0);
+            if (abs(dt) > 0.0001) return dt;
+            return floor(real(_a.source_global_span_index ?? floor(real(_a.source_span_index ?? -1))))
+                - floor(real(_b.source_global_span_index ?? floor(real(_b.source_span_index ?? -1))));
+        });
+    }
+
+    return out;
+}
+
+/// @function scoring_event_match_collect_targets(_planned_spans, _settings)
+/// @description Compatibility wrapper returning canonical matcher slots compiled by scoring_event_match_compile_slots.
+/// @param {array} _planned_spans Planned span array
+/// @param {struct} _settings Event matcher settings
+/// @returns {array} Sorted target structs {measure,expected_ms,lane_idx,source_event_id,source_kind,cluster_index}
+function scoring_event_match_collect_targets(_planned_spans, _settings) {
+    var compiled = scoring_event_match_compile_slots(_planned_spans, _settings);
+    if (!is_struct(compiled) || !variable_struct_exists(compiled, "targets") || !is_array(variable_struct_get(compiled, "targets"))) return [];
+    return variable_struct_get(compiled, "targets");
+}
+
+/// @function scoring_event_match_classify_pair(_target, _player, _settings)
+/// @description Classify a target-player candidate pair for plausibility and envelope tagging.
+/// @param {struct} _target Target struct
+/// @param {struct} _player Player onset struct
+/// @param {struct} _settings Matcher settings
+/// @returns {struct} Pair classification {pitch_plausible,duration_plausible,is_noise,pitch_delta,envelope_class}
+function scoring_event_match_classify_pair(_target, _player, _settings) {
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var t_lane_val = floor(real(_target.lane_idx ?? -1));
+    var p_lane_val = floor(real(_player.lane_idx ?? -1));
+    var p_dur_ms_val = max(0, real(_player.dur_ms ?? 0));
+    var noise_floor = max(1, real(settings.event_match_noise_floor_ms ?? 25));
+    var grace_override = variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 30;
+    var source_kind = string(_target.source_kind ?? "note");
+    var is_embellishment_unit = (source_kind == "embellishment_unit" || source_kind == "emb_cluster");
+
+    var pitch_delta_val = (t_lane_val >= 0 && p_lane_val >= 0) ? abs(p_lane_val - t_lane_val) : 0;
+    var pitch_plausible_val = (t_lane_val < 0 || p_lane_val < 0 || pitch_delta_val == 0);
+
+    var is_noise_val = (p_dur_ms_val > 0 && p_dur_ms_val < noise_floor);
+    var emb_dur_cap = max(noise_floor, grace_override * 3);
+    var duration_plausible_val = !is_noise_val && (!is_embellishment_unit || p_dur_ms_val <= emb_dur_cap);
+
+    var envelope_class_val = "sustain";
+    if (is_noise_val) {
+        envelope_class_val = "noise";
+    } else if (is_embellishment_unit) {
+        envelope_class_val = (p_dur_ms_val <= grace_override * 1.6) ? "embellishment_compact" : "embellishment_stretched";
+    } else {
+        envelope_class_val = (p_dur_ms_val <= grace_override * 2) ? "attack" : "sustain";
+    }
+
+    return {
+        pitch_plausible: pitch_plausible_val,
+        duration_plausible: duration_plausible_val,
+        is_noise: is_noise_val,
+        pitch_delta: pitch_delta_val,
+        envelope_class: envelope_class_val
+    };
+}
+
+/// @function scoring_event_match_pair_cost(_target, _player, _settings, _interval_owner_idx, _target_index)
+/// @description Compute alignment cost for one target-player pair used by dynamic-programming matcher.
+/// @param {struct} _target Target struct
+/// @param {struct} _player Player onset struct
+/// @param {struct} _settings Matcher settings
+/// @param {real} _interval_owner_idx Interval owner index for player onset or -1
+/// @param {real} _target_index Candidate target index
+/// @returns {real} Pair cost (large number = disallowed pair)
+function scoring_event_match_pair_cost(_target, _player, _settings, _interval_owner_idx, _target_index) {
+    if (!is_struct(_target) || !is_struct(_player)) return 1000000000;
+
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var max_delta_ms = settings.event_match_max_delta_ms;
+    var lane_penalty = settings.event_match_lane_mismatch_penalty;
+    var prior_penalty = settings.event_match_interval_prior_penalty;
+
+    var t_ms = scoring_struct_get_real_default(_target, "expected_ms", 0);
+    var p_ms = scoring_struct_get_real_default(_player, "start_ms", 0);
+    var abs_delta = abs(p_ms - t_ms);
+    var target_role = scoring_struct_get_string_default(_target, "source_kind", "note");
+    var player_role = scoring_struct_get_string_default(_player, "inferred_role", "note");
+    
+    // Role-first feasibility gate: grace/embellishment cannot match melody notes
+    var target_is_melody = (target_role == "note");
+    var player_is_grace = (player_role == "embellishment_unit");
+    if (target_is_melody && player_is_grace) {
+        return 1000000000;  // Reject completely
+    }
+    
+    var neighborhood_ms = scoring_event_match_target_neighborhood_ms(_target, settings);
+    // Apply grace neighborhood multiplier for embellishment targets
+    if (target_role == "embellishment_unit" || target_role == "emb_cluster") {
+        neighborhood_ms *= settings.event_match_grace_neighborhood_multiplier;
+    }
+    if (abs_delta > neighborhood_ms) return 1000000000;
+
+    var cost = abs_delta;
+    // Apply grace early tolerance: reduce timing cost for grace notes played early
+    if (player_is_grace && p_ms < t_ms) {
+        cost = abs_delta * settings.event_match_grace_timing_cost_multiplier;
+    }
+    var t_lane = scoring_struct_get_int_default(_target, "lane_idx", -1);
+    var p_lane = scoring_struct_get_int_default(_player, "lane_idx", -1);
+    if (t_lane >= 0 && p_lane >= 0 && t_lane != p_lane) {
+        cost += lane_penalty;
+    }
+
+    var owner_idx = floor(real(_interval_owner_idx));
+    if (owner_idx >= 0 && owner_idx != floor(real(_target_index))) {
+        cost += prior_penalty;
+    }
+
+    // Role mismatch penalty (increased to 250 default)
+    if (target_role != player_role) {
+        var role_penalty = settings.event_match_role_mismatch_penalty;
+        // Melody protection: embellishments trying to match melody get 3× penalty
+        if (target_is_melody && player_is_grace) {
+            role_penalty *= settings.event_match_melody_protection_multiplier;
+        }
+        cost += role_penalty;
+    }
+
+    var pair_eval = scoring_event_match_classify_pair(_target, _player, settings);
+    if (is_struct(pair_eval)) {
+        if (!bool(pair_eval.pitch_plausible ?? true)) {
+            cost += settings.event_match_pitch_implausible_penalty;
+        }
+        if (!bool(pair_eval.duration_plausible ?? true)) {
+            cost += settings.event_match_duration_implausible_penalty;
+        }
+        if (bool(pair_eval.is_noise ?? false)) {
+            cost += settings.event_match_noise_pair_penalty;
+        }
+    }
+
+    // Grace-order penalty: if target is a target melody note and player onset falls in the
+    // pre-target grace window, add a configurable penalty to favour embellishment assignment.
+    var grace_order_penalty = settings.event_match_grace_order_penalty;
+    if (grace_order_penalty > 0) {
+        var t_role = string(variable_struct_exists(_target, "gesture_role") ? variable_struct_get(_target, "gesture_role") : "standalone");
+        if ((t_role == "target_melody_note" || t_role == "anchor") && p_ms < (t_ms - settings.grace_anchor_lead_ms * 0.25)) {
+            cost += grace_order_penalty;
+        }
+    }
+
+    return cost;
+}
+
+/// @function scoring_event_match_build_assignment(_target, _player, _settings, _target_index, _player_match_index, _pair_cost, _delta_ms)
+/// @description Build a normalized assignment row used by both anchor reservation and DP matching.
+/// @param {struct} _target Target struct
+/// @param {struct} _player Player onset struct
+/// @param {struct} _settings Matcher settings
+/// @param {real} _target_index Global target index
+/// @param {real} _player_match_index Global player-match index
+/// @param {real} _pair_cost Pair cost
+/// @param {real} _delta_ms Player minus target delta ms
+/// @returns {struct} Assignment row
+function scoring_event_match_build_assignment(_target, _player, _settings, _target_index, _player_match_index, _pair_cost, _delta_ms) {
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var target = is_struct(_target) ? _target : {};
+    var player = is_struct(_player) ? _player : {};
+    var delta_ms = real(_delta_ms);
+    var abs_delta_ms = abs(delta_ms);
+    var pair_cost_val = real(_pair_cost);
+    var t_lane_val = scoring_struct_get_int_default(target, "lane_idx", -1);
+    var p_lane_val = scoring_struct_get_int_default(player, "lane_idx", -1);
+    var p_dur_ms_val = scoring_struct_get_real_default(player, "dur_ms", 0);
+    var src_kind_val = scoring_struct_get_string_default(target, "source_kind", "note");
+    var target_source_span_index_val = scoring_struct_get_int_default(target, "source_span_index", -1);
+    var target_source_global_span_index_val = scoring_struct_get_int_default(target, "source_global_span_index", target_source_span_index_val);
+    var pair_eval = scoring_event_match_classify_pair(target, player, settings);
+    var pitch_plausible_val = bool(is_struct(pair_eval) ? scoring_struct_get_bool_default(pair_eval, "pitch_plausible", true) : true);
+    var is_noise_val = bool(is_struct(pair_eval) ? scoring_struct_get_bool_default(pair_eval, "is_noise", false) : false);
+    var duration_plausible_val = bool(is_struct(pair_eval) ? scoring_struct_get_bool_default(pair_eval, "duration_plausible", true) : true);
+    var envelope_class_val = string(is_struct(pair_eval) ? scoring_struct_get_string_default(pair_eval, "envelope_class", "unknown") : "unknown");
+    var confidence_val = max(0, 1 - (pair_cost_val / max(1, scoring_struct_get_real_default(settings, "event_match_skip_target_penalty", 120))));
+    var pitch_delta_val = floor(real(is_struct(pair_eval) ? scoring_struct_get_real_default(pair_eval, "pitch_delta", 0) : 0));
+
+    return {
+        target_index: floor(real(_target_index)),
+        player_match_index: floor(real(_player_match_index)),
+        player_span_index: scoring_struct_get_int_default(player, "player_index", -1),
+        target_event_id: scoring_struct_get_string_default(target, "source_event_id", ""),
+        target_source_span_index: target_source_span_index_val,
+        target_source_global_span_index: target_source_global_span_index_val,
+        source_kind: src_kind_val,
+        measure: scoring_struct_get_int_default(target, "measure", -1),
+        target_expected_ms: scoring_struct_get_real_default(target, "expected_ms", 0),
+        target_lane_idx: t_lane_val,
+        delta_ms: delta_ms,
+        abs_delta_ms: abs_delta_ms,
+        pair_cost: pair_cost_val,
+        player_onset_ms: scoring_struct_get_real_default(player, "start_ms", 0),
+        player_dur_ms: p_dur_ms_val,
+        player_lane_idx: p_lane_val,
+        confidence: confidence_val,
+        pitch_plausible: pitch_plausible_val,
+        duration_plausible: duration_plausible_val,
+        is_noise: is_noise_val,
+        is_unassigned: false,
+        assignment_margin: 0,
+        window_drift_ms: delta_ms,
+        pitch_delta: pitch_delta_val,
+        envelope_class: envelope_class_val
+    };
+}
+
+/// @function scoring_event_match_collect_measure_keys(_targets)
+/// @description Collect sorted unique measure keys present in compiled matcher targets.
+/// @param {array} _targets Target rows
+/// @returns {array} Sorted unique measure numbers
+function scoring_event_match_collect_measure_keys(_targets) {
+    var out = [];
+    var seen = {};
+    if (!is_array(_targets)) return out;
+
+    for (var i = 0; i < array_length(_targets); i++) {
+        var target = _targets[i];
+        if (!is_struct(target)) continue;
+        var measure_num = scoring_struct_get_int_default(target, "measure", -1);
+        var mkey = string(measure_num);
+        if (variable_struct_exists(seen, mkey)) continue;
+        seen[$ mkey] = true;
+        array_push(out, measure_num);
+    }
+
+    if (array_length(out) > 1) {
+        array_sort(out, function(_a, _b) {
+            return floor(real(_a)) - floor(real(_b));
+        });
+    }
+    return out;
+}
+
+/// @function scoring_event_match_find_anchor_candidate(_target, _players, _candidate_player_indices, _player_claimed, _settings)
+/// @description Choose the best unclaimed player onset for a note target, strongly preferring exact-lane anchors.
+/// @param {struct} _target Target row
+/// @param {array} _players Player rows
+/// @param {array} _candidate_player_indices Candidate global player indices
+/// @param {array} _player_claimed Claimed-player bool array
+/// @param {struct} _settings Matcher settings
+/// @returns {struct|undefined} Candidate struct {player_index,pair_cost,delta_ms}
+function scoring_event_match_find_anchor_candidate(_target, _players, _candidate_player_indices, _player_claimed, _settings) {
+    if (!is_struct(_target) || !is_array(_players) || !is_array(_candidate_player_indices)) return undefined;
+
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var target_lane = scoring_struct_get_int_default(_target, "lane_idx", -1);
+    var exact_candidates = [];
+    var fallback_candidates = [];
+
+    for (var i = 0; i < array_length(_candidate_player_indices); i++) {
+        var player_index = floor(real(_candidate_player_indices[i]));
+        if (player_index < 0 || player_index >= array_length(_players)) continue;
+        if (is_array(_player_claimed) && bool(_player_claimed[player_index])) continue;
+
+        var player = _players[player_index];
+        if (!is_struct(player)) continue;
+
+        var pair_eval = scoring_event_match_classify_pair(_target, player, settings);
+        if (is_struct(pair_eval) && scoring_struct_get_bool_default(pair_eval, "is_noise", false)) continue;
+
+        var pair_cost = scoring_event_match_pair_cost(_target, player, settings, -1, -1);
+        if (pair_cost >= 1000000000) continue;
+
+        var player_lane = scoring_struct_get_int_default(player, "lane_idx", -1);
+        var lane_exact = (target_lane < 0 || player_lane < 0 || player_lane == target_lane);
+        var delta_ms = scoring_struct_get_real_default(player, "start_ms", 0) - scoring_struct_get_real_default(_target, "expected_ms", 0);
+        var anchor_cost = pair_cost;
+        if (lane_exact) {
+            anchor_cost = max(0, anchor_cost - scoring_struct_get_real_default(settings, "event_match_anchor_lane_bonus", 35));
+            array_push(exact_candidates, { player_index: player_index, pair_cost: anchor_cost, delta_ms: delta_ms });
+        } else {
+            anchor_cost += scoring_struct_get_real_default(settings, "event_match_anchor_mismatch_penalty", 120);
+            array_push(fallback_candidates, { player_index: player_index, pair_cost: anchor_cost, delta_ms: delta_ms });
+        }
+    }
+
+    var source = array_length(exact_candidates) > 0 ? exact_candidates : fallback_candidates;
+    if (array_length(source) <= 0) return undefined;
+
+    array_sort(source, function(_a, _b) {
+        var cost_delta = real(_a.pair_cost ?? 0) - real(_b.pair_cost ?? 0);
+        if (abs(cost_delta) > 0.0001) return cost_delta;
+        return abs(real(_a.delta_ms ?? 0)) - abs(real(_b.delta_ms ?? 0));
+    });
+    return source[0];
+}
+
+/// @function scoring_event_match_reclassify_grace_onsets(_targets, _players, _settings)
+/// @description Reclassify player onsets from "note" to "embellishment_unit" if they sit within grace_anchor_lead_ms
+/// before a planned grace target in the same lane. This uses certain information (planned grace targets from ABC)
+/// to resolve uncertain information (player role inference from MIDI duration).
+/// @param {array} _targets Sorted target structs with source_kind ("note" or "embellishment_unit")
+/// @param {array} _players Sorted player onsets to potentially reclassify (mutated in-place)
+/// @param {struct} _settings Matcher settings
+/// @reads grace_anchor_lead_ms
+/// @writes inferred_role on player onsets
+/// @callers scoring_event_match_assign_targets
+function scoring_event_match_reclassify_grace_onsets(_targets, _players, _settings) {
+    if (!is_array(_targets) || !is_array(_players)) return;
+    if (array_length(_targets) == 0 || array_length(_players) == 0) return;
+
+    var settings = scoring_event_match_normalize_settings(_settings);
+    var grace_lead_ms = scoring_struct_get_real_default(settings, "grace_anchor_lead_ms", 250);
+    if (grace_lead_ms <= 0) return;
+
+    var players_n = array_length(_players);
+    var targets_n = array_length(_targets);
+
+    for (var player_i = 0; player_i < players_n; player_i += 1) {
+        var p = _players[player_i];
+        if (!is_struct(p)) continue;
+        if (string(p.inferred_role ?? "note") != "note") continue;
+
+        var p_onset_ms = real(p.start_ms ?? 0);
+        var p_lane = floor(real(p.lane_idx ?? 0));
+
+        for (var ti = 0; ti < targets_n; ti += 1) {
+            var t = _targets[ti];
+            if (!is_struct(t)) continue;
+            if (string(t.source_kind ?? "note") != "embellishment_unit") continue;
+            if (floor(real(t.lane_idx ?? 0)) != p_lane) continue;
+
+            var lead_distance = real(t.expected_ms ?? 0) - p_onset_ms;
+            if (lead_distance > 0 && lead_distance <= grace_lead_ms) {
+                p.inferred_role = "embellishment_unit";
+                break;
+            }
+        }
+    }
+}
+
+/// @function scoring_event_match_assign_targets_dp(_targets, _players, _settings)
+/// @description Internal monotonic DP assignment over already-normalized target and player rows.
+/// @param {array} _targets Sorted target structs
+/// @param {array} _players Sorted player rows
+/// @param {struct} _settings Matcher settings
+/// @returns {struct} Match result over the provided local rows
+function scoring_event_match_assign_targets_dp(_targets, _players, _settings) {
+    var targets = is_array(_targets) ? _targets : [];
+    var players = is_array(_players) ? _players : [];
+    var settings = scoring_event_match_normalize_settings(_settings);
+
+    var n_targets = array_length(targets);
+    var n_players = array_length(players);
+    var cols = n_players + 1;
+
+    var skip_target_penalty = scoring_struct_get_real_default(settings, "event_match_skip_target_penalty", 120);
+    var skip_player_penalty = scoring_struct_get_real_default(settings, "event_match_skip_player_penalty", 80);
+    var lead_in_ms = scoring_struct_get_real_default(settings, "event_match_lead_in_ms", 80);
+    var tail_out_ms = scoring_struct_get_real_default(settings, "event_match_tail_out_ms", 120);
+
+    var intervals = scoring_on_beat_build_intervals(targets, lead_in_ms, tail_out_ms);
+    var owner_by_player = array_create(n_players, -1);
+    for (var pidx = 0; pidx < n_players; pidx++) {
+        owner_by_player[pidx] = scoring_on_beat_find_interval_index(intervals, scoring_struct_get_real_default(players[pidx], "start_ms", 0));
+    }
+
+    var total_cells = (n_targets + 1) * cols;
+    var dp = array_create(total_cells, 1000000000);
+    var prev = array_create(total_cells, undefined);
+
+    dp[0] = 0;
+
+    for (var i0 = 1; i0 <= n_targets; i0++) {
+        var idx_i0 = i0 * cols;
+        var idx_im1 = (i0 - 1) * cols;
+        dp[idx_i0] = dp[idx_im1] + skip_target_penalty;
+        prev[idx_i0] = { i: i0 - 1, j: 0, op: "skip_target" };
+    }
+    for (var j0 = 1; j0 <= n_players; j0++) {
+        dp[j0] = dp[j0 - 1] + skip_player_penalty;
+        prev[j0] = { i: 0, j: j0 - 1, op: "skip_player" };
+    }
+
+    for (var i = 1; i <= n_targets; i++) {
+        var t = targets[i - 1];
+        for (var j = 1; j <= n_players; j++) {
+            var index = i * cols + j;
+            var best_cost = 1000000000;
+            var best_prev = undefined;
+
+            var c_skip_t = dp[(i - 1) * cols + j] + skip_target_penalty;
+            if (c_skip_t < best_cost) {
+                best_cost = c_skip_t;
+                best_prev = { i: i - 1, j: j, op: "skip_target" };
+            }
+
+            var c_skip_p = dp[i * cols + (j - 1)] + skip_player_penalty;
+            if (c_skip_p < best_cost) {
+                best_cost = c_skip_p;
+                best_prev = { i: i, j: j - 1, op: "skip_player" };
+            }
+
+            var p = players[j - 1];
+            var pair_cost = scoring_event_match_pair_cost(t, p, settings, owner_by_player[j - 1], i - 1);
+            if (pair_cost < 1000000000) {
+                var c_match = dp[(i - 1) * cols + (j - 1)] + pair_cost;
+                if (c_match < best_cost) {
+                    best_cost = c_match;
+                    best_prev = {
+                        i: i - 1,
+                        j: j - 1,
+                        op: "match",
+                        pair_cost: pair_cost,
+                        delta_ms: scoring_struct_get_real_default(p, "start_ms", 0) - scoring_struct_get_real_default(t, "expected_ms", 0)
+                    };
+                }
+            }
+
+            dp[index] = best_cost;
+            prev[index] = best_prev;
+        }
+    }
+
+    var assignments_rev = [];
+    var unassigned_targets_rev = [];
+    var unassigned_players_rev = [];
+    var bi = n_targets;
+    var bj = n_players;
+
+    while (bi > 0 || bj > 0) {
+        var bidx = bi * cols + bj;
+        var step = prev[bidx];
+        if (!is_struct(step)) break;
+
+        var op = scoring_struct_get_string_default(step, "op", "");
+        if (op == "match") {
+            var t_idx = bi - 1;
+            var p_idx = bj - 1;
+            var target = targets[t_idx];
+            var player = players[p_idx];
+            array_push(assignments_rev, scoring_event_match_build_assignment(
+                target,
+                player,
+                settings,
+                t_idx,
+                p_idx,
+                scoring_struct_get_real_default(step, "pair_cost", 0),
+                scoring_struct_get_real_default(step, "delta_ms", 0)
+            ));
+        } else if (op == "skip_target") {
+            array_push(unassigned_targets_rev, bi - 1);
+        } else if (op == "skip_player") {
+            array_push(unassigned_players_rev, bj - 1);
+        }
+
+        bi = floor(real(step.i ?? 0));
+        bj = floor(real(step.j ?? 0));
+    }
+
+    var assignments = [];
+    for (var ar = array_length(assignments_rev) - 1; ar >= 0; ar--) array_push(assignments, assignments_rev[ar]);
+    var unassigned_targets = [];
+    for (var ur = array_length(unassigned_targets_rev) - 1; ur >= 0; ur--) array_push(unassigned_targets, unassigned_targets_rev[ur]);
+    var unassigned_players = [];
+    for (var pr = array_length(unassigned_players_rev) - 1; pr >= 0; pr--) array_push(unassigned_players, unassigned_players_rev[pr]);
+
+    return {
+        targets: targets,
+        players: players,
+        intervals: intervals,
+        assignments: assignments,
+        unassigned_targets: unassigned_targets,
+        unassigned_players: unassigned_players,
+        total_cost: dp[n_targets * cols + n_players],
+        target_count: n_targets,
+        player_count: n_players,
+        matched_count: array_length(assignments)
+    };
+}
+
+/// @function scoring_event_match_assign_targets(_targets, _player_spans, _settings)
+/// @description Assign player onsets to targets using a measure-windowed, target-first matcher with local DP fallback.
+/// @param {array} _targets Sorted target structs
+/// @param {array} _player_spans Raw player span array
+/// @param {struct} _settings Matcher settings
+/// @returns {struct} Match result {targets,players,assignments,unassigned_targets,unassigned_players,total_cost,...}
+function scoring_event_match_assign_targets(_targets, _player_spans, _settings) {
+    var targets = is_array(_targets) ? _targets : [];
+    var players = scoring_event_match_collect_player_onsets(_player_spans);
+    var settings = scoring_event_match_normalize_settings(_settings);
+    
+    // Preprocess: reclassify player onsets from "note" to "embellishment_unit" if they're positioned
+    // within grace_anchor_lead_ms before planned grace targets. This uses the certain information
+    // (planned grace targets from ABC) to resolve the uncertain player role inference.
+    scoring_event_match_reclassify_grace_onsets(targets, players, settings);
+    
+    // Full-problem monotonic DP is the authoritative matcher.
+    // This avoids anchor pre-commit artifacts and keeps the global objective intact.
+    return scoring_event_match_assign_targets_dp(targets, players, settings);
+}
+
+/// @function scoring_build_event_match_summary(_export_info, _judge_id, _apply_to_runtime)
+/// @description Legacy compatibility wrapper for retired event-match judge; returns overlap summary.
+/// @param {struct|undefined} [_export_info] Optional export info context
+/// @param {string} [_judge_id] Judge id (default "event_match_core")
+/// @param {bool} [_apply_to_runtime] True to promote score to runtime maps
+/// @returns {struct} Judge summary struct
+function scoring_build_event_match_summary(_export_info = undefined, _judge_id = "event_match_core", _apply_to_runtime = true) {
+    // Batch D archive path: non-overlap judges are retired from production.
+    return scoring_build_ms_overlap_summary(_export_info, "ms_overlap", undefined, _apply_to_runtime);
+
+    var tune_id = "";
+    var bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
+    var swing = variable_global_exists("swing_mult") ? string(global.swing_mult) : "";
+    if (is_struct(_export_info)) {
+        if (variable_struct_exists(_export_info, "tune_id")) tune_id = string(variable_struct_get(_export_info, "tune_id"));
+        if (variable_struct_exists(_export_info, "bpm")) bpm = real(variable_struct_get(_export_info, "bpm"));
+        if (variable_struct_exists(_export_info, "swing")) swing = string(variable_struct_get(_export_info, "swing"));
+    }
+
+    var player_key = scoring_get_player_id();
+    var part_key = scoring_get_selected_part_key();
+    var selected_tune_channel = scoring_get_selected_tune_channel();
+
+    var planned_spans = [];
+    var player_spans = [];
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        if (variable_struct_exists(global.timeline_state, "planned_spans") && is_array(global.timeline_state.planned_spans)) {
+            planned_spans = global.timeline_state.planned_spans;
+        }
+        if (variable_struct_exists(global.timeline_state, "review_full_trace") && is_array(global.timeline_state.review_full_trace)
+            && array_length(global.timeline_state.review_full_trace) > 0) {
+            player_spans = global.timeline_state.review_full_trace;
+        } else if (variable_struct_exists(global.timeline_state, "player_in") && is_array(global.timeline_state.player_in)) {
+            player_spans = global.timeline_state.player_in;
+        }
+    }
+
+    if (selected_tune_channel >= 0 && is_array(planned_spans)) {
+        var filtered_planned = [];
+        for (var pidx = 0; pidx < array_length(planned_spans); pidx++) {
+            var pspan = planned_spans[pidx];
+            if (!is_struct(pspan)) continue;
+            var pchan = floor(real(pspan.channel ?? -1));
+            if (pchan != selected_tune_channel) continue;
+            pspan.global_span_index = pidx;
+            array_push(filtered_planned, pspan);
+        }
+        planned_spans = filtered_planned;
+    } else if (is_array(planned_spans)) {
+        for (var pidx2 = 0; pidx2 < array_length(planned_spans); pidx2++) {
+            var pspan2 = planned_spans[pidx2];
+            if (!is_struct(pspan2)) continue;
+            if (!variable_struct_exists(pspan2, "global_span_index")) {
+                pspan2.global_span_index = pidx2;
+            }
+        }
+    }
+
+    var settings = scoring_event_match_normalize_settings(scoring_judge_get_effective_settings(_judge_id));
+
+    var compiled = scoring_event_match_compile_slots(planned_spans, settings);
+    var targets = is_struct(compiled) && is_array(compiled.targets) ? compiled.targets : [];
+    var phrase_clusters = is_struct(compiled) && is_array(compiled.phrase_clusters) ? compiled.phrase_clusters : [];
+    var match_result = scoring_event_match_assign_targets(targets, player_spans, settings);
+    var assignments = is_struct(match_result) && is_array(match_result.assignments) ? match_result.assignments : [];
+
+    var by_target_index = {};
+    var by_target_event = {};
+    var by_player_span = {};
+    for (var ai = 0; ai < array_length(assignments); ai++) {
+        var a = assignments[ai];
+        if (!is_struct(a)) continue;
+        var t_idx_key = string(floor(real(a.target_index ?? -1)));
+        by_target_index[$ t_idx_key] = a;
+        var teid = string(a.target_event_id ?? "");
+        if (teid != "") by_target_event[$ teid] = a;
+        var p_span_key = string(floor(real(a.player_span_index ?? -1)));
+        by_player_span[$ p_span_key] = a;
+    }
+
+    var max_delta = settings.event_match_max_delta_ms;
+    var measure_scores_accum = {};
+    var total_targets = 0;
+    var matched_targets = 0;
+    var sum_score = 0;
+    var sum_abs_delta = 0;
+    var sum_signed_delta = 0;
+
+    for (var ti = 0; ti < array_length(targets); ti++) {
+        var t = targets[ti];
+        if (!is_struct(t)) continue;
+
+        var t_key = string(ti);
+        var assn = variable_struct_exists(by_target_index, t_key) ? by_target_index[$ t_key] : undefined;
+        var target_score = 0;
+        var was_match = false;
+        var delta = 0;
+
+        if (is_struct(assn)) {
+            delta = variable_struct_exists(assn, "delta_ms") ? real(variable_struct_get(assn, "delta_ms")) : 0;
+            var abs_delta = abs(delta);
+            target_score = clamp(100 - ((abs_delta / max_delta) * 100), 0, 100);
+            was_match = true;
+        }
+
+        total_targets += 1;
+        sum_score += target_score;
+        if (was_match) {
+            matched_targets += 1;
+            sum_abs_delta += abs(delta);
+            sum_signed_delta += delta;
+        }
+
+        var t_measure = floor(real(t.measure ?? -1));
+        var mkey = string(t_measure);
+        if (!variable_struct_exists(measure_scores_accum, mkey)) {
+            measure_scores_accum[$ mkey] = {
+                measure: t_measure,
+                part: 1,
+                start_ms: real(t.expected_ms ?? 0),
+                end_ms: real(t.expected_ms ?? 0),
+                total_ms: 1,
+                matching_ms: 0,
+                mismatch_ms: 0,
+                expected_active_ms: 1,
+                player_active_ms: 0,
+                score_sum: 0,
+                target_count: 0,
+                matched_count: 0,
+                miss_count: 0,
+                sum_abs_delta_ms: 0,
+                sum_signed_delta_ms: 0,
+                score: 0
+            };
+        }
+
+        var acc = measure_scores_accum[$ mkey];
+        acc.score_sum += target_score;
+        acc.target_count += 1;
+        if (was_match) {
+            acc.matched_count += 1;
+            acc.sum_abs_delta_ms += abs(delta);
+            acc.sum_signed_delta_ms += delta;
+        } else {
+            acc.miss_count += 1;
+        }
+        acc.score = (acc.target_count > 0) ? (acc.score_sum / acc.target_count) : 0;
+        acc.matching_ms = acc.matched_count;
+        acc.mismatch_ms = acc.target_count - acc.matched_count;
+        acc.player_active_ms = acc.matched_count;
+        acc.end_ms = max(acc.end_ms, real(t.expected_ms ?? 0));
+        measure_scores_accum[$ mkey] = acc;
+    }
+
+    var measure_scores = [];
+    var mkeys = struct_get_names(measure_scores_accum);
+    for (var mi = 0; mi < array_length(mkeys); mi++) {
+        var mk = mkeys[mi];
+        var measure_row = measure_scores_accum[$ mk];
+        if (!is_struct(measure_row)) continue;
+        if (floor(real(measure_row.measure ?? -1)) < 1) continue;
+        array_push(measure_scores, measure_row);
+    }
+    if (array_length(measure_scores) > 1) {
+        array_sort(measure_scores, function(_a, _b) {
+            return floor(real(_a.measure ?? -1)) - floor(real(_b.measure ?? -1));
+        });
+    }
+
+    var overall = (total_targets > 0) ? (sum_score / total_targets) : 0;
+    var mean_abs_delta = (matched_targets > 0) ? (sum_abs_delta / matched_targets) : 0;
+    var mean_signed_delta = (matched_targets > 0) ? (sum_signed_delta / matched_targets) : 0;
+    var extra_player_count = is_struct(match_result) ? array_length(match_result.unassigned_players ?? []) : 0;
+    var target_mode = bool(settings.event_match_include_notes) && bool(settings.event_match_include_emb_clusters)
+        ? "notes+phrase_clusters"
+        : (bool(settings.event_match_include_notes) ? "notes_only" : "phrase_clusters_only");
+
+    var raw = {
+        total_ms: total_targets,
+        matching_ms: matched_targets,
+        mismatch_ms: max(0, total_targets - matched_targets),
+        expected_active_ms: total_targets,
+        player_active_ms: matched_targets,
+        match_ratio: (total_targets > 0) ? (matched_targets / total_targets) : 0,
+        target_count: total_targets,
+        matched_count: matched_targets,
+        miss_count: max(0, total_targets - matched_targets),
+        extra_player_count: extra_player_count,
+        mean_abs_delta_ms: mean_abs_delta,
+        mean_signed_delta_ms: mean_signed_delta,
+        hit_rate: (total_targets > 0) ? (matched_targets / total_targets) : 0,
+        judge_mode: "event_match_core",
+        matching_cost: real(match_result.total_cost ?? 0),
+        target_mode: target_mode,
+        phrase_cluster_count: array_length(phrase_clusters),
+        phrase_clusters: phrase_clusters,
+        targets: targets,
+        players: is_struct(match_result) && is_array(match_result.players) ? match_result.players : [],
+        assignments: assignments,
+        assignment_by_target_index: by_target_index,
+        assignment_by_target_event: by_target_event,
+        assignment_by_player_span_index: by_player_span,
+        unassigned_targets: match_result.unassigned_targets ?? [],
+        unassigned_players: match_result.unassigned_players ?? []
+    };
+
+    var summary = {
+        schema_version: 1,
+        judge_id: string(_judge_id),
+        judge_name: scoring_judge_display_name(string(_judge_id)),
+        score_version: "v1",
+        player_id: player_key,
+        tune_id: tune_id,
+        bpm: bpm,
+        swing: swing,
+        part_key: part_key,
+        context_key: scoring_get_context_key(tune_id, player_key, bpm, swing, part_key),
+        selected_judge_id: string(_judge_id),
+        overall_score: overall,
+        measure_scores: measure_scores,
+        raw: raw,
+        score_by_segment: []
+    };
+
+    scoring_apply_run_to_runtime(summary, bool(_apply_to_runtime));
+    return summary;
+}
+
+/// @function scoring_build_note_match_summary(_export_info, _judge_id, _apply_to_runtime)
+/// @description Legacy compatibility wrapper for retired note-match judge; returns overlap summary.
+/// @param {struct|undefined} [_export_info] Optional export info context
+/// @param {string} [_judge_id] Judge id (default "note_match")
+/// @param {bool} [_apply_to_runtime] True to promote score to runtime maps
+/// @returns {struct} Judge summary struct
+function scoring_build_note_match_summary(_export_info = undefined, _judge_id = "note_match", _apply_to_runtime = true) {
+    // Batch D archive path: Note Match is retired from production.
+    return scoring_build_ms_overlap_summary(_export_info, "ms_overlap", undefined, _apply_to_runtime);
+
+    var core_summary = scoring_build_event_match_summary(_export_info, "event_match_core", false);
+    var core_raw = (is_struct(core_summary) && variable_struct_exists(core_summary, "raw") && is_struct(core_summary.raw))
+        ? core_summary.raw
+        : {};
+
+    var targets = is_array(core_raw.targets ?? undefined) ? core_raw.targets : [];
+    var players = is_array(core_raw.players ?? undefined) ? core_raw.players : [];
+    var assignments = is_array(core_raw.assignments ?? undefined) ? core_raw.assignments : [];
+    var by_target_index = is_struct(core_raw.assignment_by_target_index ?? undefined) ? core_raw.assignment_by_target_index : {};
+    var unassigned_players = is_array(core_raw.unassigned_players ?? undefined) ? core_raw.unassigned_players : [];
+
+    var target_count = array_length(targets);
+    var matched_count = array_length(assignments);
+    var player_count = array_length(players);
+    var extra_player_count = array_length(unassigned_players);
+
+    var planned_recall = (target_count > 0) ? (matched_count / target_count) : 0;
+    var player_precision = (player_count > 0) ? (matched_count / player_count) : 0;
+    var combined_f1 = 0;
+    var denom = planned_recall + player_precision;
+    if (denom > 0) {
+        combined_f1 = (2 * planned_recall * player_precision) / denom;
+    }
+    var overall_score = clamp(combined_f1 * 100, 0, 100);
+
+    var measure_map = {};
+    for (var ti = 0; ti < target_count; ti++) {
+        var tgt = targets[ti];
+        if (!is_struct(tgt)) continue;
+        var measure_num = floor(real(tgt.measure ?? -1));
+        if (measure_num < 1) continue;
+        var mkey = string(measure_num);
+        if (!variable_struct_exists(measure_map, mkey)) {
+            measure_map[$ mkey] = {
+                measure: measure_num,
+                part: 1,
+                start_ms: real(tgt.expected_ms ?? 0),
+                end_ms: real(tgt.expected_ms ?? 0),
+                total_ms: 0,
+                matching_ms: 0,
+                mismatch_ms: 0,
+                expected_active_ms: 0,
+                player_active_ms: 0,
+                target_count: 0,
+                matched_count: 0,
+                extra_count: 0,
+                score: 0
+            };
+        }
+
+        var row = measure_map[$ mkey];
+        row.target_count += 1;
+        row.total_ms += 1;
+        row.expected_active_ms += 1;
+        if (variable_struct_exists(by_target_index, string(ti))) {
+            row.matched_count += 1;
+            row.matching_ms += 1;
+            row.player_active_ms += 1;
+        }
+        row.end_ms = max(row.end_ms, real(tgt.expected_ms ?? 0));
+        measure_map[$ mkey] = row;
+    }
+
+    for (var upi = 0; upi < extra_player_count; upi++) {
+        var player_idx = floor(real(unassigned_players[upi]));
+        if (player_idx < 0 || player_idx >= player_count) continue;
+        var p = players[player_idx];
+        if (!is_struct(p)) continue;
+        var pm = floor(real(p.measure ?? -1));
+        if (pm < 1) continue;
+        var pmkey = string(pm);
+        if (!variable_struct_exists(measure_map, pmkey)) {
+            measure_map[$ pmkey] = {
+                measure: pm,
+                part: 1,
+                start_ms: real(p.start_ms ?? 0),
+                end_ms: real(p.start_ms ?? 0),
+                total_ms: 0,
+                matching_ms: 0,
+                mismatch_ms: 0,
+                expected_active_ms: 0,
+                player_active_ms: 0,
+                target_count: 0,
+                matched_count: 0,
+                extra_count: 0,
+                score: 0
+            };
+        }
+        var prow = measure_map[$ pmkey];
+        prow.extra_count += 1;
+        prow.player_active_ms += 1;
+        prow.end_ms = max(prow.end_ms, real(p.start_ms ?? 0));
+        measure_map[$ pmkey] = prow;
+    }
+
+    var measure_scores = [];
+    var mkeys = struct_get_names(measure_map);
+    for (var mi = 0; mi < array_length(mkeys); mi++) {
+        var mk = mkeys[mi];
+        var mr = measure_map[$ mk];
+        if (!is_struct(mr)) continue;
+
+        var recall_m = (mr.target_count > 0) ? (mr.matched_count / mr.target_count) : 0;
+        var precision_m_denom = mr.matched_count + mr.extra_count;
+        var precision_m = (precision_m_denom > 0) ? (mr.matched_count / precision_m_denom) : 0;
+        var f1_m = 0;
+        var f1_m_denom = recall_m + precision_m;
+        if (f1_m_denom > 0) {
+            f1_m = (2 * recall_m * precision_m) / f1_m_denom;
+        }
+
+        mr.mismatch_ms = max(0, mr.target_count - mr.matched_count) + mr.extra_count;
+        mr.score = clamp(f1_m * 100, 0, 100);
+        array_push(measure_scores, mr);
+    }
+
+    if (array_length(measure_scores) > 1) {
+        array_sort(measure_scores, function(_a, _b) {
+            return floor(real(_a.measure ?? -1)) - floor(real(_b.measure ?? -1));
+        });
+    }
+
+    var raw = {
+        total_ms: target_count,
+        matching_ms: matched_count,
+        mismatch_ms: max(0, target_count - matched_count) + extra_player_count,
+        expected_active_ms: target_count,
+        player_active_ms: player_count,
+        target_count: target_count,
+        matched_count: matched_count,
+        miss_count: max(0, target_count - matched_count),
+        extra_player_count: extra_player_count,
+        planned_recall: planned_recall,
+        player_precision: player_precision,
+        planned_notes_matched_pct: planned_recall,
+        player_notes_matched_pct: player_precision,
+        note_match_f1: combined_f1,
+        note_match_avg: combined_f1,
+        hit_rate: planned_recall,
+        mean_abs_delta_ms: real(core_raw.mean_abs_delta_ms ?? 0),
+        mean_signed_delta_ms: real(core_raw.mean_signed_delta_ms ?? 0),
+        matching_cost: real(core_raw.matching_cost ?? 0),
+        target_mode: string(core_raw.target_mode ?? ""),
+        phrase_cluster_count: floor(real(core_raw.phrase_cluster_count ?? 0)),
+        phrase_clusters: is_array(core_raw.phrase_clusters ?? undefined) ? core_raw.phrase_clusters : [],
+        assignments: assignments,
+        assignment_by_target_index: by_target_index,
+        assignment_by_target_event: is_struct(core_raw.assignment_by_target_event ?? undefined) ? core_raw.assignment_by_target_event : {},
+        assignment_by_player_span_index: is_struct(core_raw.assignment_by_player_span_index ?? undefined) ? core_raw.assignment_by_player_span_index : {},
+        unassigned_targets: is_array(core_raw.unassigned_targets ?? undefined) ? core_raw.unassigned_targets : [],
+        unassigned_players: unassigned_players
+    };
+
+    var summary = {
+        schema_version: 1,
+        judge_id: string(_judge_id),
+        judge_name: scoring_judge_display_name(string(_judge_id)),
+        score_version: "v1",
+        player_id: is_struct(core_summary) ? string(core_summary.player_id ?? "") : "",
+        tune_id: is_struct(core_summary) ? string(core_summary.tune_id ?? "") : "",
+        bpm: is_struct(core_summary) ? real(core_summary.bpm ?? 0) : 0,
+        swing: is_struct(core_summary) ? string(core_summary.swing ?? "") : "",
+        part_key: is_struct(core_summary) ? string(core_summary.part_key ?? "all") : "all",
+        context_key: is_struct(core_summary) ? string(core_summary.context_key ?? "") : "",
+        selected_judge_id: string(_judge_id),
+        overall_score: overall_score,
+        measure_scores: measure_scores,
+        raw: raw,
+        score_by_segment: []
+    };
+
+    scoring_apply_run_to_runtime(summary, bool(_apply_to_runtime));
+    return summary;
+}
+
+/// @function scoring_on_beat_delta_to_score(_abs_delta_ms, _settings)
+/// @description Map absolute beat delta to a normalized 0-100 score using configurable ms bands.
+/// @param {real} _abs_delta_ms Absolute delta in ms
+/// @param {struct} _settings On-beat settings
+/// @returns {real} Score 0-100
+function scoring_on_beat_delta_to_score(_abs_delta_ms, _settings) {
+    var d = abs(real(_abs_delta_ms));
+    var a_ms = max(1, real(_settings.onbeat_grade_a_ms ?? 20));
+    var b_ms = max(a_ms, real(_settings.onbeat_grade_b_ms ?? 35));
+    var c_ms = max(b_ms, real(_settings.onbeat_grade_c_ms ?? 50));
+    var d_ms = max(c_ms, real(_settings.onbeat_grade_d_ms ?? 70));
+    var f_ms = max(d_ms, real(_settings.onbeat_miss_ms ?? 100));
+
+    if (d <= a_ms) return 100;
+    if (d <= b_ms) return lerp(90, 100, (b_ms - d) / max(0.0001, b_ms - a_ms));
+    if (d <= c_ms) return lerp(80, 90, (c_ms - d) / max(0.0001, c_ms - b_ms));
+    if (d <= d_ms) return lerp(70, 80, (d_ms - d) / max(0.0001, d_ms - c_ms));
+    if (d <= f_ms) return lerp(60, 70, (f_ms - d) / max(0.0001, f_ms - d_ms));
+    return 0;
+}
+
+/// @function scoring_on_beat_build_intervals(_targets, _lead_in_ms, _tail_out_ms)
+/// @description Build deterministic ownership intervals around target times using midpoint boundaries.
+/// @param {array} _targets Sorted target array with expected_ms
+/// @param {real} _lead_in_ms Start extension before first target
+/// @param {real} _tail_out_ms End extension after last target
+/// @returns {array} Interval array [{start_ms,end_ms,target_index}]
+function scoring_on_beat_build_intervals(_targets, _lead_in_ms, _tail_out_ms) {
+    var intervals = [];
+    if (!is_array(_targets)) return intervals;
+    var n = array_length(_targets);
+    if (n <= 0) return intervals;
+
+    var lead_in_ms = max(0, real(_lead_in_ms));
+    var tail_out_ms = max(0, real(_tail_out_ms));
+
+    for (var i = 0; i < n; i++) {
+        var t = _targets[i];
+        if (!is_struct(t)) continue;
+        var tc = real(t.expected_ms ?? 0);
+
+        var start_ms = 0;
+        var end_ms = 0;
+
+        if (i == 0) {
+            start_ms = tc - lead_in_ms;
+        } else {
+            var t_prev = _targets[i - 1];
+            var tp = is_struct(t_prev) ? real(t_prev.expected_ms ?? tc) : tc;
+            start_ms = (tp + tc) * 0.5;
+        }
+
+        if (i == n - 1) {
+            end_ms = tc + tail_out_ms;
+        } else {
+            var t_next = _targets[i + 1];
+            var tn = is_struct(t_next) ? real(t_next.expected_ms ?? tc) : tc;
+            end_ms = (tc + tn) * 0.5;
+        }
+
+        if (i > 0 && array_length(intervals) > 0) {
+            var prev = intervals[array_length(intervals) - 1];
+            start_ms = max(start_ms, real(prev.end_ms ?? start_ms));
+        }
+        if (end_ms < start_ms) end_ms = start_ms;
+
+        array_push(intervals, {
+            start_ms: start_ms,
+            end_ms: end_ms,
+            target_index: i
+        });
+    }
+
+    return intervals;
+}
+
+/// @function scoring_on_beat_find_interval_index(_intervals, _time_ms)
+/// @description Binary-search interval ownership for a player onset time.
+/// @param {array} _intervals Interval array from scoring_on_beat_build_intervals
+/// @param {real} _time_ms Onset time
+/// @returns {real} Interval index or -1
+function scoring_on_beat_find_interval_index(_intervals, _time_ms) {
+    if (!is_array(_intervals)) return -1;
+    var n = array_length(_intervals);
+    if (n <= 0) return -1;
+
+    var t = real(_time_ms);
+    var lo = 0;
+    var hi = n - 1;
+
+    while (lo <= hi) {
+        var mid = floor((lo + hi) * 0.5);
+        var it = _intervals[mid];
+        if (!is_struct(it)) return -1;
+        var a = real(it.start_ms ?? 0);
+        var b = real(it.end_ms ?? a);
+
+        if (t < a) {
+            hi = mid - 1;
+        } else if (t >= b) {
+            lo = mid + 1;
+        } else {
+            return mid;
+        }
+    }
+
+    return -1;
+}
+
+/// @function scoring_build_on_beat_summary(_export_info, _judge_id, _apply_to_runtime)
+/// @description Legacy compatibility wrapper for retired On Beat judges; returns overlap summary.
+/// @param {struct|undefined} [_export_info] Optional export info context
+/// @param {string} [_judge_id] On Beat judge id
+/// @param {bool} [_apply_to_runtime] True to promote to active runtime score
+/// @returns {struct} Scoring summary struct
+function scoring_build_on_beat_summary(_export_info = undefined, _judge_id = "on_beat", _apply_to_runtime = true) {
+    // Batch D archive path: On Beat judges are retired from production.
+    return scoring_build_ms_overlap_summary(_export_info, "ms_overlap", undefined, _apply_to_runtime);
+
+    var tune_id = "";
+    var bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
+    var swing = variable_global_exists("swing_mult") ? string(global.swing_mult) : "";
+    if (is_struct(_export_info)) {
+        if (variable_struct_exists(_export_info, "tune_id")) tune_id = string(variable_struct_get(_export_info, "tune_id"));
+        if (variable_struct_exists(_export_info, "bpm")) bpm = real(variable_struct_get(_export_info, "bpm"));
+        if (variable_struct_exists(_export_info, "swing")) swing = string(variable_struct_get(_export_info, "swing"));
+    }
+
+    var player_key = scoring_get_player_id();
+    var part_key = scoring_get_selected_part_key();
+    var selected_tune_channel = scoring_get_selected_tune_channel();
+    var judge_id = string(_judge_id);
+    if (judge_id == "") judge_id = "on_beat";
+    var judge_name = scoring_judge_display_name(judge_id);
+
+    var planned_spans = [];
+    var player_spans = [];
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        if (variable_struct_exists(global.timeline_state, "planned_spans") && is_array(global.timeline_state.planned_spans)) {
+            planned_spans = global.timeline_state.planned_spans;
+        }
+        if (variable_struct_exists(global.timeline_state, "review_full_trace") && is_array(global.timeline_state.review_full_trace)
+            && array_length(global.timeline_state.review_full_trace) > 0) {
+            player_spans = global.timeline_state.review_full_trace;
+        } else if (variable_struct_exists(global.timeline_state, "player_in") && is_array(global.timeline_state.player_in)) {
+            player_spans = global.timeline_state.player_in;
+        }
+    }
+
+    if (selected_tune_channel >= 0 && is_array(planned_spans)) {
+        var filtered_planned = [];
+        for (var pidx = 0; pidx < array_length(planned_spans); pidx++) {
+            var pspan = planned_spans[pidx];
+            if (!is_struct(pspan)) continue;
+            var pchan = floor(real(pspan.channel ?? -1));
+            if (pchan != selected_tune_channel) continue;
+            array_push(filtered_planned, pspan);
+        }
+        planned_spans = filtered_planned;
+    }
+
+    var settings = scoring_judge_get_effective_settings(judge_id);
+    if (!is_struct(settings) || array_length(struct_get_names(settings)) <= 0) {
+        settings = {
+            onbeat_center_ms: 20,
+            onbeat_grade_a_ms: 20,
+            onbeat_grade_b_ms: 35,
+            onbeat_grade_c_ms: 50,
+            onbeat_grade_d_ms: 70,
+            onbeat_miss_ms: 100,
+            onbeat_match_window_ms: 140,
+            grace_anchor_lead_ms: 250
+        };
+    }
+
+    var kind = "note";
+    var mode = "on";
+    switch (judge_id) {
+        case "on_beat_note_early": mode = "early"; break;
+        case "on_beat_note_late": mode = "late"; break;
+        case "on_beat_grace": kind = "grace"; break;
+        case "on_beat_grace_early": kind = "grace"; mode = "early"; break;
+        case "on_beat_grace_late": kind = "grace"; mode = "late"; break;
+        case "on_beat": kind = "composite"; break;
+    }
+
+    var targets = [];
+    if (kind == "composite") {
+        var note_targets = scoring_on_beat_collect_targets(planned_spans, "note", settings);
+        var grace_targets = scoring_on_beat_collect_targets(planned_spans, "grace", settings);
+        for (var nti = 0; nti < array_length(note_targets); nti++) array_push(targets, note_targets[nti]);
+        for (var gti = 0; gti < array_length(grace_targets); gti++) array_push(targets, grace_targets[gti]);
+    } else {
+        targets = scoring_on_beat_collect_targets(planned_spans, kind, settings);
+    }
+
+    var center_window = max(0, scoring_struct_get_real_default(settings, "onbeat_center_ms", 20));
+    settings.event_match_max_delta_ms = max(1, scoring_struct_get_real_default(
+        settings,
+        "onbeat_match_window_ms",
+        scoring_struct_get_real_default(settings, "event_match_max_delta_ms", 140)
+    ));
+    settings.event_match_include_notes = true;
+    settings.event_match_include_emb_clusters = false;
+    settings.event_match_note_requires_beat_start = true;
+    settings.event_match_skip_grace_led_notes = false;
+
+    var match_result = scoring_event_match_assign_targets(targets, player_spans, settings);
+    var assignments = is_struct(match_result) && is_array(match_result.assignments) ? match_result.assignments : [];
+    var candidates = array_create(array_length(targets), undefined);
+    for (var ai = 0; ai < array_length(assignments); ai++) {
+        var assn = assignments[ai];
+        if (!is_struct(assn)) continue;
+        var t_idx = floor(real(assn.target_index ?? -1));
+        if (t_idx < 0 || t_idx >= array_length(targets)) continue;
+        candidates[t_idx] = {
+            player_index: floor(real(assn.player_span_index ?? -1)),
+            delta_ms: real(assn.delta_ms ?? 0),
+            abs_delta_ms: abs(real(assn.delta_ms ?? 0))
+        };
+    }
+
+    var stray_count = is_struct(match_result) ? array_length(match_result.unassigned_players ?? []) : 0;
+    var wrong_lane_count = 0;
+
+    var measure_scores_accum = {};
+
+    var total_targets = 0;
+    var matched_targets = 0;
+    var sum_score = 0;
+    var sum_abs_delta = 0;
+    var sum_signed_delta = 0;
+
+    for (var ti = 0; ti < array_length(targets); ti++) {
+        var t = targets[ti];
+        if (!is_struct(t)) continue;
+        var t_ms = real(t.expected_ms ?? 0);
+        var cand = (ti >= 0 && ti < array_length(candidates)) ? candidates[ti] : undefined;
+        var target_score = 0;
+        var was_match = false;
+        var best_delta = 0;
+        if (is_struct(cand)) {
+            best_delta = real(cand.delta_ms ?? 0);
+            var best_abs = abs(best_delta);
+            var directional_ok = false;
+            if (mode == "on") directional_ok = (abs(best_delta) <= center_window);
+            if (mode == "early") directional_ok = (best_delta < -center_window);
+            if (mode == "late") directional_ok = (best_delta > center_window);
+            if (directional_ok) {
+                target_score = scoring_on_beat_delta_to_score(best_abs, settings);
+                was_match = true;
+            }
+        }
+
+        total_targets += 1;
+        sum_score += target_score;
+        if (was_match) {
+            matched_targets += 1;
+            sum_abs_delta += abs(best_delta);
+            sum_signed_delta += best_delta;
+        }
+
+        var t_measure = floor(real(t.measure ?? -1));
+        var mkey = string(t_measure);
+        if (!variable_struct_exists(measure_scores_accum, mkey)) {
+            measure_scores_accum[$ mkey] = {
+                measure: t_measure,
+                part: 1,
+                start_ms: t_ms,
+                end_ms: t_ms,
+                total_ms: 1,
+                matching_ms: 0,
+                mismatch_ms: 0,
+                expected_active_ms: 1,
+                player_active_ms: 0,
+                score_sum: 0,
+                target_count: 0,
+                matched_count: 0,
+                miss_count: 0,
+                sum_abs_delta_ms: 0,
+                sum_signed_delta_ms: 0,
+                score: 0
+            };
+        }
+        var acc = measure_scores_accum[$ mkey];
+        acc.score_sum += target_score;
+        acc.target_count += 1;
+        if (was_match) {
+            acc.matched_count += 1;
+            acc.sum_abs_delta_ms += abs(best_delta);
+            acc.sum_signed_delta_ms += best_delta;
+        } else {
+            acc.miss_count += 1;
+        }
+        acc.score = (acc.target_count > 0) ? (acc.score_sum / acc.target_count) : 0;
+        acc.matching_ms = acc.matched_count;
+        acc.mismatch_ms = acc.target_count - acc.matched_count;
+        acc.player_active_ms = acc.matched_count;
+        acc.end_ms = max(acc.end_ms, t_ms);
+        measure_scores_accum[$ mkey] = acc;
+    }
+
+    var measure_scores = [];
+    var mkeys = struct_get_names(measure_scores_accum);
+    for (var mi = 0; mi < array_length(mkeys); mi++) {
+        var mk = mkeys[mi];
+        var mr = measure_scores_accum[$ mk];
+        if (!is_struct(mr)) continue;
+        array_push(measure_scores, mr);
+    }
+    if (array_length(measure_scores) > 1) {
+        array_sort(measure_scores, function(_a, _b) {
+            return floor(real(_a.measure ?? -1)) - floor(real(_b.measure ?? -1));
+        });
+    }
+
+    var overall_score = (total_targets > 0) ? (sum_score / total_targets) : 0;
+    var raw = {
+        total_ms: total_targets,
+        matching_ms: matched_targets,
+        mismatch_ms: max(0, total_targets - matched_targets),
+        expected_active_ms: total_targets,
+        player_active_ms: matched_targets,
+        match_ratio: (total_targets > 0) ? (matched_targets / total_targets) : 0,
+        target_count: total_targets,
+        matched_count: matched_targets,
+        miss_count: max(0, total_targets - matched_targets),
+        mean_abs_delta_ms: (matched_targets > 0) ? (sum_abs_delta / matched_targets) : 0,
+        mean_signed_delta_ms: (matched_targets > 0) ? (sum_signed_delta / matched_targets) : 0,
+        hit_rate: (total_targets > 0) ? (matched_targets / total_targets) : 0,
+        judge_mode: mode,
+        target_kind: kind,
+        matcher_mode: "event_match_dp",
+        interval_lead_in_ms: scoring_struct_get_real_default(settings, "event_match_lead_in_ms", 80),
+        interval_tail_out_ms: scoring_struct_get_real_default(settings, "event_match_tail_out_ms", 120),
+        stray_count: stray_count,
+        wrong_lane_count: wrong_lane_count
+    };
+
+    var summary = {
+        schema_version: 1,
+        judge_id: judge_id,
+        judge_name: judge_name,
+        score_version: "v1",
+        player_id: player_key,
+        tune_id: tune_id,
+        bpm: bpm,
+        swing: swing,
+        part_key: part_key,
+        context_key: scoring_get_context_key(tune_id, player_key, bpm, swing, part_key),
+        selected_judge_id: judge_id,
+        overall_score: overall_score,
+        measure_scores: measure_scores,
+        raw: raw,
+        score_by_segment: []
+    };
+
+    scoring_apply_run_to_runtime(summary, bool(_apply_to_runtime));
+    return summary;
+}
+
+/// @function scoring_build_on_beat_rollup_summary(_export_info, _apply_to_runtime)
+/// @description Legacy compatibility wrapper for retired On Beat rollup; returns overlap summary.
+/// @param {struct|undefined} _export_info Optional export info context
+/// @param {bool} _apply_to_runtime True to promote to active runtime score
+/// @returns {struct} Rollup summary
+function scoring_build_on_beat_rollup_summary(_export_info = undefined, _apply_to_runtime = true) {
+    // Batch D archive path: On Beat rollup is retired from production.
+    return scoring_build_ms_overlap_summary(_export_info, "ms_overlap", undefined, _apply_to_runtime);
+
+    var note_summary = scoring_build_on_beat_summary(_export_info, "on_beat_note", false);
+    var grace_summary = {};
+
+    var note_overall = (is_struct(note_summary) && variable_struct_exists(note_summary, "overall_score"))
+        ? real(variable_struct_get(note_summary, "overall_score")) : 0;
+    var grace_overall = (is_struct(grace_summary) && variable_struct_exists(grace_summary, "overall_score"))
+        ? real(variable_struct_get(grace_summary, "overall_score")) : 0;
+    var note_raw = (is_struct(note_summary) && variable_struct_exists(note_summary, "raw") && is_struct(variable_struct_get(note_summary, "raw")))
+        ? variable_struct_get(note_summary, "raw") : {};
+    var grace_raw = (is_struct(grace_summary) && variable_struct_exists(grace_summary, "raw") && is_struct(variable_struct_get(grace_summary, "raw")))
+        ? variable_struct_get(grace_summary, "raw") : {};
+
+    var note_targets = (is_struct(note_raw) && variable_struct_exists(note_raw, "target_count")) ? real(variable_struct_get(note_raw, "target_count")) : 0;
+    var grace_targets = (is_struct(grace_raw) && variable_struct_exists(grace_raw, "target_count")) ? real(variable_struct_get(grace_raw, "target_count")) : 0;
+    var overall = 0;
+    if ((note_targets + grace_targets) > 0) {
+        overall = ((note_overall * note_targets) + (grace_overall * grace_targets)) / (note_targets + grace_targets);
+    } else {
+        overall = (note_overall + grace_overall) * 0.5;
+    }
+    var note_matched = (is_struct(note_raw) && variable_struct_exists(note_raw, "matched_count")) ? real(variable_struct_get(note_raw, "matched_count")) : 0;
+    var grace_matched = (is_struct(grace_raw) && variable_struct_exists(grace_raw, "matched_count")) ? real(variable_struct_get(grace_raw, "matched_count")) : 0;
+    var rollup_targets = note_targets + grace_targets;
+    var rollup_matched = note_matched + grace_matched;
+    var rollup_misses = max(0, rollup_targets - rollup_matched);
+
+    var note_mean_abs = (is_struct(note_raw) && variable_struct_exists(note_raw, "mean_abs_delta_ms")) ? real(variable_struct_get(note_raw, "mean_abs_delta_ms")) : 0;
+    var grace_mean_abs = (is_struct(grace_raw) && variable_struct_exists(grace_raw, "mean_abs_delta_ms")) ? real(variable_struct_get(grace_raw, "mean_abs_delta_ms")) : 0;
+    var note_mean_signed = (is_struct(note_raw) && variable_struct_exists(note_raw, "mean_signed_delta_ms")) ? real(variable_struct_get(note_raw, "mean_signed_delta_ms")) : 0;
+    var grace_mean_signed = (is_struct(grace_raw) && variable_struct_exists(grace_raw, "mean_signed_delta_ms")) ? real(variable_struct_get(grace_raw, "mean_signed_delta_ms")) : 0;
+    var rollup_mean_abs = (rollup_matched > 0)
+        ? (((note_mean_abs * note_matched) + (grace_mean_abs * grace_matched)) / rollup_matched)
+        : 0;
+    var rollup_mean_signed = (rollup_matched > 0)
+        ? (((note_mean_signed * note_matched) + (grace_mean_signed * grace_matched)) / rollup_matched)
+        : 0;
+
+    var measure_map = {};
+    var note_measures = (is_struct(note_summary) && variable_struct_exists(note_summary, "measure_scores") && is_array(variable_struct_get(note_summary, "measure_scores")))
+        ? variable_struct_get(note_summary, "measure_scores") : [];
+    var grace_measures = (is_struct(grace_summary) && variable_struct_exists(grace_summary, "measure_scores") && is_array(variable_struct_get(grace_summary, "measure_scores")))
+        ? variable_struct_get(grace_summary, "measure_scores") : [];
+
+    for (var ni = 0; ni < array_length(note_measures); ni++) {
+        var nm = note_measures[ni];
+        if (!is_struct(nm)) continue;
+        var nkey = string(floor(real(nm.measure ?? -1)));
+        if (!variable_struct_exists(measure_map, nkey)) {
+            measure_map[$ nkey] = { measure: floor(real(nm.measure ?? -1)), note_score: 0, grace_score: 0, has_note: false, has_grace: false };
+        }
+        var nrow = measure_map[$ nkey];
+        nrow.note_score = real(nm.score ?? 0);
+        nrow.has_note = true;
+        measure_map[$ nkey] = nrow;
+    }
+
+    for (var gi = 0; gi < array_length(grace_measures); gi++) {
+        var gm = grace_measures[gi];
+        if (!is_struct(gm)) continue;
+        var gkey = string(floor(real(gm.measure ?? -1)));
+        if (!variable_struct_exists(measure_map, gkey)) {
+            measure_map[$ gkey] = { measure: floor(real(gm.measure ?? -1)), note_score: 0, grace_score: 0, has_note: false, has_grace: false };
+        }
+        var grow = measure_map[$ gkey];
+        grow.grace_score = real(gm.score ?? 0);
+        grow.has_grace = true;
+        measure_map[$ gkey] = grow;
+    }
+
+    var measures = [];
+    var mkeys = struct_get_names(measure_map);
+    for (var mi = 0; mi < array_length(mkeys); mi++) {
+        var mk = mkeys[mi];
+        var mr = measure_map[$ mk];
+        if (!is_struct(mr)) continue;
+        var denom = (mr.has_note ? 1 : 0) + (mr.has_grace ? 1 : 0);
+        if (denom <= 0) continue;
+        var mscore = ((mr.has_note ? mr.note_score : 0) + (mr.has_grace ? mr.grace_score : 0)) / denom;
+        array_push(measures, {
+            measure: floor(real(mr.measure ?? -1)),
+            part: 1,
+            start_ms: 0,
+            end_ms: 0,
+            total_ms: denom,
+            matching_ms: denom,
+            mismatch_ms: 0,
+            expected_active_ms: denom,
+            player_active_ms: denom,
+            score: mscore
+        });
+    }
+    if (array_length(measures) > 1) {
+        array_sort(measures, function(_a, _b) {
+            return floor(real(_a.measure ?? -1)) - floor(real(_b.measure ?? -1));
+        });
+    }
+
+    var summary = {
+        schema_version: 1,
+        judge_id: "on_beat",
+        judge_name: scoring_judge_display_name("on_beat"),
+        score_version: "v1",
+        player_id: (is_struct(note_summary) && variable_struct_exists(note_summary, "player_id")) ? string(variable_struct_get(note_summary, "player_id")) : "",
+        tune_id: (is_struct(note_summary) && variable_struct_exists(note_summary, "tune_id")) ? string(variable_struct_get(note_summary, "tune_id")) : "",
+        bpm: (is_struct(note_summary) && variable_struct_exists(note_summary, "bpm")) ? real(variable_struct_get(note_summary, "bpm")) : 0,
+        swing: (is_struct(note_summary) && variable_struct_exists(note_summary, "swing")) ? string(variable_struct_get(note_summary, "swing")) : "",
+        part_key: (is_struct(note_summary) && variable_struct_exists(note_summary, "part_key")) ? string(variable_struct_get(note_summary, "part_key")) : "all",
+        context_key: (is_struct(note_summary) && variable_struct_exists(note_summary, "context_key")) ? string(variable_struct_get(note_summary, "context_key")) : "",
+        selected_judge_id: "on_beat",
+        overall_score: overall,
+        measure_scores: measures,
+        raw: {
+            note_overall_score: note_overall,
+            grace_overall_score: grace_overall,
+            rollup_mode: "note_only",
+            total_ms: rollup_targets,
+            matching_ms: rollup_matched,
+            mismatch_ms: rollup_misses,
+            expected_active_ms: rollup_targets,
+            player_active_ms: rollup_matched,
+            match_ratio: (rollup_targets > 0) ? (rollup_matched / rollup_targets) : 0,
+            target_count: rollup_targets,
+            matched_count: rollup_matched,
+            miss_count: rollup_misses,
+            hit_rate: (rollup_targets > 0) ? (rollup_matched / rollup_targets) : 0,
+            mean_abs_delta_ms: rollup_mean_abs,
+            mean_signed_delta_ms: rollup_mean_signed,
+            judge_mode: "on"
+        },
+        score_by_segment: []
+    };
+
+    scoring_apply_run_to_runtime(summary, bool(_apply_to_runtime));
+    return summary;
+}
+
+/// @function scoring_run_judge_summary(_export_info, _judge_id, _apply_to_runtime)
+/// @description Execute the correct scoring pipeline for a judge id.
+/// @param {struct|undefined} _export_info Optional export info context
+/// @param {string} _judge_id Judge id
+/// @param {bool} _apply_to_runtime Promote as active score
+/// @returns {struct|undefined} Summary struct
+function scoring_run_judge_summary(_export_info, _judge_id, _apply_to_runtime = false) {
+    var judge_id = scoring_judge_normalize_id(_judge_id);
+    if (judge_id == "") judge_id = "ms_overlap";
+    if (judge_id == "ms_overlap_uncal") {
+        return scoring_build_ms_overlap_summary(_export_info, judge_id, 0, _apply_to_runtime);
+    }
+    // Overlap-only production mode: calibrated and uncalibrated overlap judges remain active.
+    return scoring_build_ms_overlap_summary(_export_info, "ms_overlap", undefined, _apply_to_runtime);
+}
+
 /// @function scoring_score_to_color(_score)
 /// @description Map a 0–100 score to a grade-band RGB color (A=green, F=red).
 /// @param {real} _score  Score value 0–100
@@ -1185,14 +3231,21 @@ function scoring_score_to_color(_score) {
     return make_color_rgb(210, 80, 80);                 // F
 }
 
-/// @function scoring_score_to_grade(_score)
-/// @description Convert a 0–100 score to a letter grade (A–F) using thresholds from scoring settings.
+/// @function scoring_score_to_grade(_score, [_judge_id])
+/// @description Convert a 0–100 score to a letter grade (A–F) using thresholds for the requested judge (fallback to ms-overlap thresholds).
 /// @param {real} _score  Score value 0–100
+/// @param {string} [_judge_id] Judge ID used to resolve grade thresholds (default "ms_overlap")
 /// @returns {string}  Letter grade "A".."F"
-/// @reads   global.judge_settings_store (via scoring_ms_overlap_get_effective_settings)
+/// @reads   global.judge_settings_store (via scoring_judge_get_effective_settings)
 function scoring_score_to_grade(_score) {
     var s = clamp(real(_score), 0, 100);
-    var cfg = scoring_ms_overlap_get_effective_settings();
+    var jid = "ms_overlap";
+    if (argument_count > 1) jid = string(argument[1]);
+    var cfg = scoring_judge_get_effective_settings(jid);
+    if (!is_struct(cfg) || !variable_struct_exists(cfg, "grade_a") || !variable_struct_exists(cfg, "grade_b")
+        || !variable_struct_exists(cfg, "grade_c") || !variable_struct_exists(cfg, "grade_d")) {
+        cfg = scoring_ms_overlap_get_effective_settings();
+    }
     if (s >= real(cfg.grade_a)) return "A";
     if (s >= real(cfg.grade_b)) return "B";
     if (s >= real(cfg.grade_c)) return "C";
@@ -1206,7 +3259,7 @@ function scoring_score_to_grade(_score) {
 /// @param {real} _default_color  Fallback color
 /// @param {real} _default_alpha  Fallback alpha
 /// @returns {struct}  {has_score: bool, color, alpha, score}
-/// @reads   global.timeline_state (score_selected_judge, score_measure_maps, score_by_segment), global.playback_context
+/// @reads   global.timeline_state (score_selected_judge, score_measure_maps_by_key, score_by_segment), global.playback_context
 /// @callers scr_game_viz (draw path)
 function scoring_get_measure_visual_style(_measure, _default_color, _default_alpha) {
     var out = {
@@ -1221,10 +3274,21 @@ function scoring_get_measure_visual_style(_measure, _default_color, _default_alp
     var judge_id = variable_struct_exists(global.timeline_state, "score_selected_judge")
         ? string(global.timeline_state.score_selected_judge)
         : "ms_overlap";
+    var part_num = (argument_count > 3) ? floor(real(argument[3])) : -1;
+    var nav_idx = (argument_count > 4) ? floor(real(argument[4])) : -1;
+    var measure_key = (argument_count > 5) ? string(argument[5]) : "";
+
+    var measure_num = floor(real(_measure));
+    if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+        measure_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
+    }
+    if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+        measure_key = scoring_measure_ref_key(part_num, measure_num, -1);
+    }
 
     // In set mode, read from the per-segment score data so measure numbers 1-N
     // resolve correctly for each tune rather than colliding across segments.
-    var score_maps = undefined;
+    var score_maps_by_key = undefined;
     var _is_set = variable_global_exists("playback_context")
         && is_struct(global.playback_context)
         && string(global.playback_context[$ "mode"] ?? "") == "set";
@@ -1238,25 +3302,36 @@ function scoring_get_measure_visual_style(_measure, _default_color, _default_alp
         if (_seg_count > 0) {
             _active_seg = clamp(_active_seg, 0, _seg_count - 1);
             var _seg_data = _by_seg[_active_seg];
-            if (is_struct(_seg_data) && variable_struct_exists(_seg_data, "score_measure_maps")) {
-                score_maps = _seg_data.score_measure_maps;
+            if (is_struct(_seg_data) && variable_struct_exists(_seg_data, "score_measure_maps_by_key")) {
+                score_maps_by_key = _seg_data.score_measure_maps_by_key;
             }
         }
     } else {
-        if (variable_struct_exists(global.timeline_state, "score_measure_maps")
-            && is_struct(global.timeline_state.score_measure_maps)) {
-            score_maps = global.timeline_state.score_measure_maps;
+        if (variable_struct_exists(global.timeline_state, "score_measure_maps_by_key")
+            && is_struct(global.timeline_state.score_measure_maps_by_key)) {
+            score_maps_by_key = global.timeline_state.score_measure_maps_by_key;
         }
     }
 
-    if (!is_struct(score_maps)) return out;
-    if (!variable_struct_exists(score_maps, judge_id) || !is_struct(score_maps[$ judge_id])) return out;
+    var measure_score = undefined;
+    if (is_struct(score_maps_by_key)
+        && variable_struct_exists(score_maps_by_key, judge_id)
+        && is_struct(score_maps_by_key[$ judge_id])) {
+        var measure_key_map = score_maps_by_key[$ judge_id];
+        if (measure_key != "" && variable_struct_exists(measure_key_map, measure_key)) {
+            measure_score = real(measure_key_map[$ measure_key]);
+        }
 
-    var measure_map = score_maps[$ judge_id];
-    var measure_key = string(floor(real(_measure)));
-    if (!variable_struct_exists(measure_map, measure_key)) return out;
+        if (is_undefined(measure_score) && part_num >= 1 && measure_num >= 1) {
+            var seed_key = scoring_measure_ref_key(part_num, measure_num, -1);
+            if (seed_key != "" && variable_struct_exists(measure_key_map, seed_key)) {
+                measure_score = real(measure_key_map[$ seed_key]);
+            }
+        }
+    }
+    if (is_undefined(measure_score)) return out;
 
-    var measure_score = clamp(real(measure_map[$ measure_key]), 0, 100);
+    measure_score = clamp(real(measure_score), 0, 100);
     out.has_score = true;
     out.score = measure_score;
     out.color = scoring_score_to_color(measure_score);
@@ -1276,6 +3351,89 @@ function scoring_get_last_run_summary() {
     return undefined;
 }
 
+/// @function scoring_get_review_selected_loop_window()
+/// @description Return the active post-play selected loop window when available.
+/// @returns {struct|undefined} {iteration,start_ms,end_ms} or undefined when not active.
+/// @reads global.timeline_state.playback_complete, global.timeline_state.loop_iteration_scores, global.timeline_state.review_selected_loop_iteration, global.timeline_state.review_selected_loop_window
+function scoring_get_review_selected_loop_window() {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "playback_complete")
+        || !bool(global.timeline_state.playback_complete)) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "loop_iteration_scores")
+        || !is_array(global.timeline_state.loop_iteration_scores)
+        || array_length(global.timeline_state.loop_iteration_scores) <= 0) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "review_selected_loop_iteration")) return undefined;
+
+    var _sel_it = floor(real(global.timeline_state.review_selected_loop_iteration));
+    if (_sel_it <= 0) return undefined;
+    if (!variable_struct_exists(global.timeline_state, "review_selected_loop_window")
+        || !is_struct(global.timeline_state.review_selected_loop_window)) return undefined;
+
+    var _w = global.timeline_state.review_selected_loop_window;
+    var _s = real(_w[$ "start_ms"] ?? -1);
+    var _e = real(_w[$ "end_ms"] ?? -1);
+    if (!(_s >= 0) || !(_e > _s + 0.001)) return undefined;
+
+    return {
+        iteration: _sel_it,
+        start_ms: _s,
+        end_ms: _e
+    };
+}
+
+/// @function scoring_window_aggregate_from_measure_results(_measure_results, _start_ms, _end_ms, _judge_id)
+/// @description Aggregate scoring totals for measure results overlapping a selected time window.
+/// @param {array} _measure_results Array of per-measure result structs.
+/// @param {real} _start_ms Window start in ms.
+/// @param {real} _end_ms Window end in ms.
+/// @param {string} _judge_id Judge id for grade mapping.
+/// @returns {struct} {has_data, score, grade, matching_ms, total_ms, expected_active_ms, player_active_ms, mismatch_ms, measures_count}
+function scoring_window_aggregate_from_measure_results(_measure_results, _start_ms, _end_ms, _judge_id = "ms_overlap") {
+    var out = {
+        has_data: false,
+        score: 0,
+        grade: "F",
+        matching_ms: 0,
+        total_ms: 0,
+        expected_active_ms: 0,
+        player_active_ms: 0,
+        mismatch_ms: 0,
+        measures_count: 0
+    };
+
+    if (!is_array(_measure_results)) return out;
+
+    var _s = real(_start_ms);
+    var _e = real(_end_ms);
+    if (!(_e > _s + 0.001)) return out;
+
+    for (var _i = 0; _i < array_length(_measure_results); _i++) {
+        var _m = _measure_results[_i];
+        if (!is_struct(_m)) continue;
+        var _ms = real(_m[$ "start_ms"] ?? -1);
+        var _me = real(_m[$ "end_ms"] ?? _ms);
+        if (!(_ms >= 0) || !(_me > _ms + 0.001)) continue;
+        if (_me <= _s || _ms >= _e) continue;
+
+        out.matching_ms += real(_m[$ "matching_ms"] ?? 0);
+        out.total_ms += real(_m[$ "total_ms"] ?? 0);
+        out.expected_active_ms += real(_m[$ "expected_active_ms"] ?? 0);
+        out.player_active_ms += real(_m[$ "player_active_ms"] ?? 0);
+        out.measures_count += 1;
+    }
+
+    if (out.measures_count <= 0) return out;
+
+    var _settings = scoring_ms_overlap_get_effective_settings();
+    var _count_rests = bool(_settings[$ "count_rests"] ?? false);
+    var _denom = _count_rests ? max(1, out.total_ms) : max(1, out.expected_active_ms);
+    out.score = clamp((out.matching_ms / _denom) * 100, 0, 100);
+    out.mismatch_ms = max(0, _denom - out.matching_ms);
+    out.grade = scoring_score_to_grade(out.score, string(_judge_id));
+    out.has_data = true;
+    return out;
+}
+
 /// @function scoring_find_measure_result(_measure_num, _judge_id)
 /// @description Find and return the measure result struct for the given measure number and judge.
 /// @param {real} _measure_num  Measure number (1-based)
@@ -1283,9 +3441,12 @@ function scoring_get_last_run_summary() {
 /// @returns {struct|undefined}  Measure result {measure, score, matching_ms, ...} or undefined
 /// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
 /// @callers scr_game_viz, scoring_get_detail_popup_rows, scoring_get_panel_focus
-function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap") {
+function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap", _part_num = -1, _nav_idx = -1, _measure_key = "") {
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
+    var target_part = floor(real(_part_num));
+    var target_nav = floor(real(_nav_idx));
+    var target_key = string(_measure_key);
 
     // In set mode, look in the active segment's data so measure numbers 1-N
     // resolve to the correct tune instead of always matching tune 1.
@@ -1315,9 +3476,8 @@ function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap") {
 
                 var target = floor(real(_measure_num));
                 for (var i = 0; i < array_length(arr); i++) {
-                    var m = arr[i];
-                    if (!is_struct(m)) continue;
-                    if (floor(real(m.measure ?? -1)) == target) return m;
+                    var measure_result = arr[i];
+                    if (scoring_measure_result_matches(measure_result, target, target_part, target_nav, target_key)) return measure_result;
                 }
                 return undefined;
             }
@@ -1340,11 +3500,81 @@ function scoring_find_measure_result(_measure_num, _judge_id = "ms_overlap") {
 
     var target = floor(real(_measure_num));
     for (var i = 0; i < array_length(arr); i++) {
-        var m = arr[i];
-        if (!is_struct(m)) continue;
-        if (floor(real(m.measure ?? -1)) == target) return m;
+        var measure_result = arr[i];
+        if (scoring_measure_result_matches(measure_result, target, target_part, target_nav, target_key)) return measure_result;
     }
     return undefined;
+}
+
+/// @function scoring_get_note_popup_score_summary(_player_span, _planned_span, _judge_id, _player_span_index)
+/// @description Build a compact score summary for the note popup using the currently selected judge.
+/// @param {struct} _player_span  Player span struct from the clicked note
+/// @param {struct|undefined} _planned_span Intended span matched to the player note
+/// @param {string} [_judge_id] Judge id (defaults to current selected judge)
+/// @param {real} [_player_span_index] Player span index from review trace (optional)
+/// @returns {struct} Summary struct {judge_id, judge_name, score_value, score_text, grade, delta_ms, detail_text}
+function scoring_get_note_popup_score_summary(_player_span, _planned_span, _judge_id = "", _player_span_index = -1) {
+    var judge_id = scoring_judge_normalize_id(_judge_id);
+    if (judge_id == "") {
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "score_selected_judge")) {
+            judge_id = scoring_judge_normalize_id(global.timeline_state.score_selected_judge);
+        }
+    }
+    if (judge_id == "") judge_id = "ms_overlap";
+
+    var judge_name = scoring_judge_display_name(judge_id);
+    var player_start = is_struct(_player_span) ? real(_player_span.start_ms ?? 0) : 0;
+    var planned_start = is_struct(_planned_span) ? real(_planned_span.start_ms ?? player_start) : player_start;
+    var delta_ms = player_start - planned_start;
+    var score_value = 0;
+    var detail_text = "no intended overlap";
+    var component_judge_id = judge_id;
+
+    var measure_num = -1;
+    var part_num = -1;
+    var measure_key = "";
+    if (is_struct(_planned_span) && variable_struct_exists(_planned_span, "measure")) {
+        measure_num = floor(real(_planned_span.measure ?? -1));
+        part_num = floor(real(_planned_span.part ?? -1));
+        if (variable_struct_exists(_planned_span, "measure_ref_key") && string(_planned_span.measure_ref_key) != "") {
+            measure_key = string(_planned_span.measure_ref_key);
+        } else if (variable_struct_exists(_planned_span, "measure_ref_key_seed") && string(_planned_span.measure_ref_key_seed) != "") {
+            measure_key = string(_planned_span.measure_ref_key_seed);
+        }
+    } else if (is_struct(_player_span) && variable_struct_exists(_player_span, "measure")) {
+        measure_num = floor(real(_player_span.measure ?? -1));
+        part_num = floor(real(_player_span.part ?? -1));
+        if (variable_struct_exists(_player_span, "measure_ref_key") && string(_player_span.measure_ref_key) != "") {
+            measure_key = string(_player_span.measure_ref_key);
+        } else if (variable_struct_exists(_player_span, "measure_ref_key_seed") && string(_player_span.measure_ref_key_seed) != "") {
+            measure_key = string(_player_span.measure_ref_key_seed);
+        }
+    }
+
+    if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+        measure_key = scoring_measure_ref_key(part_num, measure_num, -1);
+    }
+
+    if (measure_num >= 1) {
+        var measure_result = scoring_find_measure_result(measure_num, judge_id, part_num, -1, measure_key);
+        if (is_struct(measure_result)) {
+            score_value = real(measure_result.score ?? 0);
+            detail_text = "measure " + string(measure_num);
+        }
+    }
+
+    var grade = scoring_score_to_grade(score_value, judge_id);
+    return {
+        judge_id: judge_id,
+        judge_name: judge_name,
+        score_value: score_value,
+        score_text: string(round(clamp(score_value, 0, 100))) + "%",
+        grade: grade,
+        delta_ms: delta_ms,
+        detail_text: detail_text,
+        component_judge_id: component_judge_id
+    };
 }
 
 /// @function scoring_get_ui_overview_rows()
@@ -1355,14 +3585,14 @@ function scoring_get_ui_overview_rows() {
     var summary = scoring_get_last_run_summary();
     if (!is_struct(summary)) return rows;
 
+    var judge_id = variable_struct_exists(summary, "judge_id") ? string(variable_struct_get(summary, "judge_id")) : "ms_overlap";
     var raw = variable_struct_exists(summary, "raw") ? variable_struct_get(summary, "raw") : {};
     var overall_value = variable_struct_exists(summary, "overall_score") ? real(variable_struct_get(summary, "overall_score")) : 0;
     var match_ratio = variable_struct_exists(raw, "match_ratio") ? (real(variable_struct_get(raw, "match_ratio")) * 100) : 0;
     var matching_ms = variable_struct_exists(raw, "matching_ms") ? real(variable_struct_get(raw, "matching_ms")) : 0;
     var total_ms = variable_struct_exists(raw, "total_ms") ? real(variable_struct_get(raw, "total_ms")) : 0;
     var target_shift_ms = variable_struct_exists(raw, "target_shift_ms") ? real(variable_struct_get(raw, "target_shift_ms")) : 0;
-    var grade = scoring_score_to_grade(overall_value);
-    var judge_id = variable_struct_exists(summary, "judge_id") ? string(variable_struct_get(summary, "judge_id")) : "ms_overlap";
+    var grade = scoring_score_to_grade(overall_value, judge_id);
     var judge_name = scoring_judge_display_name(judge_id);
 
     array_push(rows, "Judge: " + judge_name);
@@ -1457,7 +3687,7 @@ function scoring_format_optional_percent(_v) {
 /// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
 /// @returns {array}  Array of judge row structs {judge_id, judge_name, score, grade, best, avg, plays}
 /// @reads   global.scoring_last_run (via helpers), global.timeline_state (via scoring_find_measure_result)
-function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
+function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "", _part_num = -1, _nav_idx = -1, _measure_key = "") {
     var rows = [];
     var summary = scoring_get_last_run_summary();
     var context_stats = scoring_get_current_context_stats();
@@ -1475,6 +3705,13 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
         : {};
 
     var measure_num = floor(real(_measure_num));
+    var part_num = floor(real(_part_num));
+    var nav_idx = floor(real(_nav_idx));
+    var selected_loop_window = scoring_get_review_selected_loop_window();
+    var measure_key = string(_measure_key);
+    if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+        measure_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
+    }
     var plays_text = string(variable_struct_exists(context_stats, "plays_count") ? variable_struct_get(context_stats, "plays_count") : 0);
 
     for (var ri = 0; ri < array_length(registry); ri++) {
@@ -1490,15 +3727,38 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
             ? real(overall_by_judge[$ rid])
             : (rid == string(summary.judge_id ?? "") ? real(summary.overall_score ?? 0) : 0);
         var display_score = run_score;
+        if (is_struct(selected_loop_window) && measure_num < 1) {
+            var _mr = [];
+            if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+                && variable_struct_exists(global.timeline_state, "score_measure_results_by_judge")
+                && is_struct(global.timeline_state.score_measure_results_by_judge)
+                && variable_struct_exists(global.timeline_state.score_measure_results_by_judge, rid)
+                && is_array(global.timeline_state.score_measure_results_by_judge[$ rid])) {
+                _mr = global.timeline_state.score_measure_results_by_judge[$ rid];
+            } else if (rid == string(summary.judge_id ?? "")
+                && variable_struct_exists(summary, "measure_scores")
+                && is_array(summary.measure_scores)) {
+                _mr = summary.measure_scores;
+            }
+            var _agg = scoring_window_aggregate_from_measure_results(
+                _mr,
+                selected_loop_window.start_ms,
+                selected_loop_window.end_ms,
+                rid
+            );
+            if (bool(_agg[$ "has_data"] ?? false)) {
+                display_score = real(_agg[$ "score"] ?? display_score);
+            }
+        }
         if (measure_num >= 1) {
-            var m_result = scoring_find_measure_result(measure_num, rid);
+            var m_result = scoring_find_measure_result(measure_num, rid, part_num, nav_idx, measure_key);
             if (is_struct(m_result)) {
                 display_score = real(variable_struct_exists(m_result, "score") ? variable_struct_get(m_result, "score") : run_score);
             }
         }
 
         var run_score_text = string(round(clamp(display_score, 0, 100))) + "%";
-        var grade = scoring_score_to_grade(display_score);
+        var grade = scoring_score_to_grade(display_score, rid);
 
         array_push(rows, {
             judge_id: rid,
@@ -1520,7 +3780,7 @@ function scoring_get_judge_table_rows(_measure_num = -1, _judge_id = "") {
 /// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
 /// @returns {array}  String rows for display
 /// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
-function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overlap") {
+function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overlap", _part_num = -1, _nav_idx = -1, _measure_key = "") {
     var rows = [];
     var judge_id = string(_judge_id);
     if (judge_id == "") judge_id = "ms_overlap";
@@ -1599,19 +3859,64 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var input_capture_offset_ms = real(variable_struct_exists(raw, "input_capture_offset_ms") ? variable_struct_get(raw, "input_capture_offset_ms") : 0);
     var emb_group_count = real(variable_struct_exists(raw, "emb_group_count") ? variable_struct_get(raw, "emb_group_count") : 0);
     var emb_valid_interval_count = real(variable_struct_exists(raw, "emb_valid_interval_count") ? variable_struct_get(raw, "emb_valid_interval_count") : 0);
+    var target_count = real(variable_struct_exists(raw, "target_count") ? variable_struct_get(raw, "target_count") : expected_active_ms);
+    var matched_count = real(variable_struct_exists(raw, "matched_count") ? variable_struct_get(raw, "matched_count") : matching_ms);
+    var miss_count = real(variable_struct_exists(raw, "miss_count") ? variable_struct_get(raw, "miss_count") : max(0, target_count - matched_count));
+    var extra_player_count = real(variable_struct_exists(raw, "extra_player_count") ? variable_struct_get(raw, "extra_player_count") : 0);
+    var mean_abs_delta_ms = real(variable_struct_exists(raw, "mean_abs_delta_ms") ? variable_struct_get(raw, "mean_abs_delta_ms") : 0);
+    var mean_signed_delta_ms = real(variable_struct_exists(raw, "mean_signed_delta_ms") ? variable_struct_get(raw, "mean_signed_delta_ms") : 0);
+    var hit_rate = real(variable_struct_exists(raw, "hit_rate") ? variable_struct_get(raw, "hit_rate") : ((target_count > 0) ? (matched_count / target_count) : 0));
+    var judge_mode = string(variable_struct_exists(raw, "judge_mode") ? variable_struct_get(raw, "judge_mode") : "");
+    var matching_cost = real(variable_struct_exists(raw, "matching_cost") ? variable_struct_get(raw, "matching_cost") : 0);
+    var target_mode = string(variable_struct_exists(raw, "target_mode") ? variable_struct_get(raw, "target_mode") : "");
 
     var measure_num = floor(real(_measure_num));
+    var part_num = floor(real(_part_num));
+    var nav_idx = floor(real(_nav_idx));
+    var selected_loop_window = scoring_get_review_selected_loop_window();
+    var measure_key = string(_measure_key);
+    if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+        measure_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
+    }
     var detail_scope = "overall";
 
     if (measure_num >= 1) {
-        var m = scoring_find_measure_result(measure_num, judge_id);
-        if (is_struct(m)) {
-            score_value = real(variable_struct_exists(m, "score") ? variable_struct_get(m, "score") : score_value);
-            matching_ms = real(variable_struct_exists(m, "matching_ms") ? variable_struct_get(m, "matching_ms") : matching_ms);
-            total_ms = max(1, real(variable_struct_exists(m, "total_ms") ? variable_struct_get(m, "total_ms") : total_ms));
-            expected_active_ms = real(variable_struct_exists(m, "expected_active_ms") ? variable_struct_get(m, "expected_active_ms") : expected_active_ms);
-            player_active_ms = real(variable_struct_exists(m, "player_active_ms") ? variable_struct_get(m, "player_active_ms") : player_active_ms);
+        var measure_result = scoring_find_measure_result(measure_num, judge_id, part_num, nav_idx, measure_key);
+        if (is_struct(measure_result)) {
+            score_value = real(variable_struct_exists(measure_result, "score") ? variable_struct_get(measure_result, "score") : score_value);
+            matching_ms = real(variable_struct_exists(measure_result, "matching_ms") ? variable_struct_get(measure_result, "matching_ms") : matching_ms);
+            total_ms = max(1, real(variable_struct_exists(measure_result, "total_ms") ? variable_struct_get(measure_result, "total_ms") : total_ms));
+            expected_active_ms = real(variable_struct_exists(measure_result, "expected_active_ms") ? variable_struct_get(measure_result, "expected_active_ms") : expected_active_ms);
+            player_active_ms = real(variable_struct_exists(measure_result, "player_active_ms") ? variable_struct_get(measure_result, "player_active_ms") : player_active_ms);
             detail_scope = "measure " + string(measure_num);
+        }
+    } else if (is_struct(selected_loop_window)) {
+        var _detail_mr = [];
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "score_measure_results_by_judge")
+            && is_struct(global.timeline_state.score_measure_results_by_judge)
+            && variable_struct_exists(global.timeline_state.score_measure_results_by_judge, judge_id)
+            && is_array(global.timeline_state.score_measure_results_by_judge[$ judge_id])) {
+            _detail_mr = global.timeline_state.score_measure_results_by_judge[$ judge_id];
+        } else if (judge_id == string(summary.judge_id ?? "")
+            && variable_struct_exists(summary, "measure_scores")
+            && is_array(summary.measure_scores)) {
+            _detail_mr = summary.measure_scores;
+        }
+
+        var _detail_agg = scoring_window_aggregate_from_measure_results(
+            _detail_mr,
+            selected_loop_window.start_ms,
+            selected_loop_window.end_ms,
+            judge_id
+        );
+        if (bool(_detail_agg[$ "has_data"] ?? false)) {
+            score_value = real(_detail_agg[$ "score"] ?? score_value);
+            matching_ms = real(_detail_agg[$ "matching_ms"] ?? matching_ms);
+            total_ms = max(1, real(_detail_agg[$ "total_ms"] ?? total_ms));
+            expected_active_ms = real(_detail_agg[$ "expected_active_ms"] ?? expected_active_ms);
+            player_active_ms = real(_detail_agg[$ "player_active_ms"] ?? player_active_ms);
+            detail_scope = "loop " + string(selected_loop_window.iteration);
         }
     }
 
@@ -1620,7 +3925,7 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
     var count_rests = variable_struct_exists(settings, "count_rests") ? bool(variable_struct_get(settings, "count_rests")) : false;
     var denominator_mode = count_rests ? "total_ms" : "expected_active_ms";
     var match_ratio = (total_ms > 0) ? clamp(matching_ms / total_ms, 0, 1) : 0;
-    var emb_mode = (judge_id == "ms_overlap_emb_window") ? "ordered in-window" : "";
+    var emb_mode = "";
 
     var metrics = {
         score: score_value,
@@ -1637,7 +3942,17 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
         input_capture_offset_ms: input_capture_offset_ms,
         emb_group_count: emb_group_count,
         emb_valid_interval_count: emb_valid_interval_count,
-        emb_mode: emb_mode
+        emb_mode: emb_mode,
+        target_count: target_count,
+        matched_count: matched_count,
+        miss_count: miss_count,
+        extra_player_count: extra_player_count,
+        mean_abs_delta_ms: mean_abs_delta_ms,
+        mean_signed_delta_ms: mean_signed_delta_ms,
+        hit_rate: hit_rate,
+        judge_mode: judge_mode,
+        matching_cost: matching_cost,
+        target_mode: target_mode
     };
 
     array_push(rows, "Judge: " + judge_name);
@@ -1704,12 +4019,13 @@ function scoring_get_detail_popup_rows(_measure_num = -1, _judge_id = "ms_overla
 /// @description Delegates to scoring_get_detail_popup_rows for measure-specific popup.
 /// @param {real} _measure_num  Measure number (1-based)
 /// @returns {array}  String rows
-function scoring_get_measure_popup_rows(_measure_num) {
+function scoring_get_measure_popup_rows(_measure_num, _judge_id = "", _part_num = -1, _nav_idx = -1, _measure_key = "") {
     var judge_id = (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
         && variable_struct_exists(global.timeline_state, "score_selected_judge"))
         ? string(global.timeline_state.score_selected_judge)
         : "ms_overlap";
-    return scoring_get_detail_popup_rows(_measure_num, judge_id);
+    if (string(_judge_id) != "") judge_id = string(_judge_id);
+    return scoring_get_detail_popup_rows(_measure_num, judge_id, _part_num, _nav_idx, _measure_key);
 }
 
 /// @function scoring_get_panel_focus(_measure_num, _judge_id)
@@ -1718,12 +4034,13 @@ function scoring_get_measure_popup_rows(_measure_num) {
 /// @param {string} [_judge_id]     Judge ID (default "ms_overlap")
 /// @returns {struct}  {judge_id, judge_name, score_value, score_percent_text, subtitle}
 /// @reads   global.scoring_last_run, global.timeline_state (score_by_segment), global.playback_context
-function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
+function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap", _part_num = -1, _nav_idx = -1, _measure_key = "") {
     var summary = scoring_get_last_run_summary();
     var judge_id = is_string(_judge_id) && string_length(_judge_id) > 0 ? string(_judge_id) : "ms_overlap";
     var judge_name = scoring_judge_display_name(judge_id);
     var score_value = 0;
     var subtitle = "overall";
+    var selected_loop_window = scoring_get_review_selected_loop_window();
 
     // In set mode use the active segment's overall score for the panel default,
     // so the displayed % matches the current tune rather than the full set aggregate.
@@ -1766,11 +4083,40 @@ function scoring_get_panel_focus(_measure_num = -1, _judge_id = "ms_overlap") {
 
     if (is_struct(summary) || is_struct(_seg_data)) {
         var measure_num = floor(real(_measure_num));
+        var part_num = floor(real(_part_num));
+        var nav_idx = floor(real(_nav_idx));
+        var measure_key = string(_measure_key);
+        if (measure_key == "" && part_num >= 1 && measure_num >= 1) {
+            measure_key = scoring_measure_ref_key(part_num, measure_num, nav_idx);
+        }
         if (measure_num >= 1) {
-            var m = scoring_find_measure_result(measure_num, judge_id);
-            if (is_struct(m)) {
-                score_value = real(variable_struct_exists(m, "score") ? variable_struct_get(m, "score") : score_value);
+            var measure_result = scoring_find_measure_result(measure_num, judge_id, part_num, nav_idx, measure_key);
+            if (is_struct(measure_result)) {
+                score_value = real(variable_struct_exists(measure_result, "score") ? variable_struct_get(measure_result, "score") : score_value);
                 subtitle = "measure " + string(measure_num);
+            }
+        } else if (is_struct(selected_loop_window)) {
+            var _panel_mr = [];
+            if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+                && variable_struct_exists(global.timeline_state, "score_measure_results_by_judge")
+                && is_struct(global.timeline_state.score_measure_results_by_judge)
+                && variable_struct_exists(global.timeline_state.score_measure_results_by_judge, judge_id)
+                && is_array(global.timeline_state.score_measure_results_by_judge[$ judge_id])) {
+                _panel_mr = global.timeline_state.score_measure_results_by_judge[$ judge_id];
+            } else if (judge_id == string(summary.judge_id ?? "")
+                && variable_struct_exists(summary, "measure_scores")
+                && is_array(summary.measure_scores)) {
+                _panel_mr = summary.measure_scores;
+            }
+            var _panel_agg = scoring_window_aggregate_from_measure_results(
+                _panel_mr,
+                selected_loop_window.start_ms,
+                selected_loop_window.end_ms,
+                judge_id
+            );
+            if (bool(_panel_agg[$ "has_data"] ?? false)) {
+                score_value = real(_panel_agg[$ "score"] ?? score_value);
+                subtitle = "loop " + string(selected_loop_window.iteration);
             }
         }
     }
@@ -1929,63 +4275,78 @@ function scoring_judge_settings_get_store() {
 /// @reads   global.judge_settings_store (via get_store)
 function scoring_judge_settings_get_registry() {
     var store = scoring_judge_settings_get_store();
-    var enabled = true;
-    var enabled_uncal = true;
-    var enabled_emb_window = true;
-    var settings_obj = {
+    var default_overlap_settings = {
         count_rests:     false,
         grade_a:         90,
         grade_b:         80,
         grade_c:         70,
         grade_d:         60
     };
-    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap")) {
-        var entry = store.judges[$ "ms_overlap"];
-        if (is_struct(entry)) {
-            if (variable_struct_exists(entry, "enabled")) {
-                enabled = bool(variable_struct_get(entry, "enabled"));
-            }
-            if (variable_struct_exists(entry, "settings") && is_struct(entry.settings)) {
-                var _s = entry.settings;
-                if (variable_struct_exists(_s, "count_rests"))     settings_obj.count_rests     = bool(_s[$ "count_rests"]);
-                if (variable_struct_exists(_s, "grade_a"))         settings_obj.grade_a         = clamp(real(_s[$ "grade_a"]),         51, 100);
-                if (variable_struct_exists(_s, "grade_b"))         settings_obj.grade_b         = clamp(real(_s[$ "grade_b"]),         41,  99);
-                if (variable_struct_exists(_s, "grade_c"))         settings_obj.grade_c         = clamp(real(_s[$ "grade_c"]),         31,  99);
-                if (variable_struct_exists(_s, "grade_d"))         settings_obj.grade_d         = clamp(real(_s[$ "grade_d"]),         21,  99);
-            }
-        }
+
+    var overlap_shared = default_overlap_settings;
+    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap")
+        && is_struct(store.judges[$ "ms_overlap"]) && is_struct(store.judges[$ "ms_overlap"].settings)) {
+        overlap_shared = scoring_settings_merge(default_overlap_settings, store.judges[$ "ms_overlap"].settings);
     }
-    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap_uncal")) {
-        var entry_uncal = store.judges[$ "ms_overlap_uncal"];
-        if (is_struct(entry_uncal) && variable_struct_exists(entry_uncal, "enabled")) {
-            enabled_uncal = bool(variable_struct_get(entry_uncal, "enabled"));
-        }
-    }
-    if (is_struct(store.judges) && variable_struct_exists(store.judges, "ms_overlap_emb_window")) {
-        var entry_emb_window = store.judges[$ "ms_overlap_emb_window"];
-        if (is_struct(entry_emb_window) && variable_struct_exists(entry_emb_window, "enabled")) {
-            enabled_emb_window = bool(variable_struct_get(entry_emb_window, "enabled"));
-        }
-    }
-    return [{
+
+    // Clamp overlap grading thresholds to strict descending order.
+    overlap_shared.grade_a = clamp(real(overlap_shared.grade_a), 51, 100);
+    overlap_shared.grade_b = clamp(real(overlap_shared.grade_b), 41, overlap_shared.grade_a - 1);
+    overlap_shared.grade_c = clamp(real(overlap_shared.grade_c), 31, overlap_shared.grade_b - 1);
+    overlap_shared.grade_d = clamp(real(overlap_shared.grade_d), 1, overlap_shared.grade_c - 1);
+    overlap_shared.count_rests = bool(overlap_shared.count_rests);
+
+    var descriptors = [{
         id: "ms_overlap",
         name: "Matching ms calibrated",
         description: "Percent of measure milliseconds where tune and player match after scoring calibration offset.",
-        enabled: enabled,
-        settings: settings_obj
+        bucket_id: "ms_overlap",
+        settings: overlap_shared,
+        default_enabled: true
     }, {
         id: "ms_overlap_uncal",
         name: "Matching ms uncal",
         description: "Percent of measure milliseconds where tune and player match with no scoring calibration offset.",
-        enabled: enabled_uncal,
-        settings: settings_obj
-    }, {
-        id: "ms_overlap_emb_window",
-        name: "Matching ms emb",
-        description: "Strict ms-overlap for non-embellishment notes, with in-window ordered-note matching for embellishments.",
-        enabled: enabled_emb_window,
-        settings: settings_obj
+        bucket_id: "ms_overlap",
+        settings: overlap_shared,
+        default_enabled: true
     }];
+
+    var out = [];
+    for (var i = 0; i < array_length(descriptors); i++) {
+        var d = descriptors[i];
+        if (!is_struct(d)) continue;
+
+        var enabled = bool(d.default_enabled ?? true);
+        var jid = string(d.id ?? "");
+        var bucket_id = string(d.bucket_id ?? jid);
+        var settings_obj = scoring_settings_merge({}, d.settings);
+
+        if (is_struct(store.judges) && variable_struct_exists(store.judges, bucket_id)) {
+            var bucket_entry = store.judges[$ bucket_id];
+            if (is_struct(bucket_entry) && is_struct(bucket_entry.settings)) {
+                settings_obj = scoring_settings_merge(settings_obj, bucket_entry.settings);
+            }
+        }
+        if (is_struct(store.judges) && variable_struct_exists(store.judges, jid)) {
+            var judge_entry = store.judges[$ jid];
+            if (is_struct(judge_entry)) {
+                if (variable_struct_exists(judge_entry, "enabled")) enabled = bool(judge_entry.enabled);
+                if (is_struct(judge_entry.settings)) settings_obj = scoring_settings_merge(settings_obj, judge_entry.settings);
+            }
+        }
+
+        array_push(out, {
+            id: jid,
+            name: string(d.name ?? jid),
+            description: string(d.description ?? ""),
+            enabled: enabled,
+            settings_bucket: bucket_id,
+            settings: settings_obj
+        });
+    }
+
+    return out;
 }
 
 /// @function scoring_ms_overlap_get_effective_settings()
@@ -1993,10 +4354,8 @@ function scoring_judge_settings_get_registry() {
 /// @returns {struct}  {count_rests, grade_a, grade_b, grade_c, grade_d}
 /// @reads   global.judge_settings_store (via scoring_judge_settings_get_registry)
 function scoring_ms_overlap_get_effective_settings() {
-    var reg = scoring_judge_settings_get_registry();
-    if (array_length(reg) > 0 && is_struct(reg[0]) && variable_struct_exists(reg[0], "settings")) {
-        return reg[0].settings;
-    }
+    var cfg = scoring_judge_get_effective_settings("ms_overlap");
+    if (is_struct(cfg) && array_length(struct_get_names(cfg)) > 0) return cfg;
     return { count_rests: false, grade_a: 90, grade_b: 80, grade_c: 70, grade_d: 60 };
 }
 
@@ -2075,7 +4434,7 @@ function scoring_judge_settings_load_for_player(_player_id = undefined) {
     var data = scoring_json_read_struct(path, fallback);
 
     var store = scoring_judge_settings_get_store();
-    store.selected_judge_id = string(variable_struct_exists(data, "selected_judge_id") ? variable_struct_get(data, "selected_judge_id") : "ms_overlap");
+    store.selected_judge_id = scoring_judge_normalize_id(variable_struct_exists(data, "selected_judge_id") ? variable_struct_get(data, "selected_judge_id") : "ms_overlap");
     store.judges = {};
 
     var judges = variable_struct_exists(data, "judges") ? variable_struct_get(data, "judges") : [];
@@ -2137,6 +4496,7 @@ function scoring_player_settings_build_payload(_player_id = undefined) {
         set_bpm_percent:         variable_global_exists("player_set_bpm_percent") ? real(global.player_set_bpm_percent) : 1.0,
         notebeam_measures_ahead:  (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_ahead")) ? real(global.timeline_cfg.measures_ahead) : 2.0,
         notebeam_measures_behind: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "measures_behind")) ? real(global.timeline_cfg.measures_behind) : 1.0,
+        filter_noise_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "filter_noise_ms")) ? max(0, real(global.timeline_cfg.filter_noise_ms)) : 10,
         audio_output_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")) ? real(global.timeline_cfg.audio_output_offset_ms) : 0,
         visual_alignment_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")) ? real(global.timeline_cfg.visual_alignment_offset_ms) : 0,
         input_capture_offset_ms: (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")) ? real(global.timeline_cfg.input_capture_offset_ms) : 0
@@ -2270,6 +4630,7 @@ function scoring_player_settings_load_for_player(_player_id = undefined) {
         var _cfg = gv_ensure_timeline_cfg_defaults();
         if (variable_struct_exists(s, "notebeam_measures_ahead"))  variable_struct_set(_cfg, "measures_ahead",  max(0.25, real(s[$ "notebeam_measures_ahead"])));
         if (variable_struct_exists(s, "notebeam_measures_behind")) variable_struct_set(_cfg, "measures_behind", max(0.25, real(s[$ "notebeam_measures_behind"])));
+        if (variable_struct_exists(s, "filter_noise_ms")) variable_struct_set(_cfg, "filter_noise_ms", max(0, real(s[$ "filter_noise_ms"])));
         // NOTE: Do NOT set timing offsets from top-level fields here — let timing_calibration_hydrate_from_settings() be the authoritative source
         // if (variable_struct_exists(s, "audio_output_offset_ms")) variable_struct_set(_cfg, "audio_output_offset_ms", real(s[$ "audio_output_offset_ms"]));
         // if (variable_struct_exists(s, "visual_alignment_offset_ms")) variable_struct_set(_cfg, "visual_alignment_offset_ms", real(s[$ "visual_alignment_offset_ms"]));
@@ -2730,16 +5091,9 @@ function scoring_judge_settings_draw_detail_canvas(_x1, _y1, _x2, _y2) {
         _state.setting_hitboxes = [];
 
         // Read live effective settings (store values merged with defaults).
-        var _cfg = scoring_ms_overlap_get_effective_settings();
-
-        var _setting_defs = [
-            { key: "count_rests",     label: "Count rests",  type: "bool", step:  1, min:   0, max:   1 },
-            { key: "grade_a",         label: "Grade A >=",   type: "int",  step:  5, min:  51, max: 100 },
-            { key: "grade_b",         label: "Grade B >=",   type: "int",  step:  5, min:  41, max:  99 },
-            { key: "grade_c",         label: "Grade C >=",   type: "int",  step:  5, min:  31, max:  99 },
-            { key: "grade_d",         label: "Grade D >=",   type: "int",  step:  5, min:  21, max:  99 },
-
-        ];
+        var _jid = string(variable_struct_exists(_row, "judge_id") ? variable_struct_get(_row, "judge_id") : "ms_overlap");
+        var _cfg = scoring_judge_get_effective_settings(_jid);
+        var _setting_defs = scoring_judge_get_setting_defs(_jid);
 
         var _row_h = max(22, _line_h + 8);
         var _ctrl_w = 90;
@@ -2918,15 +5272,24 @@ function scoring_judge_settings_handle_detail_click(_mx, _my, _x1, _y1, _x2, _y2
         var _store = scoring_judge_settings_get_store();
         if (!is_struct(_store)) return true;
         if (!variable_struct_exists(_store, "judges") || !is_struct(_store.judges)) _store.judges = {};
-        if (!variable_struct_exists(_store.judges, "ms_overlap")) {
-            _store.judges[$ "ms_overlap"] = { enabled: true, settings: {} };
+
+        var _selected_jid = string(_state.selected_judge_id ?? "ms_overlap");
+        if (_selected_jid == "") _selected_jid = "ms_overlap";
+        var _bucket_id = scoring_judge_settings_get_bucket_id(_selected_jid);
+        if (_bucket_id == "") _bucket_id = _selected_jid;
+
+        if (!variable_struct_exists(_store.judges, _bucket_id)) {
+            _store.judges[$ _bucket_id] = { enabled: true, settings: {} };
         }
-        var _judge = _store.judges[$ "ms_overlap"];
+        if (!variable_struct_exists(_store.judges, _selected_jid)) {
+            _store.judges[$ _selected_jid] = { enabled: true, settings: {} };
+        }
+        var _judge = _store.judges[$ _bucket_id];
         if (!variable_struct_exists(_judge, "settings") || !is_struct(_judge.settings)) _judge.settings = {};
         var _s = _judge.settings;
 
         // Read current effective value (defaults merged in).
-        var _cfg = scoring_ms_overlap_get_effective_settings();
+        var _cfg = scoring_judge_get_effective_settings(_selected_jid);
         var _cur = _cfg[$ _key];
         var _new_val = _cur;
 
@@ -2936,26 +5299,56 @@ function scoring_judge_settings_handle_detail_click(_mx, _my, _x1, _y1, _x2, _y2
             case "inc":    _new_val = real(_cur) + _step; break;
         }
 
-        // Clamp and enforce grade ordering (A > B > C > D > 0).
-        switch (_key) {
-            case "count_rests":
-                _new_val = bool(_new_val);
-                break;
-            case "grade_a":
-                _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_b) + 1, 100);
-                break;
-            case "grade_b":
-                _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_c) + 1, real(_cfg.grade_a) - 1);
-                break;
-            case "grade_c":
-                _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_d) + 1, real(_cfg.grade_b) - 1);
-                break;
-            case "grade_d":
-                _new_val = clamp(floor(real(_new_val)), 1, real(_cfg.grade_c) - 1);
-                break;
+        if (string_pos("on_beat", _selected_jid) == 1) {
+            switch (_key) {
+                case "onbeat_center_ms":
+                    _new_val = clamp(floor(real(_new_val)), 0, 120);
+                    break;
+                case "onbeat_grade_a_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_center_ms), 220);
+                    break;
+                case "onbeat_grade_b_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_grade_a_ms), 220);
+                    break;
+                case "onbeat_grade_c_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_grade_b_ms), 220);
+                    break;
+                case "onbeat_grade_d_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_grade_c_ms), 220);
+                    break;
+                case "onbeat_miss_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_grade_d_ms), 260);
+                    break;
+                case "onbeat_match_window_ms":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.onbeat_miss_ms), 320);
+                    break;
+                case "grace_anchor_lead_ms":
+                    _new_val = clamp(floor(real(_new_val)), 20, 500);
+                    break;
+            }
+        } else {
+            // Clamp and enforce grade ordering (A > B > C > D > 0).
+            switch (_key) {
+                case "count_rests":
+                    _new_val = bool(_new_val);
+                    break;
+                case "grade_a":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_b) + 1, 100);
+                    break;
+                case "grade_b":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_c) + 1, real(_cfg.grade_a) - 1);
+                    break;
+                case "grade_c":
+                    _new_val = clamp(floor(real(_new_val)), real(_cfg.grade_d) + 1, real(_cfg.grade_b) - 1);
+                    break;
+                case "grade_d":
+                    _new_val = clamp(floor(real(_new_val)), 1, real(_cfg.grade_c) - 1);
+                    break;
+            }
         }
 
         _s[$ _key] = _new_val;
+        _store.judges[$ _bucket_id] = _judge;
         global.judge_settings_store = _store;
         scoring_judge_settings_save_for_player();
         return true;
@@ -2976,31 +5369,89 @@ function scoring_judge_settings_handle_detail_click(_mx, _my, _x1, _y1, _x2, _y2
 function scoring_loop_overview_ensure_state() {
     if (!variable_global_exists("loop_score_overview_ui_state")
         || !is_struct(global.loop_score_overview_ui_state)) {
-        global.loop_score_overview_ui_state = { scroll_row: 0 };
+        global.loop_score_overview_ui_state = {
+            scroll_row: 0,
+            selected_iteration: -1
+        };
     }
     if (!variable_struct_exists(global.loop_score_overview_ui_state, "scroll_row")) {
         global.loop_score_overview_ui_state.scroll_row = 0;
     }
+    if (!variable_struct_exists(global.loop_score_overview_ui_state, "selected_iteration")) {
+        global.loop_score_overview_ui_state.selected_iteration = -1;
+    }
     return global.loop_score_overview_ui_state;
+}
+
+/// @function scoring_loop_overview_select_iteration(_iteration, _focus_playhead)
+/// @description Persist selected loop iteration and projection window for post-play UI (tune structure + notebeam context).
+/// @param {real} _iteration Iteration number (>0)
+/// @param {bool} _focus_playhead If true, moves review playhead to selected window start.
+/// @returns {bool} True when selection was applied.
+/// @reads global.timeline_state.loop_iteration_scores
+/// @writes global.loop_score_overview_ui_state.selected_iteration, global.timeline_state.review_selected_loop_iteration, global.timeline_state.review_selected_loop_window, global.timeline_state.playhead_ms
+function scoring_loop_overview_select_iteration(_iteration, _focus_playhead = true) {
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "loop_iteration_scores")
+        || !is_array(global.timeline_state.loop_iteration_scores)) return false;
+
+    var _scores = global.timeline_state.loop_iteration_scores;
+    var _want = floor(real(_iteration));
+    if (_want <= 0) return false;
+
+    var _found = undefined;
+    for (var _i = 0; _i < array_length(_scores); _i++) {
+        var _row = _scores[_i];
+        if (!is_struct(_row)) continue;
+        var _it = floor(real(_row[$ "iteration"] ?? -1));
+        if (_it != _want) continue;
+        _found = _row;
+        break;
+    }
+    if (!is_struct(_found)) return false;
+
+    var _state = scoring_loop_overview_ensure_state();
+    _state.selected_iteration = _want;
+
+    var _win_start = real(_found[$ "start_ms"] ?? 0);
+    var _win_end = real(_found[$ "end_ms"] ?? _win_start);
+    global.timeline_state.review_selected_loop_iteration = _want;
+    global.timeline_state.review_selected_loop_window = {
+        iteration: _want,
+        start_ms: _win_start,
+        end_ms: _win_end
+    };
+
+    if (_focus_playhead) {
+        global.timeline_state.playhead_ms = _win_start;
+        var _sync_idx = asset_get_index("gv_sync_now_line_display");
+        if (script_exists(_sync_idx)) {
+            script_execute(_sync_idx);
+        }
+    }
+    return true;
 }
 
 /// @function scoring_build_loop_iteration_scores()
 /// @description Compute a per-loop-iteration overall score from EVENT_HISTORY + timeline_state spans.
 ///              Stores results in global.timeline_state.loop_iteration_scores.
 /// @returns {array}  Array of {iteration, score, grade, start_ms, end_ms} structs
-/// @reads   global.EVENT_HISTORY, global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries)
+/// @reads   global.EVENT_HISTORY, global.EVENT_RUNTIME_PLAYER, global.EVENT_RUNTIME_PLANNED, global.timeline_state (planned_spans, review_full_trace, player_in, measure_nav_entries)
 /// @writes  global.timeline_state.loop_iteration_scores
 function scoring_build_loop_iteration_scores() {
     var out = [];
 
-    if (!variable_global_exists("EVENT_HISTORY") || !is_array(global.EVENT_HISTORY)) return out;
     if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return out;
+
+    var eh_effective_idx = asset_get_index("event_history_get_effective_events");
+    if (!script_exists(eh_effective_idx)) return out;
+
+    var _hist = script_execute(eh_effective_idx);
+    if (!is_array(_hist) || array_length(_hist) <= 0) return out;
 
     // --- Build per-iteration time windows from game events ---
     var win_map    = {};  // key = string(iter) -> {start_ms, end_ms}
     var iter_order = [];
-
-    var _hist = global.EVENT_HISTORY;
     var _hn   = array_length(_hist);
     for (var i = 0; i < _hn; i++) {
         var ev = _hist[i];
@@ -3025,6 +5476,8 @@ function scoring_build_loop_iteration_scores() {
     if (array_length(iter_order) <= 0) {
         if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
             global.timeline_state.loop_iteration_scores = out;
+            global.timeline_state.review_selected_loop_iteration = -1;
+            global.timeline_state.review_selected_loop_window = { iteration: -1, start_ms: 0, end_ms: 0 };
         }
         return out;
     }
@@ -3137,7 +5590,79 @@ function scoring_build_loop_iteration_scores() {
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.loop_iteration_scores = out;
     }
+
+    // Post-play default selection policy: latest loop iteration.
+    if (array_length(out) > 0) {
+        var _last = out[array_length(out) - 1];
+        if (is_struct(_last)) {
+            var _last_it = floor(real(_last[$ "iteration"] ?? -1));
+            if (_last_it > 0) {
+                scoring_loop_overview_select_iteration(_last_it, false);
+            }
+        }
+    }
     return out;
+}
+
+/// @function scoring_loop_overview_handle_click(_mx, _my, _bx1, _by1, _bx2, _by2)
+/// @description Handle left-click selection inside the loop score overview rows.
+/// @returns {bool} True when click selected a row.
+/// @reads global.timeline_state.loop_iteration_scores
+/// @writes global.loop_score_overview_ui_state.selected_iteration, global.timeline_state.review_selected_loop_iteration, global.timeline_state.review_selected_loop_window, global.timeline_state.playhead_ms
+function scoring_loop_overview_handle_click(_mx, _my, _bx1, _by1, _bx2, _by2) {
+    if (_mx < _bx1 || _mx > _bx2 || _my < _by1 || _my > _by2) return false;
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+    if (!variable_struct_exists(global.timeline_state, "loop_iteration_scores")
+        || !is_array(global.timeline_state.loop_iteration_scores)) return false;
+
+    if (variable_struct_exists(global.timeline_state, "loop_score_row_hitboxes")
+        && is_array(global.timeline_state.loop_score_row_hitboxes)) {
+        var _hitboxes = global.timeline_state.loop_score_row_hitboxes;
+        for (var _hi = 0; _hi < array_length(_hitboxes); _hi++) {
+            var _hb = _hitboxes[_hi];
+            if (!is_struct(_hb)) continue;
+            var _hx1 = real(_hb[$ "x1"] ?? -1);
+            var _hy1 = real(_hb[$ "y1"] ?? -1);
+            var _hx2 = real(_hb[$ "x2"] ?? -1);
+            var _hy2 = real(_hb[$ "y2"] ?? -1);
+            if (_mx < _hx1 || _mx > _hx2 || _my < _hy1 || _my > _hy2) continue;
+            var _hit_iter = floor(real(_hb[$ "iteration"] ?? -1));
+            if (_hit_iter > 0) {
+                return scoring_loop_overview_select_iteration(_hit_iter, true);
+            }
+        }
+    }
+
+    var _scores = global.timeline_state.loop_iteration_scores;
+    var _n_iters = array_length(_scores);
+    if (_n_iters <= 0) return false;
+
+    var _state = scoring_loop_overview_ensure_state();
+    var _w = max(1, _bx2 - _bx1);
+    var _h = max(1, _by2 - _by1);
+    var _pad = 8;
+    var _t_scl = 0.84;
+    var _b_scl = 0.70;
+    var _title_h = max(18, floor(string_height("Ag") * _t_scl)) + 4;
+    var _header_h = max(14, floor(string_height("Ag") * _b_scl)) + 4;
+    var _row_h = max(18, floor(string_height("Ag") * _b_scl)) + 6;
+    var _content_y0 = _by1 + _pad + _title_h + _header_h;
+    var _visible_rows = max(1, floor((_by2 - _content_y0 - _pad) / _row_h));
+    var _max_scroll = max(0, _n_iters - _visible_rows);
+    var _scroll = clamp(floor(real(_state.scroll_row ?? 0)), 0, _max_scroll);
+
+    if (_my < _content_y0 || _my > (_by2 - _pad)) return false;
+    var _row_local = floor((_my - _content_y0) / _row_h);
+    if (_row_local < 0 || _row_local >= _visible_rows) return false;
+
+    var _idx = _scroll + _row_local;
+    if (_idx < 0 || _idx >= _n_iters) return false;
+    var _entry = _scores[_idx];
+    if (!is_struct(_entry)) return false;
+
+    var _iter = floor(real(_entry[$ "iteration"] ?? -1));
+    if (_iter <= 0) return false;
+    return scoring_loop_overview_select_iteration(_iter, true);
 }
 
 /// @function scoring_loop_overview_handle_scroll(_delta, _mx, _my, _bx1, _by1, _bx2, _by2)
@@ -3198,6 +5723,9 @@ function scoring_loop_overview_draw_canvas(_x1, _y1, _x2, _y2) {
     draw_set_valign(fa_top);
 
     var _state = scoring_loop_overview_ensure_state();
+    if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+        global.timeline_state.loop_score_row_hitboxes = [];
+    }
 
     // Fetch loop iteration scores
     var _scores = [];
@@ -3280,10 +5808,34 @@ function scoring_loop_overview_draw_canvas(_x1, _y1, _x2, _y2) {
         var _row_bg = (_data_idx mod 2 == 0)
             ? make_color_rgb(28, 33, 40)
             : make_color_rgb(34, 39, 48);
+
+        var _selected_it = floor(real(_state.selected_iteration ?? -1));
+        var _is_selected_row = (_selected_it > 0) && (_iter_num == _selected_it);
+        if (_is_selected_row) {
+            _row_bg = make_color_rgb(52, 62, 84);
+        }
         draw_set_alpha(0.80);
         draw_set_color(_row_bg);
         draw_rectangle(_x1 + _pad, _row_y, _x2 - _pad, _row_y + _row_h - 1, false);
         draw_set_alpha(1);
+
+        if (_is_selected_row) {
+            draw_set_alpha(0.95);
+            draw_set_color(make_color_rgb(224, 206, 92));
+            draw_line(_x1 + _pad, _row_y, _x2 - _pad, _row_y);
+            draw_line(_x1 + _pad, _row_y + _row_h - 1, _x2 - _pad, _row_y + _row_h - 1);
+            draw_set_alpha(1);
+        }
+
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+            array_push(global.timeline_state.loop_score_row_hitboxes, {
+                iteration: _iter_num,
+                x1: _x1 + _pad,
+                y1: _row_y,
+                x2: _x2 - _pad,
+                y2: _row_y + _row_h - 1
+            });
+        }
 
         // Loop # label
         draw_set_color(make_color_rgb(190, 190, 190));

@@ -1,0 +1,334 @@
+{
+  "tune": "Lady Carmichael of Castlecraig",
+  "beats_per_measure": 4,
+  "units_per_measure": 8,
+  "images": [
+    "m000.png",
+    "m001.png",
+    "m002.png",
+    "m003.png",
+    "m004.png",
+    "m005.png",
+    "m006.png",
+    "m007.png",
+    "m008.png",
+    "m009.png",
+    "m010.png",
+    "m011.png",
+    "m012.png",
+    "m013.png",
+    "m014.png",
+    "m015.png"
+  ],
+  "image_meta": [
+    {
+      "file": "m000.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 255.25,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        79.66,
+        129.86,
+        180.06,
+        226.41
+      ]
+    },
+    {
+      "file": "m001.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 216.10999999999999,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        74.45,
+        124.65,
+        174.84
+      ]
+    },
+    {
+      "file": "m002.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 223.68,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        148.48,
+        194.84
+      ]
+    },
+    {
+      "file": "m003.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 230.56000000000006,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        98.29,
+        148.49,
+        189.3
+      ]
+    },
+    {
+      "file": "m004.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 223.67999999999995,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        148.49,
+        194.84
+      ]
+    },
+    {
+      "file": "m005.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 216.1099999999999,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        74.45,
+        124.65,
+        174.84
+      ]
+    },
+    {
+      "file": "m006.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 223.68000000000006,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        148.48,
+        194.84
+      ]
+    },
+    {
+      "file": "m007.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 230.55999999999995,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        98.29,
+        148.49,
+        189.3
+      ]
+    },
+    {
+      "file": "m008.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 219.84000000000015,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        144.64,
+        191
+      ]
+    },
+    {
+      "file": "m009.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 237.52999999999997,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        38.09,
+        88.29,
+        138.49,
+        208.68
+      ]
+    },
+    {
+      "file": "m010.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 219.84000000000015,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        144.64,
+        190.99
+      ]
+    },
+    {
+      "file": "m011.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 225.28999999999996,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        82.02,
+        132.22,
+        196.45
+      ]
+    },
+    {
+      "file": "m012.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 219.8399999999997,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.29,
+        144.64,
+        191
+      ]
+    },
+    {
+      "file": "m013.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 237.5300000000002,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        38.09,
+        88.29,
+        138.49,
+        208.68
+      ]
+    },
+    {
+      "file": "m014.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 219.84000000000015,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        98.28,
+        144.64,
+        190.99
+      ]
+    },
+    {
+      "file": "m015.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.699999999999996,
+      "content_left_px": 0,
+      "content_right_px": 225.28999999999996,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        82.02,
+        132.22,
+        196.45
+      ]
+    }
+  ],
+  "pickup_image_index": -1,
+  "playback_to_image": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "snippet_durations": [
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8
+  ]
+}

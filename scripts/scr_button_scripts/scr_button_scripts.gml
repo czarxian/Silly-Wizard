@@ -623,75 +623,485 @@
 		diag_log_append_line(_msg, "bpm_trace.log", true);
 	}
 
-	/// @function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel)
-	/// @description Scan a MIDI event array for unmatched note_ons and return a note_off for each (loop boundary cleanup).
-	/// @param _selected_template Array of MIDI event structs for the loop segment
-	/// @param _metro_channel Channel to exclude (metronome)
-	/// @returns Array of note_off event structs to insert at loop boundary
-	function scr_button_build_loop_boundary_note_offs(_selected_template, _metro_channel) {
-		var boundary_note_offs = [];
-		if (!is_array(_selected_template) || array_length(_selected_template) <= 0) return boundary_note_offs;
+	/// @function scr_button_debug_get_root_dir()
+	/// @description Resolve the debug export directory for loop/base planned-event snapshots.
+	/// @returns {string} Absolute or runtime-relative folder path ending with '/'.
+	/// @reads diag_log_get_debug_root (optional)
+	/// @writes filesystem directory create (if missing)
+	/// @objects none
+	/// @callers scr_button_export_planned_events_snapshot
+	function scr_button_debug_get_root_dir() {
+		var root = "datafiles/debug/";
+		if (is_undefined(diag_log_get_debug_root) == false) {
+			root = string(diag_log_get_debug_root());
+		}
+		if (string_length(root) <= 0) root = "datafiles/debug/";
+		var last_ch = string_copy(root, string_length(root), 1);
+		if (last_ch != "/" && last_ch != "\\") root += "/";
+		if (!directory_exists(root)) directory_create(root);
+		return root;
+	}
 
-		var active_notes = {};
-		for (var i = 0; i < array_length(_selected_template); i++) {
-			var ev = _selected_template[i];
+	/// @function scr_button_export_planned_events_snapshot(_events, _label, _run_id)
+	/// @description Export planned events to CSV (event rows + per-measure summary) for side-by-side loop diagnostics.
+	/// @param {array} _events Planned event array to export.
+	/// @param {string} _label Snapshot label, e.g. "base" or "active_loop".
+	/// @param {string} _run_id Stable run identifier to pair base/active exports.
+	/// @returns {bool} true if export succeeded.
+	/// @reads global.current_tune_name
+	/// @writes files under datafiles/debug/loop_compare_*.csv
+	/// @objects none
+	/// @callers start_play
+	function scr_button_export_planned_events_snapshot(_events, _label, _run_id) {
+		if (!is_array(_events) || array_length(_events) <= 0) return false;
+		var label = string(_label);
+		if (label == "") label = "events";
+		var run_id = string(_run_id);
+		if (run_id == "") run_id = string(current_time);
+
+		var root = scr_button_debug_get_root_dir();
+		var tune_name = variable_global_exists("current_tune_name") ? string(global.current_tune_name) : "unknown";
+		var safe_tune = string_replace_all(tune_name, " ", "_");
+		safe_tune = string_replace_all(safe_tune, "/", "-");
+		safe_tune = string_replace_all(safe_tune, "\\", "-");
+		safe_tune = string_replace_all(safe_tune, ":", "-");
+
+		var events_path = root + "loop_compare_events_" + safe_tune + "_" + run_id + "_" + label + ".csv";
+		var summary_path = root + "loop_compare_summary_" + safe_tune + "_" + run_id + "_" + label + ".csv";
+
+		var f = file_text_open_write(events_path);
+		if (f < 0) return false;
+		file_text_write_string(f,
+			"idx,time_ms,measure,part,type,marker_type,note,channel,loop_iteration,loop_blank,loop_support_tail,owner_nav_idx,owner_measure,owner_part,owner_source,boundary_role,owner_label_mismatch\n");
+
+		var summary_map = {};
+		for (var i = 0; i < array_length(_events); i++) {
+			var ev = _events[i];
+			if (!is_struct(ev)) continue;
+			var t = real(scr_button_struct_get(ev, "time", 0));
+			var m = floor(real(scr_button_struct_get(ev, "measure", -1)));
+			var p = max(1, floor(real(scr_button_struct_get(ev, "part", 1))));
+			var typ = string(scr_button_struct_get(ev, "type", ""));
+			var mt = string(scr_button_struct_get(ev, "marker_type", ""));
+			var note = floor(real(scr_button_struct_get(ev, "note", -1)));
+			var ch = floor(real(scr_button_struct_get(ev, "channel", -1)));
+			var li = floor(real(scr_button_struct_get(ev, "loop_iteration", 0)));
+			var lblank = scr_button_struct_get(ev, "loop_blank_measure", false) ? 1 : 0;
+			var ltail = scr_button_struct_get(ev, "loop_support_tail", false) ? 1 : 0;
+			var own_nav = floor(real(scr_button_struct_get(ev, "owner_nav_idx", -1)));
+			var own_m = floor(real(scr_button_struct_get(ev, "owner_measure", -1)));
+			var own_p = max(1, floor(real(scr_button_struct_get(ev, "owner_part", 1))));
+			var own_src = string(scr_button_struct_get(ev, "owner_source", ""));
+			var b_role = string(scr_button_struct_get(ev, "boundary_role", ""));
+			var mismatch = scr_button_struct_get(ev, "owner_label_mismatch", false) ? 1 : 0;
+
+			var line = string(i) + "," + string(t)
+				+ "," + string(m)
+				+ "," + string(p)
+				+ "," + typ
+				+ "," + mt
+				+ "," + string(note)
+				+ "," + string(ch)
+				+ "," + string(li)
+				+ "," + string(lblank)
+				+ "," + string(ltail)
+				+ "," + string(own_nav)
+				+ "," + string(own_m)
+				+ "," + string(own_p)
+				+ "," + own_src
+				+ "," + b_role
+				+ "," + string(mismatch)
+				+ "\n";
+			file_text_write_string(f, line);
+
+			var sk = string(p) + ":" + string(m);
+			if (!variable_struct_exists(summary_map, sk)) {
+				summary_map[$ sk] = {
+					part: p,
+					measure: m,
+					event_count: 0,
+					note_on_count: 0,
+					note_off_count: 0,
+					marker_count: 0,
+					first_time_ms: t,
+					last_time_ms: t,
+					owner_mismatch_count: 0,
+					support_tail_count: 0
+				};
+			}
+			var sm = summary_map[$ sk];
+			sm.event_count += 1;
+			if (typ == "note_on") sm.note_on_count += 1;
+			else if (typ == "note_off") sm.note_off_count += 1;
+			else if (typ == "marker") sm.marker_count += 1;
+			if (t < real(sm.first_time_ms)) sm.first_time_ms = t;
+			if (t > real(sm.last_time_ms)) sm.last_time_ms = t;
+			if (mismatch == 1) sm.owner_mismatch_count += 1;
+			if (ltail == 1) sm.support_tail_count += 1;
+			summary_map[$ sk] = sm;
+		}
+		file_text_close(f);
+
+		var sf = file_text_open_write(summary_path);
+		if (sf < 0) return false;
+		file_text_write_string(sf,
+			"part,measure,event_count,note_on_count,note_off_count,marker_count,first_time_ms,last_time_ms,owner_mismatch_count,support_tail_count\n");
+		var skeys = variable_struct_get_names(summary_map);
+		if (is_array(skeys) && array_length(skeys) > 1) {
+			array_sort(skeys, function(a, b) {
+				var sa = string(a);
+				var sb = string(b);
+				var cpa = string_pos(":", sa);
+				var cpb = string_pos(":", sb);
+				var pa = (cpa > 0) ? floor(real(string_copy(sa, 1, cpa - 1))) : 1;
+				var pb = (cpb > 0) ? floor(real(string_copy(sb, 1, cpb - 1))) : 1;
+				if (pa != pb) return pa - pb;
+				var ma = (cpa > 0) ? floor(real(string_delete(sa, 1, cpa))) : floor(real(sa));
+				var mb = (cpb > 0) ? floor(real(string_delete(sb, 1, cpb))) : floor(real(sb));
+				return ma - mb;
+			});
+		}
+
+		for (var si = 0; is_array(skeys) && si < array_length(skeys); si++) {
+			var s_key = string(skeys[si]);
+			if (!variable_struct_exists(summary_map, s_key)) continue;
+			var row = summary_map[$ s_key];
+			file_text_write_string(sf,
+				string(scr_button_struct_get(row, "part", 1)) + ","
+				+ string(scr_button_struct_get(row, "measure", -1)) + ","
+				+ string(scr_button_struct_get(row, "event_count", 0)) + ","
+				+ string(scr_button_struct_get(row, "note_on_count", 0)) + ","
+				+ string(scr_button_struct_get(row, "note_off_count", 0)) + ","
+				+ string(scr_button_struct_get(row, "marker_count", 0)) + ","
+				+ string(scr_button_struct_get(row, "first_time_ms", 0)) + ","
+				+ string(scr_button_struct_get(row, "last_time_ms", 0)) + ","
+				+ string(scr_button_struct_get(row, "owner_mismatch_count", 0)) + ","
+				+ string(scr_button_struct_get(row, "support_tail_count", 0))
+				+ "\n");
+		}
+		file_text_close(sf);
+
+		show_debug_message("[LOOP_COMPARE] Exported " + label + " events: " + events_path);
+		show_debug_message("[LOOP_COMPARE] Exported " + label + " summary: " + summary_path);
+		return true;
+	}
+
+	/// @function scr_button_apply_event_ownership_metadata(_events)
+	/// @description Annotate planned events with canonical ownership metadata (part/measure/nav) and boundary role.
+	/// @param {array} _events Planned event array to annotate in-place.
+	/// @returns {struct} Annotation stats: {events, annotated, unresolved, nav_entries}
+	/// @reads global.timeline_state.measure_ms, gv_build_measure_nav_map
+	/// @writes _events[].owner_part/owner_measure/owner_nav_idx/owner_start_ms/owner_end_ms/boundary_role/exec_rank
+	/// @objects none
+	/// @callers scr_button_prepare_single_tune_playback_events, scr_button_loop_build_playback_events
+	function scr_button_build_measure_nav_map_for_ownership(_events) {
+		var out = { entries: [] };
+		if (!is_array(_events) || array_length(_events) <= 0) return out;
+
+		var measure_start_marker = {};
+		var measure_start_any = {};
+		var measure_part_map = {};
+		var part_end_ms = {};
+
+		for (var i = 0; i < array_length(_events); i++) {
+			var ev = _events[i];
+			if (!is_struct(ev)) continue;
+			var ev_time = real(scr_button_struct_get(ev, "time", 0));
+			var ev_measure = floor(real(scr_button_struct_get(ev, "measure", -1)));
+			var ev_part = max(1, floor(real(scr_button_struct_get(ev, "part", 1))));
+			var ev_iter = max(0, floor(real(scr_button_struct_get(ev, "loop_iteration", 0))));
+
+			var part_key = string(ev_part);
+			if (!variable_struct_exists(part_end_ms, part_key) || ev_time > real(part_end_ms[$ part_key])) {
+				part_end_ms[$ part_key] = ev_time;
+			}
+
+			if (ev_measure < 1) continue;
+			var pmk = string(ev_part) + ":" + string(ev_measure) + ":" + string(ev_iter);
+			if (!variable_struct_exists(measure_start_any, pmk)
+				|| ev_time < real(measure_start_any[$ pmk])) {
+				measure_start_any[$ pmk] = ev_time;
+				measure_part_map[$ pmk] = ev_part;
+			}
+
+			var ev_type = string(scr_button_struct_get(ev, "type", ""));
+			if (ev_type != "marker") continue;
+			var mk = string(scr_button_struct_get(ev, "marker_type", ""));
+			var beat = floor(real(scr_button_struct_get(ev, "beat", 0)));
+			var beat_frac = real(scr_button_struct_get(ev, "beat_fraction", 0));
+			var is_boundary = (mk == "bar") || (mk == "beat" && beat == 1 && abs(beat_frac) <= 0.001);
+			if (!is_boundary) continue;
+
+			if (!variable_struct_exists(measure_start_marker, pmk)
+				|| ev_time < real(measure_start_marker[$ pmk])) {
+				measure_start_marker[$ pmk] = ev_time;
+			}
+		}
+
+		var keys = variable_struct_get_names(measure_start_any);
+		if (!is_array(keys) || array_length(keys) <= 0) return out;
+
+		var entries = [];
+		for (var ki = 0; ki < array_length(keys); ki++) {
+			var key = string(keys[ki]);
+			var cpos = string_pos(":", key);
+			if (cpos <= 0) continue;
+			var ptxt = string_copy(key, 1, cpos - 1);
+			var rest = string_delete(key, 1, cpos);
+			var cpos2 = string_pos(":", rest);
+			if (cpos2 <= 0) continue;
+			var mtxt = string_copy(rest, 1, cpos2 - 1);
+			var itxt = string_delete(rest, 1, cpos2);
+			var p = max(1, floor(real(ptxt)));
+			var m = floor(real(mtxt));
+			var iter = max(0, floor(real(itxt)));
+			if (m < 1) continue;
+
+			var s = variable_struct_exists(measure_start_marker, key)
+				? real(measure_start_marker[$ key])
+				: real(measure_start_any[$ key]);
+			array_push(entries, {
+				part: p,
+				measure: m,
+				loop_iteration: iter,
+				start_ms: s,
+				end_ms: s
+			});
+		}
+
+		if (array_length(entries) <= 0) return out;
+		array_sort(entries, function(a, b) {
+			var ap = floor(real(scr_button_struct_get(a, "part", 1)));
+			var bp = floor(real(scr_button_struct_get(b, "part", 1)));
+			if (ap != bp) return ap - bp;
+			var ai = max(0, floor(real(scr_button_struct_get(a, "loop_iteration", 0))));
+			var bi = max(0, floor(real(scr_button_struct_get(b, "loop_iteration", 0))));
+			if (ai != bi) return ai - bi;
+			var as = real(scr_button_struct_get(a, "start_ms", 0));
+			var bs = real(scr_button_struct_get(b, "start_ms", 0));
+			if (as != bs) return as - bs;
+			var am = floor(real(scr_button_struct_get(a, "measure", 0)));
+			var bm = floor(real(scr_button_struct_get(b, "measure", 0)));
+			return am - bm;
+		});
+
+		var fallback_measure_ms = (variable_global_exists("timeline_state")
+			&& is_struct(global.timeline_state)
+			&& variable_struct_exists(global.timeline_state, "measure_ms"))
+			? max(1, real(global.timeline_state.measure_ms))
+			: 1000;
+
+		for (var ei = 0; ei < array_length(entries); ei++) {
+			var cur = entries[ei];
+			if (!is_struct(cur)) continue;
+			var cur_p = max(1, floor(real(scr_button_struct_get(cur, "part", 1))));
+			var cur_i = max(0, floor(real(scr_button_struct_get(cur, "loop_iteration", 0))));
+			var cur_s = real(scr_button_struct_get(cur, "start_ms", 0));
+			var end_ms = cur_s + fallback_measure_ms;
+			var found_next = false;
+
+			for (var ni = ei + 1; ni < array_length(entries); ni++) {
+				var nxt = entries[ni];
+				if (!is_struct(nxt)) continue;
+				var nxt_p = max(1, floor(real(scr_button_struct_get(nxt, "part", 1))));
+				var nxt_i = max(0, floor(real(scr_button_struct_get(nxt, "loop_iteration", 0))));
+				if (nxt_p != cur_p) continue;
+				if (nxt_i != cur_i) continue;
+				end_ms = max(cur_s, real(scr_button_struct_get(nxt, "start_ms", cur_s)));
+				found_next = true;
+				break;
+			}
+
+			if (!found_next) {
+				var pk = string(cur_p);
+				if (variable_struct_exists(part_end_ms, pk)) {
+					end_ms = max(end_ms, real(part_end_ms[$ pk]));
+				}
+			}
+
+			cur.end_ms = end_ms;
+			entries[ei] = cur;
+		}
+
+		out.entries = entries;
+		return out;
+	}
+
+	function scr_button_apply_event_ownership_metadata(_events) {
+		var stats = { events: 0, annotated: 0, unresolved: 0, nav_entries: 0 };
+		if (!is_array(_events) || array_length(_events) <= 0) return stats;
+
+		var nav_map = scr_button_build_measure_nav_map_for_ownership(_events);
+		var nav_entries = (is_struct(nav_map)
+			&& variable_struct_exists(nav_map, "entries")
+			&& is_array(variable_struct_get(nav_map, "entries")))
+			? variable_struct_get(nav_map, "entries")
+			: [];
+
+		var nav_index_by_part_measure = {};
+		var nav_index_by_part_measure_iter = {};
+		for (var ni = 0; ni < array_length(nav_entries); ni++) {
+			var ne = nav_entries[ni];
+			if (!is_struct(ne)) continue;
+			var npm = floor(real(scr_button_struct_get(ne, "measure", -1)));
+			var npp = max(1, floor(real(scr_button_struct_get(ne, "part", 1))));
+			var npi = max(0, floor(real(scr_button_struct_get(ne, "loop_iteration", 0))));
+			if (npm < 1) continue;
+			var npk = string(npp) + ":" + string(npm);
+			if (!variable_struct_exists(nav_index_by_part_measure, npk)) {
+				nav_index_by_part_measure[$ npk] = ni;
+			}
+			var npki = npk + ":" + string(npi);
+			if (!variable_struct_exists(nav_index_by_part_measure_iter, npki)) {
+				nav_index_by_part_measure_iter[$ npki] = ni;
+			}
+		}
+
+		stats.events = array_length(_events);
+		stats.nav_entries = array_length(nav_entries);
+
+		for (var ei = 0; ei < array_length(_events); ei++) {
+			var ev = _events[ei];
 			if (!is_struct(ev)) continue;
 
 			var ev_type = string(scr_button_struct_get(ev, "type", ""));
-			if (ev_type != "note_on" && ev_type != "note_off") continue;
+			var ev_time = real(scr_button_struct_get(ev, "time", 0));
+			var ev_measure = floor(real(scr_button_struct_get(ev, "measure", -1)));
+			var ev_part = max(1, floor(real(scr_button_struct_get(ev, "part", 1))));
+			var ev_iter = max(0, floor(real(scr_button_struct_get(ev, "loop_iteration", 0))));
 
-			var ev_channel = floor(real(scr_button_struct_get(ev, "channel", -1)));
-			if (ev_channel == _metro_channel) continue;
+			var exec_rank = 3;
+			if (ev_type == "note_off") exec_rank = 0;
+			else if (ev_type == "marker") exec_rank = 1;
+			else if (ev_type == "note_on") exec_rank = 2;
 
-			var ev_note = floor(real(scr_button_struct_get(ev, "note", -1)));
-			if (ev_note < 0) continue;
+			var owner_nav_idx = -1;
+			var owner_part = ev_part;
+			var owner_measure = ev_measure;
+			var owner_start_ms = ev_time;
+			var owner_end_ms = ev_time;
+			var owner_source = "none";
+			var source_measure = ev_measure;
 
-			var note_key = string(ev_channel) + ":" + string(ev_note);
-			if (ev_type == "note_on") {
-				if (!variable_struct_exists(active_notes, note_key)) active_notes[$ note_key] = [];
-				var note_stack = active_notes[$ note_key];
-				array_push(note_stack, ev);
-				active_notes[$ note_key] = note_stack;
-			} else if (variable_struct_exists(active_notes, note_key)) {
-				var off_stack = active_notes[$ note_key];
-				var off_len = array_length(off_stack);
-				if (off_len > 0) {
-					array_resize(off_stack, off_len - 1);
-					active_notes[$ note_key] = off_stack;
+			if (array_length(nav_entries) > 0) {
+				for (var si = 0; si < array_length(nav_entries); si++) {
+					var se = nav_entries[si];
+					if (!is_struct(se)) continue;
+					var s_part = max(1, floor(real(scr_button_struct_get(se, "part", 1))));
+					var s_iter = max(0, floor(real(scr_button_struct_get(se, "loop_iteration", 0))));
+					if (s_part != ev_part) continue;
+					if (s_iter != ev_iter) continue;
+					var s_start = real(scr_button_struct_get(se, "start_ms", 0));
+					var s_end = real(scr_button_struct_get(se, "end_ms", s_start));
+					if (ev_time >= s_start && ev_time < s_end) {
+						owner_nav_idx = si;
+						owner_source = "time_window";
+						break;
+					}
 				}
 			}
-		}
 
-		var active_keys = variable_struct_get_names(active_notes);
-		for (var ki = 0; ki < array_length(active_keys); ki++) {
-			var active_key = string(active_keys[ki]);
-			if (!variable_struct_exists(active_notes, active_key)) continue;
-			var active_stack = active_notes[$ active_key];
-			if (!is_array(active_stack) || array_length(active_stack) <= 0) continue;
-
-			for (var si = 0; si < array_length(active_stack); si++) {
-				var on_ev = active_stack[si];
-				if (!is_struct(on_ev)) continue;
-				array_push(boundary_note_offs, {
-					type: "note_off",
-					note: floor(real(scr_button_struct_get(on_ev, "note", -1))),
-					channel: floor(real(scr_button_struct_get(on_ev, "channel", 0))),
-					velocity: 0,
-					measure: floor(real(scr_button_struct_get(on_ev, "measure", 0))),
-					beat: real(scr_button_struct_get(on_ev, "beat", 0)),
-					beat_fraction: real(scr_button_struct_get(on_ev, "beat_fraction", 0)),
-					part: floor(real(scr_button_struct_get(on_ev, "part", 1)))
-				});
+			if (owner_nav_idx < 0 && ev_measure >= 1) {
+				var pmk = string(ev_part) + ":" + string(ev_measure);
+				var pmki = pmk + ":" + string(ev_iter);
+				if (variable_struct_exists(nav_index_by_part_measure_iter, pmki)) {
+					owner_nav_idx = floor(real(nav_index_by_part_measure_iter[$ pmki]));
+					owner_source = "measure_label_iter";
+				} else if (variable_struct_exists(nav_index_by_part_measure, pmk)) {
+					owner_nav_idx = floor(real(nav_index_by_part_measure[$ pmk]));
+					owner_source = "measure_label";
+				}
 			}
+
+			if (owner_nav_idx >= 0 && owner_nav_idx < array_length(nav_entries)) {
+				var oe = nav_entries[owner_nav_idx];
+				if (is_struct(oe)) {
+					owner_part = max(1, floor(real(scr_button_struct_get(oe, "part", ev_part))));
+					owner_measure = floor(real(scr_button_struct_get(oe, "measure", ev_measure)));
+					owner_start_ms = real(scr_button_struct_get(oe, "start_ms", ev_time));
+					owner_end_ms = real(scr_button_struct_get(oe, "end_ms", owner_start_ms));
+				}
+			}
+
+			var boundary_role = "outside_next";
+			if (variable_struct_exists(ev, "loop_boundary") && bool(ev.loop_boundary) && ev_type == "note_off") {
+				boundary_role = "boundary_cleanup";
+			} else if (owner_nav_idx >= 0) {
+				if (abs(ev_time - owner_start_ms) <= 0.001) boundary_role = "inside_start";
+				else boundary_role = "inside_body";
+			}
+
+			ev.exec_rank = exec_rank;
+			ev.owner_nav_idx = owner_nav_idx;
+			ev.owner_part = owner_part;
+			ev.owner_measure = owner_measure;
+			ev.owner_start_ms = owner_start_ms;
+			ev.owner_end_ms = owner_end_ms;
+			ev.boundary_role = boundary_role;
+			ev.owner_source = owner_source;
+			ev.source_measure = source_measure;
+			ev.owner_label_mismatch = (source_measure >= 1 && owner_measure >= 1 && source_measure != owner_measure);
+
+			_events[ei] = ev;
+			if (owner_nav_idx >= 0) stats.annotated += 1;
+			else stats.unresolved += 1;
 		}
 
-		return boundary_note_offs;
+		return stats;
+	}
+
+	/// @function scr_button_canonicalize_event_measure_labels(_events)
+	/// @description Rewrite event measure/part labels from ownership metadata when available so downstream systems consume one canonical identity.
+	/// @param {array} _events Planned events array.
+	/// @returns {struct} Stats: {events, relabeled, marker_relabeled}
+	/// @reads _events[].owner_measure, _events[].owner_part
+	/// @writes _events[].measure, _events[].part, _events[].source_measure (when absent)
+	/// @callers scr_button_prepare_single_tune_playback_events, scr_button_loop_build_playback_events
+	function scr_button_canonicalize_event_measure_labels(_events) {
+		var stats = { events: 0, relabeled: 0, marker_relabeled: 0 };
+		if (!is_array(_events) || array_length(_events) <= 0) return stats;
+
+		stats.events = array_length(_events);
+		for (var i = 0; i < array_length(_events); i++) {
+			var ev = _events[i];
+			if (!is_struct(ev)) continue;
+
+			var src_measure = floor(real(scr_button_struct_get(ev, "measure", -1)));
+			var src_part = max(1, floor(real(scr_button_struct_get(ev, "part", 1))));
+			var own_measure = floor(real(scr_button_struct_get(ev, "owner_measure", src_measure)));
+			var own_part = max(1, floor(real(scr_button_struct_get(ev, "owner_part", src_part))));
+
+			if (!variable_struct_exists(ev, "source_measure")) {
+				ev.source_measure = src_measure;
+			}
+
+			if (own_measure >= 1 && (own_measure != src_measure || own_part != src_part)) {
+				ev.measure = own_measure;
+				ev.part = own_part;
+				stats.relabeled += 1;
+				if (string(scr_button_struct_get(ev, "type", "")) == "marker") {
+					stats.marker_relabeled += 1;
+				}
+			}
+
+			// Keep mismatch diagnostics aligned with the final canonical label, while
+			// retaining source_measure for provenance in debug exports.
+			var final_measure = floor(real(scr_button_struct_get(ev, "measure", src_measure)));
+			var final_part = max(1, floor(real(scr_button_struct_get(ev, "part", src_part))));
+			ev.owner_label_mismatch = (final_measure >= 1 && own_measure >= 1)
+				? (final_measure != own_measure || final_part != own_part)
+				: false;
+
+			_events[i] = ev;
+		}
+
+		return stats;
 	}
 
 	/// @function scr_button_reset_loop_state()
 	/// @description Reset all loop runtime globals and clear loop-related timeline_state entries.
 	/// @writes global.loop_mode_enabled, global.loop_runtime_active, global.loop_runtime_current_iteration, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.playback_events_active
-	/// @writes global.timeline_state.measure_nav_entries, global.timeline_state.loop_selected_measures, global.timeline_state.loop_blank_measure
+	/// @writes global.timeline_state.measure_nav_entries, global.timeline_state.loop_runtime_cache, global.timeline_state.loop_session, global.timeline_state.loop_selected_measures, global.timeline_state.loop_blank_measure
 	/// @callers scr_goto_playroom, scr_goto_mainmenu
 	function scr_button_reset_loop_state() {
 		global.loop_mode_enabled = false;
@@ -706,6 +1116,28 @@
 			global.timeline_state.measure_nav_parts = [];
 			global.timeline_state.measure_nav_pickup_by_part = {};
 			global.timeline_state.loop_runtime_cache = { valid: false, measure_starts: [] };
+			global.timeline_state.loop_session = {
+				active: false,
+				selected_refs: [],
+				loop_start_boundary: {},
+				loop_end_boundary: {},
+				boundary_refinement: {},
+				timeline_segments: [],
+				start_ms: 0,
+				end_ms: 0,
+				pass_duration_ms: 0,
+				passes_total: 0,
+				passes_completed: 0,
+				spacer_enabled: false,
+				spacer_duration_ms: 0,
+				jump_enabled: false,
+				phase: "complete",
+				current_pass_index: 0,
+				phase_start_ms: 0,
+				phase_end_ms: 0,
+				pickup_mode: "none",
+				degraded: false
+			};
 			global.timeline_state.measure_nav_tile_hitboxes = [];
 			global.timeline_state.measure_nav_controls = {};
 
@@ -721,6 +1153,18 @@
 			} else {
 				global.timeline_state.loop_blank_measure = false;
 			}
+
+			global.timeline_state.loop_boundary_refinement = {
+				enabled: false,
+				start_part: 1,
+				start_measure: -1,
+				start_beat: 1,
+				start_beat_fraction: 0,
+				end_part: 1,
+				end_measure: -1,
+				end_beat: 1,
+				end_beat_fraction: 0
+			};
 		}
 	}
 
@@ -796,8 +1240,10 @@
 			global.timeline_state.player_in = [];
 			global.timeline_state.review_full_trace = [];
 			global.timeline_state.score_by_segment = [];
-			global.timeline_state.score_measure_maps = {};
+			global.timeline_state.score_measure_maps_by_key = {};
 			global.timeline_state.score_popup_measure = -1;
+			global.timeline_state.score_popup_measure_key = "";
+			global.timeline_state.score_popup_nav_idx = -1;
 			global.timeline_state.score_detail_popup = false;
 			global.timeline_state.loop_iteration_scores = [];
 		}
@@ -819,212 +1265,241 @@
 	}
 
 	/// @function scr_button_loop_build_playback_events(_base_events)
-	/// @description Expand the base playback event array into a looped sequence based on selected measures.
+	/// @description Expand the base playback event array into a looped sequence based on selected measures using half-open loop ownership and deterministic same-timestamp ordering.
 	/// @param _base_events Base MIDI event array from scr_goto_playroom preprocessing
 	/// @returns Expanded event array, or _base_events unmodified if loop is off or no measures selected
-	/// @reads global.loop_mode_enabled, global.loop_repeat_total, global.METRONOME_CONFIG
-	/// @writes global.loop_runtime_active, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.loop_runtime_jump_to_selection
+	/// @reads global.loop_mode_enabled, global.loop_repeat_total, global.METRONOME_CONFIG, global.timeline_state, global.score_has_pickup
+	/// @writes global.loop_runtime_active, global.loop_runtime_repeat_total, global.loop_runtime_blank_measure, global.loop_runtime_jump_to_selection, global.timeline_state.loop_session
 	/// @callers start_play (when loop mode is enabled)
 	function scr_button_loop_build_playback_events(_base_events) {
 		if (!is_array(_base_events) || array_length(_base_events) <= 0) return _base_events;
 		if (!variable_global_exists("loop_mode_enabled") || !global.loop_mode_enabled) return _base_events;
 		if (is_undefined(gv_loop_get_selected_measures)) return _base_events;
 
-		var selected = gv_loop_get_selected_measures();
-		if (!is_array(selected) || array_length(selected) <= 0) {
+		var selected_refs = [];
+		if (is_undefined(gv_loop_get_selected_measure_refs) == false) {
+			selected_refs = gv_loop_get_selected_measure_refs();
+		}
+		if (!is_array(selected_refs) || array_length(selected_refs) <= 0) {
+			var selected = gv_loop_get_selected_measures();
+			if (is_array(selected) && array_length(selected) > 0) {
+				for (var sfi = 0; sfi < array_length(selected); sfi++) {
+					var sm = floor(real(selected[sfi]));
+					if (sm < 1) continue;
+					array_push(selected_refs, { part: 1, measure: sm, key: "1:" + string(sm) });
+				}
+			}
+		}
+		if (!is_array(selected_refs) || array_length(selected_refs) <= 0) {
 			show_debug_message("[LOOP] Loop mode ON but no measures selected; using normal playback.");
 			return _base_events;
 		}
 
-		var selected_map = {};
-		for (var smi = 0; smi < array_length(selected); smi++) {
-			var sm = floor(real(selected[smi]));
-			if (sm >= 1) selected_map[$ string(sm)] = true;
-		}
-
-		var repeat_total = 10;
-		if (variable_global_exists("loop_repeat_total")) {
-			repeat_total = max(1, floor(real(global.loop_repeat_total)));
-		}
+		var repeat_total = variable_global_exists("loop_repeat_total")
+			? max(1, floor(real(global.loop_repeat_total)))
+			: 10;
 		var blank_enabled = (is_undefined(gv_loop_blank_measure_enabled) == false) && gv_loop_blank_measure_enabled();
 		var jump_to_selection = variable_global_exists("loop_jump_to_selection") && global.loop_jump_to_selection;
 		var metro_channel = (variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG))
 			? floor(real(global.METRONOME_CONFIG.channel ?? 9))
 			: 9;
 
-		var first_sel = floor(real(selected[0]));
-		var last_sel = floor(real(selected[array_length(selected) - 1]));
+		var tune_start_ms = 1000000000000;
+		for (var tsi = 0; tsi < array_length(_base_events); tsi++) {
+			var tev = _base_events[tsi];
+			if (!is_struct(tev)) continue;
+			var tm = floor(real(scr_button_struct_get(tev, "measure", -1)));
+			var tt = real(scr_button_struct_get(tev, "time", 0));
+			if (tm >= 1 && tt < tune_start_ms) tune_start_ms = tt;
+		}
+		if (tune_start_ms > 999999999999) tune_start_ms = 0;
 
-		var bar_times = {};
-		for (var i = 0; i < array_length(_base_events); i++) {
-			var ev = _base_events[i];
-			if (!is_struct(ev)) continue;
-			if (string(scr_button_struct_get(ev, "type", "")) != "marker") continue;
-			if (string(scr_button_struct_get(ev, "marker_type", "")) != "bar") continue;
-			var m = floor(real(scr_button_struct_get(ev, "measure", 0)));
-			if (m < 1) continue;
-			var mk = string(m);
-			if (!variable_struct_exists(bar_times, mk)) {
-				bar_times[$ mk] = real(scr_button_struct_get(ev, "time", 0));
+		var loop_boundary_ctx = {
+			valid: false,
+			start_ms: -1,
+			end_ms: -1,
+			source: "none",
+			start_boundary: {},
+			end_boundary: {}
+		};
+		if (is_undefined(gv_loop_resolve_boundary_endpoints) == false) {
+			var _resolved = gv_loop_resolve_boundary_endpoints(selected_refs);
+			if (is_struct(_resolved)) loop_boundary_ctx = _resolved;
+		}
+
+		var loop_start = 1000000000000;
+		var loop_end = -1000000000000;
+		if (bool(scr_button_struct_get(loop_boundary_ctx, "valid", false))) {
+			loop_start = real(scr_button_struct_get(loop_boundary_ctx, "start_ms", loop_start));
+			loop_end = real(scr_button_struct_get(loop_boundary_ctx, "end_ms", loop_end));
+		}
+		if (loop_start > 999999999999 || loop_end <= loop_start + 0.001) {
+			for (var sri = 0; sri < array_length(selected_refs); sri++) {
+				var sref = selected_refs[sri];
+				if (!is_struct(sref)) continue;
+				var s_start = real(scr_button_struct_get(sref, "timeline_start_ms", scr_button_struct_get(sref, "start_ms", -1)));
+				var s_end = real(scr_button_struct_get(sref, "timeline_end_ms", scr_button_struct_get(sref, "end_ms", -1)));
+				if (s_start < 0 || s_end <= s_start + 0.001) {
+					s_start = real(scr_button_struct_get(sref, "start_ms", -1));
+					s_end = real(scr_button_struct_get(sref, "end_ms", -1));
+				}
+				if (s_start >= 0 && s_end > s_start + 0.001) {
+					if (s_start < loop_start) loop_start = s_start;
+					if (s_end > loop_end) loop_end = s_end;
+				}
 			}
 		}
 
-		var sel_start = 1000000000000;
-		var tune_start_ms = 0;
-		if (variable_struct_exists(bar_times, "1")) {
-			tune_start_ms = real(bar_times[$ "1"]);
-		}
-		if (variable_struct_exists(bar_times, string(first_sel))) {
-			sel_start = real(bar_times[$ string(first_sel)]);
-		}
-		if (sel_start > 999999999999) {
-			for (var i = 0; i < array_length(_base_events); i++) {
-				var ev = _base_events[i];
-				if (!is_struct(ev)) continue;
-				if (floor(real(scr_button_struct_get(ev, "measure", 0))) != first_sel) continue;
-				var t = real(scr_button_struct_get(ev, "time", 0));
-				if (t < sel_start) sel_start = t;
+		if (loop_start > 999999999999 || loop_end <= loop_start + 0.001) {
+			var selected_map = {};
+			for (var smi = 0; smi < array_length(selected_refs); smi++) {
+				var sr = selected_refs[smi];
+				if (!is_struct(sr)) continue;
+				var sm = floor(real(sr.measure ?? -1));
+				var sp = max(1, floor(real(sr.part ?? 1)));
+				if (sm < 1) continue;
+				selected_map[$ string(sp) + ":" + string(sm)] = true;
+			}
+			for (var bi = 0; bi < array_length(_base_events); bi++) {
+				var bev = _base_events[bi];
+				if (!is_struct(bev)) continue;
+				var bm = floor(real(scr_button_struct_get(bev, "measure", -1)));
+				var bp = max(1, floor(real(scr_button_struct_get(bev, "part", 1))));
+				if (bm < 1) continue;
+				var bkey = string(bp) + ":" + string(bm);
+				if (!(variable_struct_exists(selected_map, bkey) && selected_map[$ bkey])) continue;
+				var bt = real(scr_button_struct_get(bev, "time", 0));
+				if (bt < loop_start) loop_start = bt;
+				if (bt > loop_end) loop_end = bt;
+			}
+			if (loop_start < 999999999999 && loop_end > loop_start) {
+				loop_end += 1;
 			}
 		}
-		if (sel_start > 999999999999) return _base_events;
 
-		var measure_duration_ms = 0;
-		if (variable_struct_exists(bar_times, string(first_sel + 1))) {
-			measure_duration_ms = real(bar_times[$ string(first_sel + 1)]) - sel_start;
-		}
-		if (measure_duration_ms <= 0 && variable_struct_exists(bar_times, string(last_sel + 1)) && variable_struct_exists(bar_times, string(last_sel))) {
-			measure_duration_ms = real(bar_times[$ string(last_sel + 1)]) - real(bar_times[$ string(last_sel)]);
-		}
-		if (measure_duration_ms <= 0) {
-			measure_duration_ms = 2000;
+		if (loop_start > 999999999999 || loop_end <= loop_start + 0.001) {
+			show_debug_message("[LOOP] Unable to resolve canonical selected window; using normal playback.");
+			return _base_events;
 		}
 
-		var sel_end = sel_start + measure_duration_ms;
-		if (variable_struct_exists(bar_times, string(last_sel + 1))) {
-			sel_end = real(bar_times[$ string(last_sel + 1)]);
-		} else {
-			var max_sel_time = sel_start;
-			for (var i = 0; i < array_length(_base_events); i++) {
-				var ev = _base_events[i];
-				if (!is_struct(ev)) continue;
-				var mm = floor(real(scr_button_struct_get(ev, "measure", 0)));
-				if (mm < first_sel || mm > last_sel) continue;
-				var t = real(scr_button_struct_get(ev, "time", 0));
-				if (t > max_sel_time) max_sel_time = t;
+		var selected_owner_nav_count = 0;
+		for (var sni = 0; sni < array_length(selected_refs); sni++) {
+			var snr = selected_refs[sni];
+			if (!is_struct(snr)) continue;
+			var sn_owner_nav = floor(real(scr_button_struct_get(snr, "owner_nav_idx", -1)));
+			if (sn_owner_nav >= 0) selected_owner_nav_count += 1;
+		}
+
+		var measure_duration_ms = (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+			&& variable_struct_exists(global.timeline_state, "measure_ms"))
+			? max(1, real(global.timeline_state.measure_ms))
+			: 2000;
+		var boundary_times = [];
+		for (var mti = 0; mti < array_length(_base_events); mti++) {
+			var mev = _base_events[mti];
+			if (!is_struct(mev)) continue;
+			if (string(scr_button_struct_get(mev, "type", "")) != "marker") continue;
+			var mk = string(scr_button_struct_get(mev, "marker_type", ""));
+			var mb = floor(real(scr_button_struct_get(mev, "beat", 0)));
+			var mf = real(scr_button_struct_get(mev, "beat_fraction", 0));
+			if (!((mk == "bar") || (mk == "beat" && mb == 1 && abs(mf) <= 0.001))) continue;
+			array_push(boundary_times, real(scr_button_struct_get(mev, "time", 0)));
+		}
+		if (array_length(boundary_times) > 1) array_sort(boundary_times, function(a, b) { return a - b; });
+		for (var bti = 0; bti < array_length(boundary_times) - 1; bti++) {
+			var b0 = real(boundary_times[bti]);
+			var b1 = real(boundary_times[bti + 1]);
+			if (b0 >= loop_start - 0.001 && b1 > b0 + 0.001) {
+				measure_duration_ms = max(1, b1 - b0);
+				break;
 			}
-			sel_end = max_sel_time + max(1, measure_duration_ms * 0.25);
 		}
 
 		var prefix_events = [];
 		var prefix_min_t = 1000000000000;
 		var prefix_max_t = 0;
-		var pickup_template = [];
-		var pickup_min_t = 1000000000000;
-		var selected_template = [];
-		var selected_min_t = 1000000000000;
-		var selected_max_t = 0;
-		for (var i = 0; i < array_length(_base_events); i++) {
-			var ev = _base_events[i];
+		var loop_template = [];
+		var loop_window_raw_count = 0;
+		var loop_window_selected_count = 0;
+		for (var ei = 0; ei < array_length(_base_events); ei++) {
+			var ev = _base_events[ei];
 			if (!is_struct(ev)) continue;
-			var ev_measure = floor(real(scr_button_struct_get(ev, "measure", 0)));
 			var ev_time = real(scr_button_struct_get(ev, "time", 0));
-			var ev_in_selected_measure = (ev_measure >= 1)
-				&& variable_struct_exists(selected_map, string(ev_measure))
-				&& selected_map[$ string(ev_measure)];
+			var ev_type = string(scr_button_struct_get(ev, "type", ""));
 
-			// Pickup events are selected-measure events that occur before the selected
-			// downbeat. Keep them inside the loop template so each repeat includes
-			// the same lead-in instead of stretching/missing it.
-			if (ev_time < sel_start && ev_in_selected_measure) {
-				var pick_cp = scr_button_clone_struct(ev);
-				array_push(pickup_template, pick_cp);
-				if (ev_time < pickup_min_t) pickup_min_t = ev_time;
-				continue;
-			}
-
-			if (ev_time < sel_start) {
-				var include_prefix = true;
+			if (ev_time < loop_start) {
+				var include_prefix = !jump_to_selection;
 				if (jump_to_selection) {
-					var ev_type_prefix = string(scr_button_struct_get(ev, "type", ""));
 					var ev_marker_prefix = string(scr_button_struct_get(ev, "marker_type", ""));
 					var ev_channel_prefix = floor(real(scr_button_struct_get(ev, "channel", -1)));
-					var is_countin_marker = (ev_type_prefix == "marker" && ev_marker_prefix == "countin_beat");
+					var is_countin_marker = (ev_type == "marker" && ev_marker_prefix == "countin_beat");
 					var is_countin_metro = (ev_time < tune_start_ms)
-						&& (ev_type_prefix == "note_on" || ev_type_prefix == "note_off")
+						&& (ev_type == "note_on" || ev_type == "note_off")
 						&& (ev_channel_prefix == metro_channel);
 					include_prefix = is_countin_marker || is_countin_metro;
 				}
-
 				if (include_prefix) {
-					var cp = scr_button_clone_struct(ev);
-					array_push(prefix_events, cp);
+					var pcp = scr_button_clone_struct(ev);
+					array_push(prefix_events, pcp);
 					if (ev_time < prefix_min_t) prefix_min_t = ev_time;
 					if (ev_time > prefix_max_t) prefix_max_t = ev_time;
 				}
 			}
-
-			if (ev_time >= sel_start && ev_time < sel_end) {
-				if (ev_measure >= 1 && !ev_in_selected_measure) continue;
-				var sel_cp = scr_button_clone_struct(ev);
-				array_push(selected_template, sel_cp);
-				if (ev_time < selected_min_t) selected_min_t = ev_time;
-				if (ev_time > selected_max_t) selected_max_t = ev_time;
-			}
 		}
 
-		if (array_length(selected_template) <= 0) return _base_events;
-		if (prefix_min_t > 999999999999) prefix_min_t = 0;
-		if (selected_min_t > 999999999999) selected_min_t = sel_start;
-		if (pickup_min_t > 999999999999) pickup_min_t = sel_start;
-
-		var loop_template = [];
-		for (var pki = 0; pki < array_length(pickup_template); pki++) {
-			array_push(loop_template, pickup_template[pki]);
+		var _manifest = undefined;
+		var _loop_manifest_fn = asset_get_index("loop_build_manifest");
+		if (script_exists(_loop_manifest_fn) && array_length(selected_refs) > 0) {
+			var _m_start_ref = selected_refs[0];
+			var _m_end_ref = selected_refs[array_length(selected_refs) - 1];
+			_manifest = script_execute(_loop_manifest_fn, _m_start_ref, _m_end_ref, {
+				events: _base_events,
+				start_ms: loop_start,
+				end_ms: loop_end,
+				metro_channel: metro_channel,
+				run_parity_check: true,
+				parity_debug_dump: variable_global_exists("LOOP_COMPARE_DUMP_ENABLED") && bool(global.LOOP_COMPARE_DUMP_ENABLED)
+			});
 		}
-		for (var ssi = 0; ssi < array_length(selected_template); ssi++) {
-			array_push(loop_template, selected_template[ssi]);
+
+		if (!(is_struct(_manifest) && bool(_manifest[$ "valid"] ?? false))) {
+			show_debug_message("[LOOP_V3] Manifest unavailable/invalid; aborting loop payload build.");
+			return _base_events;
 		}
 
-		var loop_window_start = min(sel_start, pickup_min_t);
-		var pickup_lead_ms = max(0, sel_start - loop_window_start);
+		var loop_boundary_note_offs = _manifest[$ "cleanup_events"] ?? [];
+		loop_template = _manifest[$ "window_events"] ?? [];
+		loop_window_raw_count = array_length(loop_template);
+		loop_window_selected_count = array_length(loop_template);
+
 		if (array_length(loop_template) <= 0) return _base_events;
+		if (prefix_min_t > 999999999999) prefix_min_t = 0;
 
-		var iteration_duration = max(1, sel_end - loop_window_start);
-		var loop_boundary_note_offs = scr_button_build_loop_boundary_note_offs(loop_template, metro_channel);
-
-		var blank_template = [];
+		var spacer_template = [];
 		if (blank_enabled) {
-			var blank_window_end = sel_start + measure_duration_ms;
-			for (var i = 0; i < array_length(_base_events); i++) {
-				var ev = _base_events[i];
-				if (!is_struct(ev)) continue;
-				var ev_time = real(scr_button_struct_get(ev, "time", 0));
-				if (ev_time < sel_start || ev_time >= blank_window_end) continue;
-
-				var ev_type = string(scr_button_struct_get(ev, "type", ""));
-				if (ev_type == "marker") {
-					var mk = string(scr_button_struct_get(ev, "marker_type", ""));
-					if (mk == "beat") {
-						var cpm = scr_button_clone_struct(ev);
-						array_push(blank_template, cpm);
-					}
-					continue;
-				}
-
-				var ev_channel = floor(real(scr_button_struct_get(ev, "channel", -1)));
-				if ((ev_type == "note_on" || ev_type == "note_off") && ev_channel == metro_channel) {
-					var cp = scr_button_clone_struct(ev);
-					array_push(blank_template, cp);
+			var spacer_end = loop_start + measure_duration_ms;
+			for (var si = 0; si < array_length(_base_events); si++) {
+				var sev = _base_events[si];
+				if (!is_struct(sev)) continue;
+				var st = real(scr_button_struct_get(sev, "time", 0));
+				if (st < loop_start || st >= spacer_end) continue;
+				var sty = string(scr_button_struct_get(sev, "type", ""));
+				var sch = floor(real(scr_button_struct_get(sev, "channel", -1)));
+				if ((sty == "note_on" || sty == "note_off") && sch == metro_channel) {
+					var scp = scr_button_clone_struct(sev);
+					scp.measure = 0;
+					array_push(spacer_template, scp);
 				}
 			}
 		}
 
 		var out = [];
-		for (var i = 0; i < array_length(prefix_events); i++) {
-			var p = prefix_events[i];
-			p.time = real(scr_button_struct_get(p, "time", 0)) - prefix_min_t;
-			p.loop_iteration = 0;
-			array_push(out, p);
+		for (var pre_i = 0; pre_i < array_length(prefix_events); pre_i++) {
+			var pev = prefix_events[pre_i];
+			pev.time = real(scr_button_struct_get(pev, "time", 0)) - prefix_min_t;
+			pev.loop_iteration = 0;
+			pev.loop_phase = "prelude";
+			array_push(out, pev);
 		}
 
 		var cursor_time = 0;
@@ -1033,27 +1508,44 @@
 				cursor_time = max(0, prefix_max_t - prefix_min_t + 1);
 			}
 		} else {
-			// Keep loop entry aligned to the repeated loop window start (pickup-aware),
-			// not the last prefix note.
-			cursor_time = max(0, loop_window_start - prefix_min_t);
+			cursor_time = max(0, loop_start - prefix_min_t);
 		}
+		var loop_pass_start_ms = cursor_time;
+		var loop_core_duration_ms = max(1, loop_end - loop_start);
+		var iteration_duration = loop_core_duration_ms;
+		var loop_pass_manifest = [];
+
 		for (var iter = 1; iter <= repeat_total; iter++) {
-			if (iter > 1 && blank_enabled && array_length(blank_template) > 0) {
-				for (var bi = 0; bi < array_length(blank_template); bi++) {
-					var bev = scr_button_clone_struct(blank_template[bi]);
-					bev.time = cursor_time + (real(scr_button_struct_get(bev, "time", 0)) - sel_start);
-					bev.loop_iteration = iter;
-					bev.loop_blank_measure = true;
-					array_push(out, bev);
+			if (iter > 1 && blank_enabled && array_length(spacer_template) > 0) {
+				for (var spi = 0; spi < array_length(spacer_template); spi++) {
+					var s_ev = scr_button_clone_struct(spacer_template[spi]);
+					s_ev.time = cursor_time + (real(scr_button_struct_get(s_ev, "time", 0)) - loop_start);
+					s_ev.loop_iteration = iter;
+					s_ev.loop_phase = "spacer";
+					s_ev.loop_blank_measure = true;
+					array_push(out, s_ev);
 				}
 				cursor_time += measure_duration_ms;
 			}
 
-			for (var si = 0; si < array_length(loop_template); si++) {
-				var sev = scr_button_clone_struct(loop_template[si]);
-				sev.time = cursor_time + (real(scr_button_struct_get(sev, "time", 0)) - loop_window_start);
-				sev.loop_iteration = iter;
-				array_push(out, sev);
+			var pass_start_ms = cursor_time;
+			var pass_note_on = 0;
+			var pass_note_off = 0;
+			var pass_marker = 0;
+
+			for (var li = 0; li < array_length(loop_template); li++) {
+				var lev = scr_button_clone_struct(loop_template[li]);
+				lev.time = cursor_time + (real(scr_button_struct_get(lev, "time", 0)) - loop_start);
+				lev.loop_iteration = iter;
+				lev.loop_pass_index = iter;
+				lev.loop_pass_time_ms = max(0, lev.time - pass_start_ms);
+				lev.loop_cycle_time_ms = lev.loop_pass_time_ms;
+				lev.loop_phase = "pass";
+				array_push(out, lev);
+				var lty = string(scr_button_struct_get(lev, "type", ""));
+				if (lty == "note_on") pass_note_on += 1;
+				else if (lty == "note_off") pass_note_off += 1;
+				else if (lty == "marker") pass_marker += 1;
 			}
 
 			cursor_time += iteration_duration;
@@ -1062,15 +1554,42 @@
 				var boff = scr_button_clone_struct(loop_boundary_note_offs[boi]);
 				boff.time = boundary_time;
 				boff.loop_iteration = iter;
+				boff.loop_pass_index = iter;
+				boff.loop_pass_time_ms = max(0, boff.time - pass_start_ms);
+				boff.loop_cycle_time_ms = boff.loop_pass_time_ms;
+				boff.loop_phase = "pass";
 				boff.loop_boundary = true;
 				array_push(out, boff);
+				pass_note_off += 1;
 			}
+
+			array_push(loop_pass_manifest, {
+				pass_index: iter,
+				pass_start_ms: pass_start_ms,
+				pass_end_ms: boundary_time,
+				selected_start_ms: pass_start_ms,
+				selected_end_ms: pass_start_ms + loop_core_duration_ms,
+				expected_note_on: pass_note_on,
+				expected_note_off: pass_note_off,
+				expected_marker: pass_marker
+			});
 		}
 
 		array_sort(out, function(a, b) {
 			var ta = real(scr_button_struct_get(a, "time", 0));
 			var tb = real(scr_button_struct_get(b, "time", 0));
 			if (ta != tb) return ta - tb;
+			var type_a = string(scr_button_struct_get(a, "type", ""));
+			var type_b = string(scr_button_struct_get(b, "type", ""));
+			var pri_a = 3;
+			var pri_b = 3;
+			if (type_a == "note_off") pri_a = 0;
+			else if (type_a == "marker") pri_a = 1;
+			else if (type_a == "note_on") pri_a = 2;
+			if (type_b == "note_off") pri_b = 0;
+			else if (type_b == "marker") pri_b = 1;
+			else if (type_b == "note_on") pri_b = 2;
+			if (pri_a != pri_b) return pri_a - pri_b;
 			return 0;
 		});
 
@@ -1078,13 +1597,181 @@
 		global.loop_runtime_repeat_total = repeat_total;
 		global.loop_runtime_blank_measure = blank_enabled;
 		global.loop_runtime_jump_to_selection = jump_to_selection;
-		show_debug_message("[LOOP] Built loop playback events: " + string(array_length(out))
-			+ " events, measures " + string(first_sel) + "-" + string(last_sel)
+
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
+			var _resolved_refs = [];
+			var _timeline_segments = [];
+			var _segment_seq = 0;
+			var _src_loop_start = loop_start;
+			var _src_loop_end = loop_end;
+			for (var srr_i = 0; srr_i < array_length(selected_refs); srr_i++) {
+				var srr = selected_refs[srr_i];
+				if (!is_struct(srr)) continue;
+				var _m = floor(real(scr_button_struct_get(srr, "measure", -1)));
+				var _p = max(1, floor(real(scr_button_struct_get(srr, "part", 1))));
+				if (_m < 1) continue;
+				var _orig_timeline_start = real(scr_button_struct_get(srr, "timeline_start_ms", scr_button_struct_get(srr, "start_ms", -1)));
+				var _orig_timeline_end = real(scr_button_struct_get(srr, "timeline_end_ms", scr_button_struct_get(srr, "end_ms", -1)));
+				var _orig_start = _orig_timeline_start;
+				var _orig_end = _orig_timeline_end;
+				if (_orig_start < 0 || _orig_end <= _orig_start + 0.001) {
+					_orig_start = real(scr_button_struct_get(srr, "start_ms", -1));
+					_orig_end = real(scr_button_struct_get(srr, "end_ms", -1));
+				}
+				var _orig_owner_start = real(scr_button_struct_get(srr, "owner_start_ms", -1));
+				var _orig_owner_end = real(scr_button_struct_get(srr, "owner_end_ms", -1));
+				var _owner_nav_idx = floor(real(scr_button_struct_get(srr, "owner_nav_idx", -1)));
+				var _nav_idx = floor(real(scr_button_struct_get(srr, "nav_idx", -1)));
+				var _runtime_start = -1;
+				var _runtime_end = -1;
+				var _runtime_owner_start = -1;
+				var _runtime_owner_end = -1;
+				var _clip_start = _orig_start;
+				var _clip_end = _orig_end;
+				if (_clip_start >= 0 && _clip_end > _clip_start + 0.001) {
+					_clip_start = max(_clip_start, _src_loop_start);
+					_clip_end = min(_clip_end, _src_loop_end);
+				}
+				if (_clip_start >= 0 && _clip_end > _clip_start + 0.001) {
+					_runtime_start = loop_pass_start_ms + (_clip_start - loop_start);
+					_runtime_end = loop_pass_start_ms + (_clip_end - loop_start);
+				}
+				if (_orig_owner_start >= 0 && _orig_owner_end > _orig_owner_start + 0.001) {
+					var _owner_clip_start = max(_orig_owner_start, _src_loop_start);
+					var _owner_clip_end = min(_orig_owner_end, _src_loop_end);
+					if (_owner_clip_end > _owner_clip_start + 0.001) {
+						_runtime_owner_start = loop_pass_start_ms + (_owner_clip_start - loop_start);
+						_runtime_owner_end = loop_pass_start_ms + (_owner_clip_end - loop_start);
+					}
+				}
+				if (_runtime_end <= _runtime_start + 0.001) continue;
+				array_push(_resolved_refs, {
+					part: _p,
+					measure: _m,
+					nav_idx: _nav_idx,
+					owner_nav_idx: _owner_nav_idx,
+					timeline_start_ms: _runtime_start,
+					timeline_end_ms: _runtime_end,
+					owner_start_ms: _runtime_owner_start,
+					owner_end_ms: _runtime_owner_end,
+					start_ms: _runtime_start,
+					end_ms: _runtime_end,
+					source_start_ms: _orig_start,
+					source_end_ms: _orig_end,
+					source_clip_start_ms: _clip_start,
+					source_clip_end_ms: _clip_end,
+					source_owner_start_ms: _orig_owner_start,
+					source_owner_end_ms: _orig_owner_end
+				});
+
+				if (_runtime_start >= 0 && _runtime_end > _runtime_start + 0.001) {
+					array_push(_timeline_segments, {
+						seq: _segment_seq,
+						part: _p,
+						measure: _m,
+						timeline_measure: _m,
+						owner_measure: _m,
+						nav_idx: _nav_idx,
+						owner_nav_idx: _owner_nav_idx,
+						start_ms: _runtime_start,
+						end_ms: _runtime_end,
+						segment_kind: "core"
+					});
+					_segment_seq += 1;
+				}
+			}
+
+			if (array_length(_timeline_segments) > 1) {
+				array_sort(_timeline_segments, function(a, b) {
+					var as = real(scr_button_struct_get(a, "start_ms", 0));
+					var bs = real(scr_button_struct_get(b, "start_ms", 0));
+					if (as != bs) return as - bs;
+					var an = floor(real(scr_button_struct_get(a, "seq", 0)));
+					var bn = floor(real(scr_button_struct_get(b, "seq", 0)));
+					return an - bn;
+				});
+			}
+
+			var loop_pass_end_ms = loop_pass_start_ms + iteration_duration;
+			var _session_refine = (variable_struct_exists(global.timeline_state, "loop_boundary_refinement")
+				&& is_struct(global.timeline_state.loop_boundary_refinement))
+				? global.timeline_state.loop_boundary_refinement
+				: {};
+			global.timeline_state.loop_session = {
+				active: true,
+				selected_refs: _resolved_refs,
+				loop_start_boundary: scr_button_struct_get(loop_boundary_ctx, "start_boundary", {}),
+				loop_end_boundary: scr_button_struct_get(loop_boundary_ctx, "end_boundary", {}),
+				boundary_refinement: _session_refine,
+				timeline_segments: _timeline_segments,
+				pass_manifest: loop_pass_manifest,
+				start_ms: loop_pass_start_ms,
+				end_ms: loop_pass_end_ms,
+				core_end_ms: loop_pass_end_ms,
+				pass_duration_ms: iteration_duration,
+				core_pass_duration_ms: loop_core_duration_ms,
+				support_tail_ms: 0,
+				passes_total: repeat_total,
+				passes_completed: 0,
+				spacer_enabled: blank_enabled,
+				spacer_duration_ms: blank_enabled ? measure_duration_ms : 0,
+				jump_enabled: jump_to_selection,
+				phase: jump_to_selection ? "pass" : "prelude",
+				current_pass_index: jump_to_selection ? 1 : 0,
+				phase_start_ms: jump_to_selection ? loop_pass_start_ms : 0,
+				phase_end_ms: jump_to_selection ? loop_pass_end_ms : loop_pass_start_ms,
+				pickup_mode: variable_global_exists("score_has_pickup") && bool(global.score_has_pickup) ? "initial" : "none",
+				degraded: false
+			};
+		}
+
+		var _sel_first = "";
+		var _sel_last = "";
+		if (array_length(selected_refs) > 0) {
+			var _rf0 = selected_refs[0];
+			var _rfn = selected_refs[array_length(selected_refs) - 1];
+			_sel_first = string(max(1, floor(real(scr_button_struct_get(_rf0, "part", 1)))))
+				+ ":" + string(floor(real(scr_button_struct_get(_rf0, "measure", -1))));
+			_sel_last = string(max(1, floor(real(scr_button_struct_get(_rfn, "part", 1)))))
+				+ ":" + string(floor(real(scr_button_struct_get(_rfn, "measure", -1))));
+		}
+
+		show_debug_message("[LOOP-V2] canonical_transform active; selected=" + _sel_first + ".." + _sel_last
+			+ " count=" + string(array_length(selected_refs))
+			+ " window=" + string(floor(loop_start)) + "-" + string(floor(loop_end))
+			+ " source=" + string(scr_button_struct_get(loop_boundary_ctx, "source", "fallback"))
+			+ " start=" + string(floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "start_boundary", {}), "time_ms", -1))))
+			+ "(" + string(max(1, floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "start_boundary", {}), "part", 1)))))
+			+ ":" + string(floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "start_boundary", {}), "measure", -1))))
+			+ ":b" + string(max(1, floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "start_boundary", {}), "beat", 1)))))
+			+ ")"
+			+ " end=" + string(floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "end_boundary", {}), "time_ms", -1))))
+			+ "(" + string(max(1, floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "end_boundary", {}), "part", 1)))))
+			+ ":" + string(floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "end_boundary", {}), "measure", -1))))
+			+ ":b" + string(max(1, floor(real(scr_button_struct_get(scr_button_struct_get(loop_boundary_ctx, "end_boundary", {}), "beat", 1)))))
+			+ ")"
+			+ " pass_ms=" + string(floor(iteration_duration))
+			+ " spacer_ms=" + string(blank_enabled ? floor(measure_duration_ms) : 0));
+
+		show_debug_message("[LOOP] Built canonical loop events: " + string(array_length(out))
+			+ ", selected_refs=" + string(array_length(selected_refs))
+			+ ", selected_owner_nav=" + string(selected_owner_nav_count)
+			+ ", window_ms=" + string(floor(loop_start)) + "-" + string(floor(loop_end))
+			+ ", in_window_raw=" + string(loop_window_raw_count)
+			+ ", in_window_selected=" + string(loop_window_selected_count)
 			+ ", repeats=" + string(repeat_total)
-			+ ", pickup_lead_ms=" + string(pickup_lead_ms)
 			+ ", blank=" + string(blank_enabled)
 			+ ", jump=" + string(jump_to_selection)
 			+ ", boundary_note_offs=" + string(array_length(loop_boundary_note_offs)));
+
+		var _loop_own_stats = scr_button_apply_event_ownership_metadata(out);
+		var _loop_relabel_stats = scr_button_canonicalize_event_measure_labels(out);
+		show_debug_message("[OWNERSHIP] loop annotate events=" + string(scr_button_struct_get(_loop_own_stats, "events", 0))
+			+ " annotated=" + string(scr_button_struct_get(_loop_own_stats, "annotated", 0))
+			+ " unresolved=" + string(scr_button_struct_get(_loop_own_stats, "unresolved", 0))
+			+ " nav_entries=" + string(scr_button_struct_get(_loop_own_stats, "nav_entries", 0))
+			+ " relabeled=" + string(scr_button_struct_get(_loop_relabel_stats, "relabeled", 0))
+			+ " marker_relabeled=" + string(scr_button_struct_get(_loop_relabel_stats, "marker_relabeled", 0)));
 		return out;
 	}
 	
@@ -1542,9 +2229,9 @@
 	/// @writes global.timing_calibration.active/status, global.timeline_state.active, global.pending_auto_start_play, global.pending_layer_mode, global.pending_layer_room
 	/// @callers scr_handle_button_click (button 5)
 	function scr_goto_mainmenu(){
+		scr_button_reset_play_session_state();
 		MIDI_send_off();
 		MIDI_stop_checking_messages_and_errors();
-		scr_button_reset_play_session_state();
 		if (variable_global_exists("timing_calibration") && is_struct(global.timing_calibration)) {
 			global.timing_calibration.active = false;
 			global.timing_calibration.status = "idle";
@@ -1775,20 +2462,15 @@
 		var picked = "";
 		var picker_filter = "All files (*.*)|*.*";
 
-		// Primary UX: direct folder path entry (root settings should not require selecting a file).
-		var raw = get_string("Tune content root folder path", seed);
-		raw = string(raw);
-
-		// Optional assist: if left blank, allow picking any file under the desired root.
-		if (string_trim(raw) == "") {
-			if (seed != "" && directory_exists(seed)) {
-				picked = get_open_filename(picker_filter, seed + "pick_any_file.tmp");
-			}
-			if (string_trim(string(picked)) == "") {
-				picked = get_open_filename(picker_filter, "");
-			}
-			raw = string(picked);
+		// Select any file under the desired root; the containing folder is used as root.
+		var raw = "";
+		if (seed != "" && directory_exists(seed)) {
+			picked = get_open_filename(picker_filter, seed + "pick_any_file.tmp");
 		}
+		if (string_trim(string(picked)) == "") {
+			picked = get_open_filename(picker_filter, "");
+		}
+		raw = string(picked);
 		raw = string(raw);
 		if (string_trim(raw) == "") return;
 
@@ -3000,6 +3682,15 @@
 			return real(scr_button_struct_get(a, "time", 0)) - real(scr_button_struct_get(b, "time", 0));
 		});
 
+		var _own_stats = scr_button_apply_event_ownership_metadata(merged);
+		var _relabel_stats = scr_button_canonicalize_event_measure_labels(merged);
+		show_debug_message("[OWNERSHIP] base annotate events=" + string(scr_button_struct_get(_own_stats, "events", 0))
+			+ " annotated=" + string(scr_button_struct_get(_own_stats, "annotated", 0))
+			+ " unresolved=" + string(scr_button_struct_get(_own_stats, "unresolved", 0))
+			+ " nav_entries=" + string(scr_button_struct_get(_own_stats, "nav_entries", 0))
+			+ " relabeled=" + string(scr_button_struct_get(_relabel_stats, "relabeled", 0))
+			+ " marker_relabeled=" + string(scr_button_struct_get(_relabel_stats, "marker_relabeled", 0)));
+
 		global.playback_events = merged;
 		
 		// Sync playback_context to the rebuilt BPM so timeline reads current value
@@ -3093,6 +3784,15 @@
 					start_events = scr_button_loop_build_playback_events(global.playback_events);
 				}
 				global.playback_events_active = start_events;
+
+				if (variable_global_exists("LOOP_COMPARE_DUMP_ENABLED") && bool(global.LOOP_COMPARE_DUMP_ENABLED)) {
+					var _cmp_run = string(current_time);
+					scr_button_export_planned_events_snapshot(global.playback_events, "base", _cmp_run);
+					var _cmp_label = (!scr_set_is_active() && variable_global_exists("loop_mode_enabled") && global.loop_mode_enabled)
+						? "active_loop"
+						: "active_no_loop";
+					scr_button_export_planned_events_snapshot(start_events, _cmp_label, _cmp_run);
+				}
 
 				var _started = tune_start(start_events);
 		        // If tune_start returns undefined on success, this still passes

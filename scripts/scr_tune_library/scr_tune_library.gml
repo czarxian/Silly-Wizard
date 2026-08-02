@@ -24,6 +24,49 @@ function scr_tune_library_normalize_root(_root)
     return root;
 }
 
+/// @function scr_data_paths_is_ide_runtime()
+/// @description Return true when running from the IDE VM temp runtime.
+/// @returns {bool} True when working_directory indicates GMS2TEMP VM runtime
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers scr_data_paths_get_user_data_root, scr_data_paths_get_content_root
+function scr_data_paths_is_ide_runtime()
+{
+    var wd = string_lower(string_replace_all(string(working_directory), "\\", "/"));
+    return (string_pos("/gamemakerstudio2/gms2temp/", wd) > 0);
+}
+
+/// @function scr_data_paths_get_ide_project_content_root()
+/// @description Return the default project content root used when running from IDE.
+/// @returns {string} Root folder path ending with '/'
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers scr_data_paths_get_content_root
+function scr_data_paths_get_ide_project_content_root()
+{
+    // Developer-authoritative source content location for IDE runs.
+    return scr_tune_library_normalize_root("C:/Users/xian/GameMakerProjects/Silly-Wizard/datafiles/");
+}
+
+/// @function scr_data_paths_get_local_app_data_user_root()
+/// @description Resolve LocalAppData runtime user-data root for IDE runs.
+/// @returns {string} Root folder path ending with '/'
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers scr_data_paths_get_user_data_root
+function scr_data_paths_get_local_app_data_user_root()
+{
+    var local_app_data = string(environment_get_variable("LOCALAPPDATA"));
+    var root = scr_tune_library_normalize_root(local_app_data + "/Silly_Wizard/datafiles/");
+    if (root == "") {
+        root = scr_tune_library_normalize_root(working_directory + "datafiles/");
+    }
+    return root;
+}
+
 /// @function scr_data_paths_get_user_data_root()
 /// @description Resolve canonical writable runtime data root.
 /// @returns {string} Root folder path ending with '/'
@@ -33,6 +76,18 @@ function scr_tune_library_normalize_root(_root)
 /// @callers scr_data_paths_get_primary_root, scr_data_paths_get_category_root, config writers
 function scr_data_paths_get_user_data_root()
 {
+    if (scr_data_paths_is_ide_runtime()) {
+        return scr_data_paths_get_local_app_data_user_root();
+    }
+
+    // Packaged/non-IDE runs: user-selected data root drives writable categories.
+    if (variable_global_exists("primary_data_root_override")) {
+        var override_root = scr_tune_library_normalize_root(global.primary_data_root_override);
+        if (override_root != "") {
+            return override_root;
+        }
+    }
+
     var candidates = array_create(0);
     array_push(candidates, scr_tune_library_normalize_root(working_directory + "datafiles/"));
     array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
@@ -84,24 +139,41 @@ function scr_data_paths_get_content_root()
         }
     }
 
+    if (scr_data_paths_is_ide_runtime()) {
+        // IDE contract: read tune content from project datafiles, not VM temp folders.
+        var ide_root = scr_data_paths_get_ide_project_content_root();
+        if (ide_root != "") array_push(candidates, ide_root);
+    }
+
+    // Safety fallback for IDE/runtime detection drift after runner updates.
+    var project_root_fallback = scr_data_paths_get_ide_project_content_root();
+    if (project_root_fallback != "") array_push(candidates, project_root_fallback);
+
     array_push(candidates, scr_tune_library_normalize_root(working_directory + "datafiles/"));
     array_push(candidates, scr_tune_library_normalize_root(program_directory + "datafiles/"));
     array_push(candidates, scr_tune_library_normalize_root("datafiles/"));
 
+    var first_existing_root = "";
     for (var i = 0; i < array_length(candidates); i++) {
         var root = candidates[i];
         if (root == "") continue;
 
         var tunes_root = scr_tune_library_normalize_root(root + "tunes/");
-        if (directory_exists(tunes_root)) {
+        if (scr_tune_library_root_has_json_content(tunes_root)) {
             return root;
         }
 
         var alt_tunes_root = string_replace_all(tunes_root, "/", "\\");
-        if (directory_exists(alt_tunes_root)) {
+        if (scr_tune_library_root_has_json_content(alt_tunes_root)) {
             return root;
         }
+
+        if (first_existing_root == "" && (directory_exists(tunes_root) || directory_exists(alt_tunes_root))) {
+            first_existing_root = root;
+        }
     }
+
+    if (first_existing_root != "") return first_existing_root;
 
     var fallback = scr_data_paths_get_user_data_root();
     if (fallback == "") fallback = "datafiles/";
@@ -162,7 +234,26 @@ function scr_tune_library_root_has_json_content(_root)
         }
     }
 
-    if (file_exists(scan_root + "tune_library.json")) return true;
+    var library_path = scan_root + "tune_library.json";
+    if (file_exists(library_path)) {
+        var lf = file_text_open_read(library_path);
+        if (lf >= 0) {
+            var lraw = "";
+            while (!file_text_eof(lf)) {
+                lraw += file_text_read_string(lf);
+                file_text_readln(lf);
+            }
+            file_text_close(lf);
+
+            var ldata = json_parse(lraw);
+            if (is_struct(ldata)
+                && variable_struct_exists(ldata, "tunes")
+                && is_array(variable_struct_get(ldata, "tunes"))
+                && array_length(variable_struct_get(ldata, "tunes")) > 0) {
+                return true;
+            }
+        }
+    }
 
     var f = file_find_first(scan_root + "*.json", 0);
     if (f != "") {
@@ -227,6 +318,8 @@ function scr_tune_library_root_has_json_content(_root)
 function scr_data_paths_load_primary_root_from_config()
 {
     var candidates = array_create(0);
+    // Canonical user-data config path first (LocalAppData in IDE mode).
+    array_push(candidates, scr_tune_library_normalize_root(scr_data_paths_get_user_data_root() + "config/") + "runtime_paths.json");
     // Canonical runtime path first.
     array_push(candidates, working_directory + "datafiles/config/runtime_paths.json");
     // Legacy runtime mirrors.

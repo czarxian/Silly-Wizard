@@ -23,7 +23,7 @@
   "image_meta": [
     {
       "file": "m000.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -40,7 +40,7 @@
     },
     {
       "file": "m001.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -57,7 +57,7 @@
     },
     {
       "file": "m002.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -74,7 +74,7 @@
     },
     {
       "file": "m003.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -91,7 +91,7 @@
     },
     {
       "file": "m004.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -108,7 +108,7 @@
     },
     {
       "file": "m005.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -125,7 +125,7 @@
     },
     {
       "file": "m006.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -142,7 +142,7 @@
     },
     {
       "file": "m007.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -159,7 +159,7 @@
     },
     {
       "file": "m008.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -176,7 +176,7 @@
     },
     {
       "file": "m009.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -193,7 +193,7 @@
     },
     {
       "file": "m010.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -210,7 +210,7 @@
     },
     {
       "file": "m011.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -227,7 +227,7 @@
     },
     {
       "file": "m012.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -244,7 +244,7 @@
     },
     {
       "file": "m013.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -261,7 +261,7 @@
     },
     {
       "file": "m014.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,
@@ -278,7 +278,7 @@
     },
     {
       "file": "m015.png",
-      "width_px": 800,
+      "width_px": 360,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.699999999999996,

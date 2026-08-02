@@ -1,0 +1,107 @@
+{
+      "tune": "The Sound of Sleat",
+      "header": "X:1\nT:The Sound of Sleat\nM:C|\nL:1/8\nR:Reel\nC:D. MacKinnon / arr RSPBA\nQ:70\nK:HP",
+      "beats_per_measure": 2,
+      "units_per_measure": 8,
+      "has_pickup": false,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "body": "{gAGAG}A2{g}A3/2B/2{G}B3/2d/2{G}d2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 1,
+          "body": "{g}e2{A}e3/2d/2{g}e3/2f/2{e}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 2,
+          "body": "{gAGAG}A2{g}A3/2B/2{G}B3/2d/2{G}d3/2e/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 3,
+          "body": "{g}f3/2d/2{g}e3/2d/2{g}B2{G}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 4,
+          "body": "{gAGAG}A2{g}A3/2B/2{G}B3/2d/2{G}d2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 5,
+          "body": "{g}e2{A}e3/2d/2{g}e3/2f/2{e}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 6,
+          "body": "{gAGAG}A2{g}A3/2B/2{G}B3/2d/2{G}d3/2e/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 7,
+          "body": "{g}f3/2d/2{g}e3/2d/2{g}B2{G}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 8,
+          "body": "{g}f2{e}f3/2e/2{g}f3/2a/2{g}a2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 9,
+          "body": "e2{g}d3/2e/2{g}f3/2d/2{g}B/2{d}A3/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
+          "body": "{g}f2{e}f3/2e/2{g}f3/2a/2{g}a3/2e/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 11,
+          "body": "{g}f3/2d/2{g}e3/2d/2{g}B2{G}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 12,
+          "body": "{g}f2{e}f3/2e/2{g}f3/2a/2{g}a2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 13,
+          "body": "e2{g}d3/2e/2{g}f3/2d/2{g}B/2{d}A3/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 14,
+          "body": "{g}f2{e}f3/2e/2{g}f3/2a/2{g}a3/2e/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 15,
+          "body": "{g}f3/2d/2{g}e3/2d/2{g}B2{G}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        }
+      ]
+    }

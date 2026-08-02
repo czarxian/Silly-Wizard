@@ -5,7 +5,7 @@
       "units_per_measure": 6,
       "has_pickup": true,
       "unit_note_fraction": 0.125,
-      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
       "snippets": [
         {
           "measure_index": 0,
@@ -57,54 +57,60 @@
         },
         {
           "measure_index": 8,
-          "body": "{g}AB3{g}e/2d3/2",
-          "duration_units": 6,
+          "body": "{g}AB3",
+          "duration_units": 4,
           "is_pickup": false
         },
         {
           "measure_index": 9,
+          "body": "{g}e/2d3/2",
+          "duration_units": 2,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
           "body": "{g}c3B{g}c/2e3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 10,
+          "measure_index": 11,
           "body": "{g}A3B{g}c/2e3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 11,
+          "measure_index": 12,
           "body": "{ag}a3e{g}f/2a3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 12,
+          "measure_index": 13,
           "body": "e4{g}e/2d3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 13,
+          "measure_index": 14,
           "body": "{g}c3B{g}c/2a3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 14,
+          "measure_index": 15,
           "body": "B3A{g}B/2c3/2",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 15,
+          "measure_index": 16,
           "body": "{g}A6",
           "duration_units": 6,
           "is_pickup": false
         },
         {
-          "measure_index": 16,
+          "measure_index": 17,
           "body": "{GAG}A4",
           "duration_units": 4,
           "is_pickup": false

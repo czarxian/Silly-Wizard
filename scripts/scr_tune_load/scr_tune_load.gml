@@ -300,6 +300,14 @@ function scr_score_manifest_read(_filename) {
                 if (variable_struct_exists(_groups_manifest, "part_groups") && is_array(_groups_manifest.part_groups)) {
                     manifest.part_groups = _groups_manifest.part_groups;
                 }
+                if (variable_struct_exists(_groups_manifest, "default_group")) {
+                    manifest.default_group = _groups_manifest.default_group;
+                }
+                if (variable_struct_exists(_groups_manifest, "default_part_channel")) {
+                    manifest.default_part_channel = _groups_manifest.default_part_channel;
+                } else if (variable_struct_exists(_groups_manifest, "default_channel")) {
+                    manifest.default_part_channel = _groups_manifest.default_channel;
+                }
             }
         }
     }
@@ -318,55 +326,171 @@ function scr_score_manifest_get_group_list(_manifest) {
     return [];
 }
 
+/// @function scr_score_manifest_group_supports_channel(_group, _channel)
+/// @description Return true when a group explicitly supports a given player part channel.
+/// @param {struct} _group Group struct from score groups list
+/// @param {real} _channel Target player part channel
+/// @returns {bool} True when supported
+function scr_score_manifest_group_supports_channel(_group, _channel) {
+    if (!is_struct(_group)) return false;
+    var target_channel = floor(real(_channel));
+    if (target_channel < 0) return false;
+
+    if (variable_struct_exists(_group, "part_channels") && is_array(_group.part_channels)) {
+        var group_channels = _group.part_channels;
+        for (var i = 0; i < array_length(group_channels); i++) {
+            if (floor(real(group_channels[i])) == target_channel) return true;
+        }
+    }
+
+    if (variable_struct_exists(_group, "part_channel")) {
+        if (floor(real(_group.part_channel)) == target_channel) return true;
+    }
+    if (variable_struct_exists(_group, "channel")) {
+        if (floor(real(_group.channel)) == target_channel) return true;
+    }
+
+    return false;
+}
+
+/// @function scr_score_manifest_merge_group(_manifest, _group)
+/// @description Merge selected group fields over a cloned root manifest.
+/// @param {struct} _manifest Root manifest
+/// @param {struct} _group Selected group struct
+/// @returns {struct} Merged manifest
+function scr_score_manifest_merge_group(_manifest, _group) {
+    var merged = variable_clone(_manifest);
+    if (!is_struct(_group)) return merged;
+
+    var copy_fields = ["group", "part_channel", "part_channels", "part_label", "subdir", "images", "playback_to_image", "image_meta", "measure_map", "snippet_durations", "snippets", "has_pickup", "beats_per_measure", "units_per_measure", "pickup_image_index", "transition_images"];
+    for (var fi = 0; fi < array_length(copy_fields); fi++) {
+        var key = copy_fields[fi];
+        if (variable_struct_exists(_group, key)) {
+            variable_struct_set(merged, key, variable_struct_get(_group, key));
+        }
+    }
+    merged.selected_group = _group;
+    return merged;
+}
+
+/// @function scr_score_manifest_resolve_source(_manifest, _part_channel)
+/// @description Resolve score source for a selected part channel using explicit group/default rules with base-manifest fallback.
+/// @param {struct|undefined} _manifest Score manifest struct
+/// @param {real} _part_channel Selected player MIDI channel
+/// @returns {struct} {manifest, selected_group, target_channel, resolved_channel, source, matched}
+function scr_score_manifest_resolve_source(_manifest, _part_channel) {
+    var out = {
+        manifest: _manifest,
+        selected_group: undefined,
+        target_channel: -1,
+        resolved_channel: -1,
+        source: "none",
+        matched: false
+    };
+
+    if (!is_struct(_manifest)) return out;
+
+    var groups = scr_score_manifest_get_group_list(_manifest);
+    var target_channel = floor(real(_part_channel));
+    if (target_channel < 0) {
+        target_channel = floor(real(scr_tune_picker_get_selected_part_channel()));
+    }
+    out.target_channel = target_channel;
+
+    if (array_length(groups) <= 0) {
+        out.manifest = _manifest;
+        out.source = "base_no_groups";
+        out.matched = true;
+        return out;
+    }
+
+    // 1) Exact channel match.
+    for (var i = 0; i < array_length(groups); i++) {
+        var group_exact = groups[i];
+        if (!is_struct(group_exact)) continue;
+        if (scr_score_manifest_group_supports_channel(group_exact, target_channel)) {
+            out.selected_group = group_exact;
+            out.manifest = scr_score_manifest_merge_group(_manifest, group_exact);
+            out.resolved_channel = target_channel;
+            out.source = "group_exact_channel";
+            out.matched = true;
+            return out;
+        }
+    }
+
+    // 2) Explicit manifest default group name.
+    if (variable_struct_exists(_manifest, "default_group")) {
+        var default_group_name = string(_manifest.default_group);
+        if (default_group_name != "") {
+            for (var gi = 0; gi < array_length(groups); gi++) {
+                var named_group = groups[gi];
+                if (!is_struct(named_group)) continue;
+                var group_name = variable_struct_exists(named_group, "group") ? string(named_group.group) : "";
+                if (group_name == default_group_name) {
+                    out.selected_group = named_group;
+                    out.manifest = scr_score_manifest_merge_group(_manifest, named_group);
+                    out.resolved_channel = variable_struct_exists(named_group, "part_channel") ? floor(real(named_group.part_channel)) : -1;
+                    out.source = "group_default_name";
+                    out.matched = true;
+                    return out;
+                }
+            }
+        }
+    }
+
+    // 3) Explicit manifest default channel.
+    var default_channel = -1;
+    if (variable_struct_exists(_manifest, "default_part_channel")) {
+        default_channel = floor(real(_manifest.default_part_channel));
+    } else if (variable_struct_exists(_manifest, "default_channel")) {
+        default_channel = floor(real(_manifest.default_channel));
+    }
+    if (default_channel >= 0) {
+        for (var di = 0; di < array_length(groups); di++) {
+            var group_default_channel = groups[di];
+            if (!is_struct(group_default_channel)) continue;
+            if (scr_score_manifest_group_supports_channel(group_default_channel, default_channel)) {
+                out.selected_group = group_default_channel;
+                out.manifest = scr_score_manifest_merge_group(_manifest, group_default_channel);
+                out.resolved_channel = default_channel;
+                out.source = "group_default_channel";
+                out.matched = true;
+                return out;
+            }
+        }
+    }
+
+    // 4) Group-level explicit default marker.
+    for (var mi = 0; mi < array_length(groups); mi++) {
+        var marked_group = groups[mi];
+        if (!is_struct(marked_group)) continue;
+        var is_default = (variable_struct_exists(marked_group, "is_default") && bool(marked_group.is_default))
+            || (variable_struct_exists(marked_group, "default") && bool(variable_struct_get(marked_group, "default")));
+        if (!is_default) continue;
+
+        out.selected_group = marked_group;
+        out.manifest = scr_score_manifest_merge_group(_manifest, marked_group);
+        out.resolved_channel = variable_struct_exists(marked_group, "part_channel") ? floor(real(marked_group.part_channel)) : -1;
+        out.source = "group_marked_default";
+        out.matched = true;
+        return out;
+    }
+
+    // 5) No match/defaults: keep base manifest (important for main-part correctness).
+    out.manifest = _manifest;
+    out.source = "base_fallback_no_match";
+    out.matched = false;
+    return out;
+}
+
 /// @function scr_score_manifest_select_group(_manifest, _part_channel)
 /// @description Resolve a selected-part score group from a manifest, or return the legacy manifest when no groups are available.
 /// @param {struct|undefined} _manifest Score manifest struct
 /// @param {real} _part_channel Selected player MIDI channel
 /// @returns {struct|undefined} Selected group struct or original manifest when no groups exist
 function scr_score_manifest_select_group(_manifest, _part_channel) {
-    if (!is_struct(_manifest)) return undefined;
-
-    var _groups = scr_score_manifest_get_group_list(_manifest);
-    if (array_length(_groups) <= 0) return _manifest;
-
-    var _target_channel = floor(real(_part_channel));
-    if (_target_channel < 0) {
-        _target_channel = floor(real(scr_tune_picker_get_selected_part_channel()));
-    }
-
-    var _fallback = undefined;
-    var _selected = undefined;
-    for (var _gi = 0; _gi < array_length(_groups); _gi++) {
-        var _group = _groups[_gi];
-        if (!is_struct(_group)) continue;
-        if (is_undefined(_fallback)) _fallback = _group;
-
-        var _group_channel = -1;
-        if (variable_struct_exists(_group, "part_channel")) {
-            _group_channel = floor(real(_group.part_channel));
-        } else if (variable_struct_exists(_group, "channel")) {
-            _group_channel = floor(real(_group.channel));
-        }
-
-        if (_group_channel == _target_channel) {
-            _selected = _group;
-            break;
-        }
-    }
-
-    if (!is_struct(_selected)) _selected = _fallback;
-    if (!is_struct(_selected)) return _manifest;
-
-    var _merged = variable_clone(_manifest);
-    var _copy_fields = ["group", "part_channel", "part_label", "subdir", "images", "playback_to_image", "image_meta", "measure_map", "snippet_durations", "snippets", "has_pickup", "beats_per_measure", "units_per_measure", "pickup_image_index", "transition_images"];
-    for (var _fi = 0; _fi < array_length(_copy_fields); _fi++) {
-        var _key = _copy_fields[_fi];
-        if (variable_struct_exists(_selected, _key)) {
-            variable_struct_set(_merged, _key, variable_struct_get(_selected, _key));
-        }
-    }
-    _merged.selected_group = _selected;
-    return _merged;
+    var resolved = scr_score_manifest_resolve_source(_manifest, _part_channel);
+    return resolved.manifest;
 }
 
 /// @function scr_score_manifest_normalize_image_meta(_image_meta, _beats_per_measure)
@@ -449,7 +573,20 @@ function scr_score_sprites_load(_filename, _manifest) {
     }
 
         var root_manifest = manifest;
-        var selected_group = scr_score_manifest_select_group(manifest, scr_tune_picker_get_selected_part_channel());
+        var selected_part_channel = scr_tune_picker_get_selected_part_channel();
+        var resolved_source = scr_score_manifest_resolve_source(manifest, selected_part_channel);
+        var selected_group = resolved_source.selected_group;
+        manifest = resolved_source.manifest;
+
+        if (is_struct(manifest)) {
+            manifest.score_source = resolved_source.source;
+            manifest.score_target_channel = resolved_source.target_channel;
+        }
+
+        if (resolved_source.source == "base_fallback_no_match") {
+            show_debug_message("scr_score_sprites_load: no exact/default group for channel " + string(selected_part_channel) + ", using base score manifest");
+        }
+
         if (is_struct(selected_group) && variable_struct_exists(selected_group, "subdir")) {
             var group_subdir = string(variable_struct_get(selected_group, "subdir"));
             if (string_length(group_subdir) > 0) {
@@ -480,7 +617,7 @@ function scr_score_sprites_load(_filename, _manifest) {
         }
 
         // Re-apply selected group metadata over the loaded manifest so the loader keeps
-        // the selected channel/subdir even when the group score_images.json is sparse.
+        // selected channel/subdir even when the group score_images.json is sparse.
         if (is_struct(selected_group)) {
             var _group_fields = ["group", "part_channel", "part_label", "subdir"];
             for (var _gfi = 0; _gfi < array_length(_group_fields); _gfi++) {

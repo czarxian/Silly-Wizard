@@ -919,17 +919,43 @@ function scr_gameinfo_update_title(_seg_index) {
 /// @function scr_set_resolve_tune_path(_filename)
 /// @description Resolve a tune filename to the subfolder structure:
 ///              tunes/TuneName/TuneName.json
-///              If the filename already contains a path separator it is returned as-is.
+///              Legacy datafiles/tunes paths are normalized to the canonical content-root tunes folder.
 function scr_set_resolve_tune_path(_filename) {
-    if (string_pos("/", _filename) > 0 || string_pos("\\", _filename) > 0) {
-        return _filename;
+    var p = string(_filename ?? "");
+    p = string_trim(p);
+    p = string_replace_all(p, "\\", "/");
+
+    var tunes_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("tunes")
+        : "tunes/";
+    var lower = string_lower(p);
+
+    if (string_pos("datafiles/tunes/", lower) == 1) {
+        var suffix_datafiles = string_copy(p, 17, string_length(p) - 16);
+        return tunes_root + suffix_datafiles;
     }
+
+    if (string_pos("tunes/", lower) == 1) {
+        var suffix_tunes = string_copy(p, 7, string_length(p) - 6);
+        return tunes_root + suffix_tunes;
+    }
+
+    var has_sep = (string_pos("/", p) > 0);
+    var is_abs = (string_pos(":/", p) == 2) || (string_pos("//", p) == 1);
+    if (has_sep) {
+        if (is_abs || file_exists(p)) {
+            return p;
+        }
+        return tunes_root + p;
+    }
+
     // Strip .json extension to get the folder/file stem
-    var _stem = _filename;
-    if (string_lower(string_copy(_stem, string_length(_stem) - 4, 5)) == ".json") {
+    var _stem = p;
+    if (string_length(_stem) >= 5
+        && string_lower(string_copy(_stem, string_length(_stem) - 4, 5)) == ".json") {
         _stem = string_copy(_stem, 1, string_length(_stem) - 5);
     }
-    return "tunes/" + _stem + "/" + _stem + ".json";
+    return tunes_root + _stem + "/" + _stem + ".json";
 }
 
 /// @function scr_set_entry_bpm(_entry, _tune_struct)

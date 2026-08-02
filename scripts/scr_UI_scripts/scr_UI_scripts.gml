@@ -142,7 +142,7 @@
 /// @writes global.current_note_panel
 /// @callers cn_panel_try_bind_refs, cn_panel_prepare_tune_plan (lazy init)
 function cn_panel_init_state() {
-	var panel_min_note_ms = 15;
+	var panel_min_note_ms = 10;
 	if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg) && variable_struct_exists(global.timeline_cfg, "filter_noise_ms")) {
 		panel_min_note_ms = max(0, real(global.timeline_cfg.filter_noise_ms));
 	}

@@ -24,6 +24,60 @@ function create_set_item(_tune_filename) {
     };
 }
 
+    /// @function playback_audio_backend_get()
+    /// @description Return normalized playback output backend key.
+    /// @returns {string} "midi" | "hybrid_metronome_sample"
+    /// @reads global.PLAYBACK_AUDIO_BACKEND
+    /// @writes none
+    /// @objects none
+    /// @callers script_tune_callback_batched
+    function playback_audio_backend_get() {
+        var backend = string_lower(string(variable_global_exists("PLAYBACK_AUDIO_BACKEND") ? global.PLAYBACK_AUDIO_BACKEND : "midi"));
+        if (backend != "hybrid_metronome_sample") backend = "midi";
+        return backend;
+    }
+
+    /// @function playback_should_use_metronome_sample_sink()
+    /// @description Return true when the metronome channel should route to sample sink.
+    /// @returns {bool}
+    /// @reads global.PLAYBACK_AUDIO_BACKEND
+    /// @writes none
+    /// @objects none
+    /// @callers script_tune_callback_batched
+    function playback_should_use_metronome_sample_sink() {
+        return playback_audio_backend_get() == "hybrid_metronome_sample";
+    }
+
+    /// @function playback_emit_metronome_sample(_velocity)
+    /// @description Play configured metronome sample; returns true when sample sink was used.
+    /// @param {real} _velocity Incoming event velocity.
+    /// @returns {bool} true when sample was emitted, false to indicate MIDI fallback should be used.
+    /// @reads global.METRONOME_SAMPLE_SOUND_EMPHASIS, global.METRONOME_SAMPLE_SOUND_NORMAL, global.METRONOME_SAMPLE_PRIORITY
+    /// @writes none
+    /// @objects none
+    /// @callers script_tune_callback_batched
+    function playback_emit_metronome_sample(_velocity) {
+        var vel = max(0, real(_velocity));
+        var snd_emphasis = variable_global_exists("METRONOME_SAMPLE_SOUND_EMPHASIS") ? floor(real(global.METRONOME_SAMPLE_SOUND_EMPHASIS)) : -1;
+        var snd_normal = variable_global_exists("METRONOME_SAMPLE_SOUND_NORMAL") ? floor(real(global.METRONOME_SAMPLE_SOUND_NORMAL)) : -1;
+        var chosen = -1;
+        if (vel >= 90 && snd_emphasis >= 0) {
+            chosen = snd_emphasis;
+        } else if (snd_normal >= 0) {
+            chosen = snd_normal;
+        } else if (snd_emphasis >= 0) {
+            chosen = snd_emphasis;
+        }
+
+        if (chosen < 0 || asset_get_type(chosen) != asset_sound) {
+            return false;
+        }
+
+        var prio = variable_global_exists("METRONOME_SAMPLE_PRIORITY") ? floor(real(global.METRONOME_SAMPLE_PRIORITY)) : 5;
+        audio_play_sound(chosen, prio, false);
+        return true;
+    }
+
 /// @function timing_calibration_ensure_state()
 /// @description Lazily initialise global.timing_calibration to its default struct and return it.
 /// @reads global.timing_calibration
@@ -1035,8 +1089,7 @@ function timing_calibration_start_midi_loopback(_trials = 20) {
     global.midi_output_device = state.midi_loopback.loop_output_device;
     midi_input_device_open(global.midi_input_device);
     midi_output_device_open(global.midi_output_device);
-    midi_input_message_manual_checking(1);
-    midi_error_manual_checking(1);
+    MIDI_enable_manual_polling();
     if (midi_input_device_count() > 0 && global.midi_input_device >= 0 && global.midi_input_device < midi_input_device_count()) {
         global.midi_input_device_name = midi_input_device_name(global.midi_input_device);
     }
@@ -1104,8 +1157,7 @@ function timing_calibration_finish_midi_loopback(_ok) {
         global.midi_input_device_name = string(ml.prev_input_name ?? global.midi_input_device_name);
         global.midi_output_device_name = string(ml.prev_output_name ?? global.midi_output_device_name);
         if (bool(ml.manual_poll_enabled_by_loopback ?? false)) {
-            midi_input_message_manual_checking(0);
-            midi_error_manual_checking(0);
+            MIDI_disable_manual_polling();
         }
     }
 
@@ -2013,6 +2065,84 @@ function diag_log_build_record(_line, _file_name) {
     return record;
 }
 
+/// @function diag_session_get_run_uuid()
+/// @description Return a stable per-process session UUID used to correlate startup and play markers.
+/// @returns {string} Session UUID string
+/// @reads global.DIAG_SESSION_RUN_UUID
+/// @writes global.DIAG_SESSION_RUN_UUID
+/// @objects none
+/// @callers diag_session_marker_write
+function diag_session_get_run_uuid() {
+    if (variable_global_exists("DIAG_SESSION_RUN_UUID")) {
+        var existing = string(global.DIAG_SESSION_RUN_UUID ?? "");
+        if (string_length(existing) > 0) return existing;
+    }
+
+    var now_dt = date_current_datetime();
+    var stamp = string(date_get_year(now_dt))
+        + event_history_pad2(date_get_month(now_dt))
+        + event_history_pad2(date_get_day(now_dt))
+        + "-"
+        + event_history_pad2(date_get_hour(now_dt))
+        + event_history_pad2(date_get_minute(now_dt))
+        + event_history_pad2(date_get_second(now_dt));
+
+    global.DIAG_SESSION_RUN_UUID = "sw-" + stamp + "-" + string(current_time) + "-" + string(irandom(999999));
+    return string(global.DIAG_SESSION_RUN_UUID);
+}
+
+/// @function diag_session_marker_write(_kind, _play_id)
+/// @description Append an explicit startup/play marker JSONL line with resolved runtime paths for unambiguous run tracing.
+/// @param {string} _kind Marker kind (for example "startup" or "play_start")
+/// @param {real} _play_id Optional play identifier; pass -1 when not applicable
+/// @returns {bool} True when marker write succeeded
+/// @reads global.DIAG_SESSION_RUN_UUID
+/// @writes file at <user_data_root>/debug/session_markers.jsonl
+/// @objects none
+/// @callers obj_game_controller Create_0, tune_start
+function diag_session_marker_write(_kind, _play_id = -1) {
+    var kind = string(_kind ?? "");
+    if (kind == "") kind = "unknown";
+
+    var user_root = script_exists(asset_get_index("scr_data_paths_get_user_data_root"))
+        ? scr_data_paths_get_user_data_root()
+        : "datafiles/";
+    var content_root = script_exists(asset_get_index("scr_data_paths_get_content_root"))
+        ? scr_data_paths_get_content_root()
+        : user_root;
+
+    var debug_root = script_exists(asset_get_index("scr_data_paths_get_category_root"))
+        ? scr_data_paths_get_category_root("debug")
+        : (user_root + "debug/");
+
+    if (string_copy(debug_root, string_length(debug_root), 1) != "/") {
+        debug_root += "/";
+    }
+    if (!directory_exists(debug_root)) {
+        directory_create(debug_root);
+    }
+
+    var record = {
+        ts_local: date_datetime_string(date_current_datetime()),
+        kind: kind,
+        run_uuid: diag_session_get_run_uuid(),
+        play_id: floor(real(_play_id)),
+        working_directory: working_directory,
+        program_directory: program_directory,
+        user_data_root: user_root,
+        content_root: content_root
+    };
+
+    var path = debug_root + "session_markers.jsonl";
+    var f = file_text_open_append(path);
+    if (f < 0) return false;
+
+    file_text_write_string(f, json_stringify(record));
+    file_text_writeln(f);
+    file_text_close(f);
+    return true;
+}
+
 /// @function diag_log_get_max_lines()
 /// @description Resolve the maximum retained JSONL lines per diagnostic file before rollover.
 /// @returns {real} Maximum lines per active log file
@@ -2072,8 +2202,36 @@ function diag_log_count_lines_upto(_path, _stop_after) {
 /// @writes diagnostic log files (`.1`, `.2`, ... backups)
 /// @callers diag_log_append_line
 function diag_log_rotate_if_needed(_log_path) {
+    static _rotate_check_cache = {};
+
     var path = string(_log_path);
     if (path == "" || !file_exists(path)) return false;
+
+    var now_ms = timing_get_engine_now_ms();
+    var cache_key = path;
+    var state = variable_struct_exists(_rotate_check_cache, cache_key)
+        ? _rotate_check_cache[$ cache_key]
+        : {
+            append_count: 0,
+            next_check_ms: 0
+        };
+    if (!is_struct(state)) {
+        state = {
+            append_count: 0,
+            next_check_ms: 0
+        };
+    }
+
+    state.append_count = floor(real(state.append_count ?? 0)) + 1;
+    var should_check = (state.append_count >= 64) || (now_ms >= real(state.next_check_ms ?? 0));
+    if (!should_check) {
+        _rotate_check_cache[$ cache_key] = state;
+        return false;
+    }
+
+    state.append_count = 0;
+    state.next_check_ms = now_ms + 2000;
+    _rotate_check_cache[$ cache_key] = state;
 
     var max_lines = diag_log_get_max_lines();
     var line_count = diag_log_count_lines_upto(path, max_lines);
@@ -2106,6 +2264,11 @@ function diag_log_rotate_if_needed(_log_path) {
         file_delete(first_backup);
     }
     file_rename(path, first_backup);
+
+    _rotate_check_cache[$ cache_key] = {
+        append_count: 0,
+        next_check_ms: now_ms + 2000
+    };
     return true;
 }
 
@@ -2147,12 +2310,13 @@ function diag_log_append_line(_line, _file_name, _mirror_output = false, _output
 /// @function perf_diag_emit(_line)
 /// @description Append performance diagnostics to a log file and optionally mirror them to the Output window.
 /// @param _line Diagnostic line text
-/// @reads global.PERF_DIAG_LOG_PATH, global.PERF_DIAG_OUTPUT_WINDOW_ENABLED
+/// @reads global.RT_BUDGET_DIAG_ENABLED, global.PERF_DIAG_LOG_PATH, global.PERF_DIAG_OUTPUT_WINDOW_ENABLED
 /// @writes file at PERF_DIAG_LOG_PATH or <primary_data_root>/debug/perf_benchmark.log
 /// @callers tune_rt_budget_diag_record_scheduler_late_ms, tune_rt_budget_diag_record_scheduler_group, tune_rt_budget_diag_record_controller_step_ms, tune_rt_budget_diag_record_midi_step_ms, tune_rt_budget_diag_record_draw_ms, tune_rt_budget_diag_record_draw_interval_ms, tune_rt_budget_diag_record_anchor_draw_ms, tune_rt_budget_diag_record_controller_step_interval_ms, tune_rt_budget_diag_record_scheduler_step_pump, MIDI_timing_diag_record_poll_delay
 function perf_diag_emit(_line) {
     var msg = string(_line);
     if (msg == "") return;
+    if (variable_global_exists("RT_BUDGET_DIAG_ENABLED") && !global.RT_BUDGET_DIAG_ENABLED) return;
 
     var mirror_output = variable_global_exists("PERF_DIAG_OUTPUT_WINDOW_ENABLED")
         && bool(global.PERF_DIAG_OUTPUT_WINDOW_ENABLED);
@@ -2175,6 +2339,34 @@ function perf_diag_emit(_line) {
     }
 
     diag_log_append_line(msg, "perf_benchmark.log", mirror_output);
+}
+
+/// @function tune_rt_budget_diag_should_record_runtime_sample()
+/// @description Return whether runtime RT budget samples should be recorded this frame.
+/// @returns {bool} True when playback is active, or when idle recording override is enabled.
+/// @reads global.RT_BUDGET_DIAG_INCLUDE_IDLE_RUNTIME, global.tune_scheduler_active, global.playback_events_active
+/// @writes none
+function tune_rt_budget_diag_should_record_runtime_sample() {
+    if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_IDLE_RUNTIME")
+        && bool(global.RT_BUDGET_DIAG_INCLUDE_IDLE_RUNTIME)) {
+        return true;
+    }
+
+    var _scheduler_active = variable_global_exists("tune_scheduler_active") && bool(global.tune_scheduler_active);
+    var _events_active = false;
+    if (variable_global_exists("playback_events_active")) {
+        var _pea = global.playback_events_active;
+        if (is_array(_pea)) {
+            _events_active = (array_length(_pea) > 0);
+        } else if (is_struct(_pea)) {
+            _events_active = true;
+        } else {
+            _events_active = (real(_pea) != 0);
+        }
+    }
+
+    // Runtime samples should represent active playback only.
+    return _scheduler_active && _events_active;
 }
 
 /// @function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _scheduled_elapsed)
@@ -2425,6 +2617,7 @@ function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _mi
 /// @writes global.rt_budget_controller_step_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
 
     var now_ms = timing_get_engine_now_ms();
     var warmup_ms = variable_global_exists("RT_BUDGET_SCHED_WARMUP_MS")
@@ -2496,6 +2689,7 @@ function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
 /// @callers obj_game_controller Step event
 function tune_rt_budget_diag_record_controller_phase_ms(_phase_kind, _phase_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
 
     var now_ms = timing_get_engine_now_ms();
     var warmup_ms = variable_global_exists("RT_BUDGET_SCHED_WARMUP_MS")
@@ -2590,6 +2784,7 @@ function tune_rt_budget_diag_record_controller_phase_ms(_phase_kind, _phase_ms) 
 /// @writes global.rt_budget_midi_step_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
 
     var now_ms = timing_get_engine_now_ms();
 
@@ -2651,6 +2846,7 @@ function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
 /// @writes global.rt_budget_draw_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
 
     var now_ms = timing_get_engine_now_ms();
 
@@ -2712,6 +2908,7 @@ function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
 /// @writes global.rt_budget_draw_dt_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_draw_interval_ms(_draw_dt_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
     if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL") && !global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL) return;
     if (_draw_dt_ms <= 0) return;
 
@@ -2869,6 +3066,7 @@ function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
 /// @writes global.rt_budget_controller_step_dt_buf/head/count/last_log_ms
 function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    if (!tune_rt_budget_diag_should_record_runtime_sample()) return;
     if (_step_dt_ms <= 0) return;
 
     var now_ms = timing_get_engine_now_ms();
@@ -3074,14 +3272,20 @@ function tune_group_events_by_timestamp(_events) {
         grp.ordered_count = ordered_count;
 
         var loop_iteration = 0;
+        var loop_has_active_measure = false;
         for (var li = 0; li < ordered_count; li++) {
             var lev = ordered_events[li];
             if (!is_struct(lev)) continue;
             if (loop_iteration <= 0 && variable_struct_exists(lev, "loop_iteration")) {
                 loop_iteration = floor(real(lev.loop_iteration));
             }
+            if (!loop_has_active_measure && variable_struct_exists(lev, "measure")) {
+                var lev_measure = floor(real(lev.measure));
+                if (lev_measure >= 1) loop_has_active_measure = true;
+            }
         }
         grp.loop_iteration = max(0, loop_iteration);
+        grp.loop_is_spacer = (grp.loop_iteration > 0) && !loop_has_active_measure;
         groups[g] = grp;
     }
     
@@ -3156,77 +3360,6 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
             var note_letter = midi_to_letter(real(item.note ?? 0), real(item.channel ?? 0));
             global.current_note_display = note_letter + " (delta: " + string(real(item.delta_ms ?? 0)) + "ms)";
         }
-        else if (kind == "history_event") {
-            var ev = item.ev;
-            if (is_struct(ev)) {
-                var ev_type = ev.type;
-                var marker_type = "";
-                if (ev.type == "marker") {
-                    marker_type = struct_exists(ev, "marker_type") ? ev.marker_type : "";
-                    ev_type = "marker_" + string(marker_type);
-                }
-
-                var ev_note = struct_exists(ev, "note") ? ev.note : 0;
-                var ev_velocity = struct_exists(ev, "velocity") ? ev.velocity : 0;
-                var ev_channel = struct_exists(ev, "channel") ? ev.channel : 0;
-                var ev_note_canonical = "";
-                if ((ev.type == "note_on" || ev.type == "note_off") && real(ev_note) > 0) {
-                    ev_note_canonical = chanter_midi_to_canonical(ev_note, global.MIDI_chanter ?? "default", ev_channel);
-                }
-                var ev_measure = struct_exists(ev, "measure") ? ev.measure : 0;
-                var ev_beat = struct_exists(ev, "beat") ? ev.beat : 0;
-                var ev_beat_fraction = struct_exists(ev, "beat_fraction") ? ev.beat_fraction : 0;
-                if (ev_beat_fraction == 0 && struct_exists(ev, "division")) {
-                    ev_beat_fraction = ev.division;
-                }
-
-                var expected_elapsed = real(item.expected_time_ms ?? 0);
-                var actual_elapsed = real(item.actual_time_ms ?? expected_elapsed);
-                var audio_offset_ms = 0;
-                var visual_offset_ms = 0;
-                var input_offset_ms = 0;
-                if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
-                    audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
-                        : 0;
-                    visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
-                        : 0;
-                    input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
-                        : 0;
-                }
-
-                event_history_add({
-                    timestamp_ms: actual_elapsed,
-                    expected_time_ms: expected_elapsed,
-                    actual_time_ms: actual_elapsed,
-                    delta_ms: actual_elapsed - expected_elapsed,
-                    canonical_time_ms: expected_elapsed,
-                    audio_target_time_ms: expected_elapsed + audio_offset_ms,
-                    visual_target_time_ms: expected_elapsed + visual_offset_ms,
-                    input_aligned_time_ms: actual_elapsed + input_offset_ms,
-                    event_type: ev_type,
-                    source: "game",
-                    note_midi: ev_note,
-                    note_midi_raw: ev_note,
-                    note_canonical: ev_note_canonical,
-                    velocity: ev_velocity,
-                    channel: ev_channel,
-                    tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
-                    event_id: struct_exists(ev, "event_id") ? ev.event_id : 0,
-                    marker_type: marker_type,
-                    measure: ev_measure,
-                    beat: ev_beat,
-                    beat_fraction: ev_beat_fraction,
-                    audio_output_offset_ms: audio_offset_ms,
-                    visual_alignment_offset_ms: visual_offset_ms,
-                    input_capture_offset_ms: input_offset_ms,
-                    loop_iteration: struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : 0
-                });
-            }
-        }
-
         processed += 1;
     }
 
@@ -3234,7 +3367,7 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
         if (head >= qn) {
             global.tune_deferred_queue = [];
             global.tune_deferred_head = 0;
-        } else if (head >= 64) {
+        } else if (head >= 256 && (head * 2) >= qn) {
             var remaining = [];
             for (var ri = head; ri < qn; ri++) array_push(remaining, queue[ri]);
             global.tune_deferred_queue = remaining;
@@ -3263,7 +3396,7 @@ function tune_scheduler_flush_deferred_all() {
 /// @description Group playable events, configure the scheduler, and start the GML time source.
 /// @param _tune_events Array of playable event structs from scr_goto_playroom preprocessing
 /// @returns false if no event groups were produced; undefined on success
-/// @reads global.loop_runtime_current_iteration, global.enable_current_note_layer, global.PLAYBACK_SCHEDULER_* globals
+/// @reads global.loop_runtime_current_iteration, global.enable_current_note_layer, global.PLAYBACK_SCHEDULER_* globals, global.PLAYBACK_AUDIO_BACKEND
 /// @writes global.tune_event_groups, global.tune_group_index, global.current_tune_name, global.tune_start_real, global.tune_timer, global.tune_scheduler_active, global.tune_scheduler_mode_step, global.tune_deferred_queue, global.tune_deferred_head, global.PLAYBACK_SCHEDULER_* (init if absent)
 /// @objects obj_tune (reads tune_data.filename)
 /// @callers start_play
@@ -3352,12 +3485,15 @@ function tune_start(_tune_events) {
     var cfg_swing = variable_global_exists("swing_mult") ? real(global.swing_mult) : 1;
     var scheduler_mode_label = "timesource";
     if (use_step_scheduler) scheduler_mode_label = "step";
+    var audio_backend_label = playback_audio_backend_get();
+    diag_session_marker_write("play_start", play_id_ms);
     perf_diag_emit("[PLAY_PHASE] PLAY_START tune=" + tune_name
         + " play_id=" + string(play_id_ms)
         + " bpm=" + string_format(cfg_bpm, 0, 3)
         + " grace_ms=" + string_format(cfg_grace_ms, 0, 3)
         + " swing=" + string_format(cfg_swing, 0, 3)
         + " scheduler_mode=" + scheduler_mode_label
+        + " audio_backend=" + audio_backend_label
         + " groups_total=" + string(array_length(global.tune_event_groups)));
 
     var audio_sched_offset_ms = 0;
@@ -3369,7 +3505,6 @@ function tune_start(_tune_events) {
     var first_due_ms = real(global.tune_event_groups[0].time ?? 0) + audio_sched_offset_ms;
     first_due_ms = max(0.001, first_due_ms);
     var first_timer_due_ms = first_due_ms + startup_arm_delay_ms;
-    show_debug_message("delta_ms " + string(first_timer_due_ms)); //For testing only
     if (use_step_scheduler) {
         global.tune_timer = noone;
         tune_scheduler_step_tick();
@@ -3408,8 +3543,8 @@ function tune_start(_tune_events) {
 
 /// @function script_tune_callback_batched()
 /// @description GML time-source callback: dispatch one event group (all events at the current timestamp) via MIDI and panel callbacks.
-/// @reads global.tune_event_groups, global.tune_group_index, global.tune_start_real, global.loop_runtime_active, global.loop_runtime_current_iteration, global.timeline_state, global.enable_current_note_layer, global.midi_output_device, global.METRONOME_CONFIG, global.MIDI_chanter, global.EVENT_HISTORY_AUTO_EXPORT, global.EVENT_HISTORY_EXPORTED, global.PLAYBACK_SCHEDULER_CATCHUP
-/// @writes global.loop_runtime_current_iteration, global.tune_group_index, global.tune_scheduler_active, global.EVENT_HISTORY_EXPORTED, global.loop_runtime_active, global.timeline_state.last_dispatched_expected_ms, global.timeline_state.current_measure
+/// @reads global.tune_event_groups, global.tune_group_index, global.tune_start_real, global.loop_runtime_active, global.loop_runtime_current_iteration, global.timeline_state, global.enable_current_note_layer, global.midi_output_device, global.METRONOME_CONFIG, global.MIDI_chanter, global.EVENT_HISTORY_AUTO_EXPORT, global.EVENT_HISTORY_EXPORTED, global.PLAYBACK_SCHEDULER_CATCHUP, global.PLAYBACK_AUDIO_BACKEND, global.METRONOME_SAMPLE_SOUND_EMPHASIS, global.METRONOME_SAMPLE_SOUND_NORMAL, global.METRONOME_SAMPLE_PRIORITY
+/// @writes global.loop_runtime_current_iteration, global.tune_group_index, global.tune_scheduler_active, global.EVENT_HISTORY_EXPORTED, global.loop_runtime_active, global.timeline_state.last_dispatched_expected_ms, global.timeline_state.current_measure, global.timeline_state.loop_session
 /// @callers tune_scheduler_step_tick (step mode) or GML time_source callback (legacy mode)
 
 function script_tune_callback_batched() {
@@ -3434,6 +3569,41 @@ function script_tune_callback_batched() {
     tune_rt_budget_diag_trace_scheduler_spike(real_elapsed - scheduled_elapsed, real_elapsed, scheduled_elapsed);
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.last_dispatched_expected_ms = real(expected_elapsed);
+        if (variable_struct_exists(global.timeline_state, "loop_session")
+            && is_struct(global.timeline_state.loop_session)) {
+            var _ls = global.timeline_state.loop_session;
+            if (bool(_ls.active)) {
+                var _group_iter = floor(real(group.loop_iteration ?? 0));
+                var _group_is_spacer = bool(group.loop_is_spacer ?? false);
+                var _pass_total = max(0, floor(real(_ls.passes_total ?? 0)));
+
+                if (_group_iter > 0) {
+                    _ls.current_pass_index = _group_iter;
+                    _ls.passes_completed = clamp(_group_iter - 1, 0, _pass_total);
+                    if (_group_is_spacer) {
+                        _ls.phase = "spacer";
+                        _ls.phase_start_ms = real(expected_elapsed);
+                        _ls.phase_end_ms = real(expected_elapsed) + max(0, real(_ls.spacer_duration_ms ?? 0));
+                    } else {
+                        _ls.phase = "pass";
+                        if (_ls.current_pass_index == 1 && !bool(_ls.jump_enabled)) {
+                            _ls.phase_start_ms = max(0, real(_ls.start_ms ?? 0));
+                        } else {
+                            _ls.phase_start_ms = real(expected_elapsed);
+                        }
+                        _ls.phase_end_ms = real(_ls.phase_start_ms) + max(0, real(_ls.pass_duration_ms ?? 0));
+                    }
+                } else {
+                    _ls.phase = "prelude";
+                    _ls.current_pass_index = 0;
+                    _ls.passes_completed = 0;
+                    _ls.phase_start_ms = 0;
+                    _ls.phase_end_ms = max(0, real(_ls.start_ms ?? 0));
+                }
+
+                global.timeline_state.loop_session = _ls;
+            }
+        }
     }
     var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
 
@@ -3447,7 +3617,8 @@ function script_tune_callback_batched() {
     if (ordered_count > array_length(ordered_events)) ordered_count = array_length(ordered_events);
     
     // Temp: log first and last few groups to verify delta calculation
-    if ((!variable_global_exists("PLAYBACK_DEBUG_GROUP_TIMING") || global.PLAYBACK_DEBUG_GROUP_TIMING)
+    if (variable_global_exists("PLAYBACK_DEBUG_GROUP_TIMING")
+        && global.PLAYBACK_DEBUG_GROUP_TIMING
         && (global.tune_group_index < 3 || global.tune_group_index > array_length(global.tune_event_groups) - 3)) {
         show_debug_message("Group " + string(global.tune_group_index) + " (" + string(n_group_events) + " events): real=" + string(real_elapsed) + " expected=" + string(scheduled_elapsed) + " delta=" + string(real_elapsed - scheduled_elapsed));
     }
@@ -3460,18 +3631,30 @@ function script_tune_callback_batched() {
     var latest_group_bar_measure = -1;
     var midi_send_accum_us = 0;
     var midi_send_count = 0;
+    var met_channel = global.METRONOME_CONFIG.channel;
+    var route_metronome_to_sample = playback_should_use_metronome_sample_sink();
     for (var i = 0; i < ordered_count; i++) {
         var ev = ordered_events[i];
+        var ev_channel = struct_exists(ev, "channel") ? ev.channel : 0;
+        var is_metronome_midi = (ev.type == "note_on" || ev.type == "note_off") && ev_channel == met_channel;
         
         // PLAY EVENT using Giavapps MIDI send_short
         if (ev.type == "note_on") {
-            var status_byte = 144 + ev.channel;
-            var _send_t0_us = get_timer();
-            midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, ev.velocity);
-            midi_send_accum_us += (get_timer() - _send_t0_us);
-            midi_send_count += 1;
+            var sent_note_on = false;
+            if (is_metronome_midi && route_metronome_to_sample) {
+                sent_note_on = playback_emit_metronome_sample(ev.velocity);
+            }
+
+            if (!sent_note_on) {
+                var status_byte = 144 + ev.channel;
+                var _send_t0_us = get_timer();
+                midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, ev.velocity);
+                midi_send_accum_us += (get_timer() - _send_t0_us);
+                midi_send_count += 1;
+            }
+
             // Track for UI update (only if not metronome channel)
-            if (ev.channel != global.METRONOME_CONFIG.channel) {
+            if (!is_metronome_midi) {
                 has_last_note_on = true;
                 last_note_on_note = ev.note;
                 last_note_on_channel = ev.channel;
@@ -3487,12 +3670,15 @@ function script_tune_callback_batched() {
             }
         } 
         else if (ev.type == "note_off") {
-            var status_byte = 128 + ev.channel;
-            var _send_t0_us = get_timer();
-            midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, 0);
-            midi_send_accum_us += (get_timer() - _send_t0_us);
-            midi_send_count += 1;
-            if (ev.channel != global.METRONOME_CONFIG.channel) {
+            var suppress_note_off = is_metronome_midi && route_metronome_to_sample;
+            if (!suppress_note_off) {
+                var status_byte = 128 + ev.channel;
+                var _send_t0_us = get_timer();
+                midi_output_message_send_short(global.midi_output_device, status_byte, ev.note, 0);
+                midi_send_accum_us += (get_timer() - _send_t0_us);
+                midi_send_count += 1;
+            }
+            if (!is_metronome_midi) {
                 if (use_current_note_panel) {
                     tune_scheduler_enqueue_deferred({
                         kind: "panel_note_off",
@@ -3526,11 +3712,6 @@ function script_tune_callback_batched() {
             }
         }
 
-        // Skip metronome MIDI events (channel 9 note_on/note_off) - keep structure markers
-        var ev_channel = struct_exists(ev, "channel") ? ev.channel : 0;
-        var is_metronome_midi = (ev.type == "note_on" || ev.type == "note_off") 
-                                && ev_channel == global.METRONOME_CONFIG.channel;
-
         if (!is_metronome_midi && struct_exists(ev, "measure")) {
             var ev_measure_num = floor(real(ev.measure));
             if (ev_measure_num >= 1) {
@@ -3539,12 +3720,74 @@ function script_tune_callback_batched() {
         }
         
         if (!is_metronome_midi) {
-            tune_scheduler_enqueue_deferred({
-                kind: "history_event",
-                ev: ev,
-                expected_time_ms: expected_elapsed,
-                actual_time_ms: real_elapsed
-            });
+            event_runtime_capture_planned(struct_exists(ev, "event_id") ? ev.event_id : 0, real_elapsed,
+                struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : undefined);
+
+            var use_legacy_history = !variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") || !global.EVENT_RUNTIME_CAPTURE_ENABLED;
+            if (use_legacy_history) {
+                var ev_type = ev.type;
+                var marker_type = "";
+                if (ev.type == "marker") {
+                    marker_type = struct_exists(ev, "marker_type") ? ev.marker_type : "";
+                    ev_type = "marker_" + string(marker_type);
+                }
+
+                var ev_note = struct_exists(ev, "note") ? ev.note : 0;
+                var ev_velocity = struct_exists(ev, "velocity") ? ev.velocity : 0;
+                var ev_note_canonical = "";
+                if ((ev.type == "note_on" || ev.type == "note_off") && real(ev_note) > 0) {
+                    ev_note_canonical = chanter_midi_to_canonical(ev_note, global.MIDI_chanter ?? "default", ev_channel);
+                }
+                var ev_measure = struct_exists(ev, "measure") ? ev.measure : 0;
+                var ev_beat = struct_exists(ev, "beat") ? ev.beat : 0;
+                var ev_beat_fraction = struct_exists(ev, "beat_fraction") ? ev.beat_fraction : 0;
+                if (ev_beat_fraction == 0 && struct_exists(ev, "division")) {
+                    ev_beat_fraction = ev.division;
+                }
+
+                var audio_offset_ms = 0;
+                var visual_offset_ms = 0;
+                var input_offset_ms = 0;
+                if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+                    audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
+                        : 0;
+                    visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
+                        : 0;
+                    input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+                        ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+                        : 0;
+                }
+
+                event_history_add({
+                    timestamp_ms: real_elapsed,
+                    expected_time_ms: expected_elapsed,
+                    actual_time_ms: real_elapsed,
+                    delta_ms: real_elapsed - expected_elapsed,
+                    canonical_time_ms: expected_elapsed,
+                    audio_target_time_ms: expected_elapsed + audio_offset_ms,
+                    visual_target_time_ms: expected_elapsed + visual_offset_ms,
+                    input_aligned_time_ms: real_elapsed + input_offset_ms,
+                    event_type: ev_type,
+                    source: "game",
+                    note_midi: ev_note,
+                    note_midi_raw: ev_note,
+                    note_canonical: ev_note_canonical,
+                    velocity: ev_velocity,
+                    channel: ev_channel,
+                    tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
+                    event_id: struct_exists(ev, "event_id") ? ev.event_id : 0,
+                    marker_type: marker_type,
+                    measure: ev_measure,
+                    beat: ev_beat,
+                    beat_fraction: ev_beat_fraction,
+                    audio_output_offset_ms: audio_offset_ms,
+                    visual_alignment_offset_ms: visual_offset_ms,
+                    input_capture_offset_ms: input_offset_ms,
+                    loop_iteration: struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : 0
+                });
+            }
         }
     }
 
@@ -3607,6 +3850,8 @@ function script_tune_callback_batched() {
             + " groups_total=" + string(array_length(global.tune_event_groups)));
         global.tune_scheduler_active = false;
         tune_scheduler_flush_deferred_all();
+        MIDI_send_off();
+        MIDI_disable_manual_polling();
         gv_on_tune_playback_finished(expected_elapsed);
         tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count);
         if (global.EVENT_HISTORY_AUTO_EXPORT && !global.EVENT_HISTORY_EXPORTED) {
@@ -3615,6 +3860,19 @@ function script_tune_callback_batched() {
         }
         global.loop_runtime_current_iteration = 0;
         global.loop_runtime_active = false;
+        if (variable_global_exists("timeline_state")
+            && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "loop_session")
+            && is_struct(global.timeline_state.loop_session)) {
+            var _ls_done = global.timeline_state.loop_session;
+            _ls_done.phase = "complete";
+            _ls_done.active = false;
+            _ls_done.current_pass_index = max(0, floor(real(_ls_done.passes_total ?? 0)));
+            _ls_done.passes_completed = max(0, floor(real(_ls_done.passes_total ?? 0)));
+            _ls_done.phase_start_ms = real(expected_elapsed);
+            _ls_done.phase_end_ms = real(expected_elapsed);
+            global.timeline_state.loop_session = _ls_done;
+        }
         // Schedule cleanup one beat later (600ms at moderate tempo)
         schedule_tune_cleanup(600);
         // show_debug_message("Tune finished.");
@@ -3799,6 +4057,8 @@ event_history_add({
             + " elapsed_ms=" + string_format(real(expected_elapsed), 0, 3)
             + " events_total=" + string(array_length(global.tune_events)));
         time_source_stop(global.tune_timer);
+        MIDI_send_off();
+        MIDI_disable_manual_polling();
         gv_on_tune_playback_finished(expected_elapsed);
         // Schedule cleanup one beat later (600ms at moderate tempo)
         schedule_tune_cleanup(600);
@@ -3830,33 +4090,39 @@ event_history_add({
 }
 
 /// @function schedule_tune_cleanup(_delay_ms)
-/// @description Schedule MIDI cleanup (stop all notes, stop input checking) after a delay
+/// @description Schedule post-play cleanup bookkeeping after a delay.
 /// @param _delay_ms Delay in milliseconds before cleanup (typically one beat duration)
 
 function schedule_tune_cleanup(_delay_ms) {
+    var scheduled_play_id = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
     var cleanup_timer = time_source_create(
         time_source_global,
         _delay_ms / 1000,
         time_source_units_seconds,
         tune_cleanup_after_finish,
-        [],
+        [scheduled_play_id],
         1,
         time_source_expire_after
     );
     time_source_start(cleanup_timer);
-    show_debug_message("â± Scheduled tune cleanup in " + string(_delay_ms) + "ms");
+    show_debug_message("â± Scheduled tune cleanup in " + string(_delay_ms) + "ms (play_id=" + string(scheduled_play_id) + ")");
 }
 
-/// @function tune_cleanup_after_finish()
-/// @description Cleanup callback: stop all MIDI notes and disable MIDI input checking
+/// @function tune_cleanup_after_finish(_scheduled_play_id)
+/// @description Cleanup callback: finalize run stats for the completed run only.
 /// @reads global.rt_budget_sched_late_buf/count, global.rt_budget_controller_step_dt_buf/count, global.rt_budget_midi_step_buf/count, global.rt_budget_draw_buf/count
 /// @writes global.timing_calibration.jitter_summary
 
-function tune_cleanup_after_finish() {
+function tune_cleanup_after_finish(_scheduled_play_id = -1) {
+    var current_play_id = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
+    if (floor(real(_scheduled_play_id)) != current_play_id) {
+        show_debug_message("[CLEANUP] skipped stale cleanup callback scheduled_play_id=" + string(_scheduled_play_id)
+            + " current_play_id=" + string(current_play_id));
+        return;
+    }
+
     var jitter_summary = timing_calibration_capture_jitter_summary();
     perf_run_summary_append_latest(jitter_summary);
-    MIDI_send_off();  // Stop all notes on all channels
-    MIDI_stop_checking_messages_and_errors();  // Stop MIDI input checking and close devices
     show_debug_message("âœ“ Tune cleanup complete");
 }
 

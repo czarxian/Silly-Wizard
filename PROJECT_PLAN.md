@@ -32,6 +32,749 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+### Structure-Time Unification Review (2026-07-30)
+
+Goal:
+- Keep millisecond-accurate playback/scoring as execution authority while making musical structure identity fully interoperable with time mapping.
+
+Review deliverables:
+- `STRUCTURE_TIME_UNIFICATION_REVIEW_2026-07-30.md`
+- `STRUCTURE_TIME_UNIFICATION_MIGRATION_CHECKLIST_2026-07-30.md`
+
+Key findings (confirmed in code review):
+- Part identity is dropped in key preprocess/span transforms.
+- Some score/review lookups are keyed by measure only, causing ambiguity when measure numbers repeat by part.
+- Loop/time ownership model is strong, but identity must be carried end-to-end to remove ambiguity.
+
+Next implementation slice:
+1. Preserve `part` on all preprocess-emitted planned events.
+2. Preserve `part` on planned spans and add key-seed (`part:measure`).
+3. Return `part` + `nav_idx` in tune-structure tile hit-test results.
+4. Begin dual-write scoring maps (legacy measure key + canonical key) before read-path cutover.
+
+Implementation update (2026-07-30, later):
+- Completed 1-3 above and started 4.
+- Added canonical score key helpers (`part:measure[:nav]`) and dual-write score maps in scoring runtime state:
+  - legacy: `score_measure_maps`
+  - canonical: `score_measure_maps_by_key`
+- Updated measure visual style lookup to resolve key-based map first, with legacy fallback.
+- Updated review selection state to carry `score_popup_measure_key` alongside legacy `score_popup_measure`.
+
+Implementation update (2026-07-30, later still):
+- Threaded key context through scoring panel read paths (judge rows, panel focus, detail popup, popup fallback wrapper) using optional args: `_part_num`, `_nav_idx`, `_measure_key`.
+- Added `score_popup_nav_idx` to selection state so review-click and sync maintain stable local identity in repeated-measure layouts.
+- Updated runtime/reset paths to clear canonical scoring selection/map state (`score_measure_maps_by_key`, `score_popup_measure_key`, `score_popup_nav_idx`).
+
+Implementation update (2026-07-30, Phase D start):
+- Added canonical mapper helpers in gameviz:
+  - `map_time_to_context(_time_ms)`
+  - `map_context_to_window(_measure_ref_key)`
+- Migrated now-line score popup sync to mapper output (measure/part/nav/key) with legacy fallback retained.
+- Migrated tune-structure current-measure selection to mapper-first resolution with fallback to `gv_get_current_planned_measure`.
+
+Implementation update (2026-07-30, Phase D continuation):
+- Migrated review click jump targeting to canonical window resolution (`map_context_to_window`) keyed by clicked part/measure/nav identity, with local measure-nav fallback retained as safety.
+- Consumed measure-tile clicks directly in `gv_review_handle_click` after canonical jump resolution to avoid legacy measure-only jump override.
+
+Implementation update (2026-07-30, Phase D continuation 2):
+- Updated `gv_review_jump_to_measure` to accept canonical context (`part`, `nav_idx`, `measure_key`) and resolve jump targets mapper-first before local fallback.
+- Updated `gv_measure_nav_handle_click` review-mode jumps to pass canonical click context into `gv_review_jump_to_measure`.
+- Migrated additional live read paths to mapper-first context (`segment transition reseed`, `world overlay current highlight`, `score-lane debug probe expected measure`) with legacy fallback retained.
+
+Implementation update (2026-07-30, Phase D continuation 3):
+- Added `gv_resolve_measure_context(_time_ms)` to centralize mapper-first + legacy-fallback measure resolution in one helper.
+- Replaced repeated ad-hoc mapper/fallback blocks with the new helper in key read paths:
+  - tune-structure panel current measure
+  - world-space tune-structure current overlay
+  - segment-transition current-measure reseed
+  - score-lane debug expected-measure probe
+
+Implementation update (2026-07-30, Phase D continuation 4):
+- Migrated `gv_sync_now_line_display` score-popup context sync to consume `gv_resolve_measure_context(_time_ms)` directly.
+- `scr_game_viz.gml` now has no remaining direct runtime `map_time_to_context()` consumers outside mapper/helper internals.
+
+Implementation update (2026-07-30, Phase D continuation 5):
+- Deduplicated review click jump resolution by routing `gv_review_handle_click` measure-tile selection jumps through `gv_review_jump_to_measure`.
+- Canonical-window resolution and legacy nav fallback now live in one jump path only (no duplicated inline mapping block in click handler).
+
+Implementation update (2026-07-30, Phase D continuation 6):
+- Made score measure selection identity nav-aware in gameviz review/tile paths.
+- `score_popup_measure_key` now stores `part:measure:nav` when nav context exists, with fallback-compatible matching for legacy `part:measure` keys.
+- Updated tile selection/highlight and click-toggle logic to compare canonical nav-aware identity first, reducing repeated-measure ambiguity.
+
+Implementation update (2026-07-30, Phase D continuation 7):
+- Updated `gv_scoring_get_selected_measure_context()` key parsing to recover `nav_idx` from `score_popup_measure_key` when encoded as `part:measure:nav`.
+- Keeps explicit `score_popup_nav_idx` authoritative when present while improving key-only recovery paths.
+
+Implementation update (2026-07-30, runtime follow-up):
+- Hardened `scoring_score_measure_ms_overlap` and `scoring_score_measure_ms_overlap_emb_window` against missing `nav_idx`/timing fields on `_measure_entry` to prevent loop-exit scoring crashes.
+- Added score-lane playback-map fallback in loop runtime: when seq lookup is out of range, fallback to measure-based playback-map index (`measure-1`) before skipping image draw.
+
+Implementation update (2026-07-30, runtime follow-up 2):
+- Adjusted score-lane measure-start source in single-tune loop runtime: build starts from active event stream first, then use loop runtime cache only as fallback.
+- This prevents selection-scoped loop cache starts from hiding pre-loop score images when loop mode is active.
+
+Acceptance focus:
+- No timing/order regression in planned event stream.
+- Correct part-aware score/tile/popup resolution on repeated-measure multi-part tunes.
+- No regressions in loop spacer/pass behavior and set segment transitions.
+
+### Handoff Checkpoint (2026-07-30 end-of-day)
+
+Current validated status:
+- Single tune, no loop: user rerun (`Dalnahasaig`) reported normal behavior.
+- Loop runtime crash on loop exit (Strathan Reel, loop 9-12): resolved via scoring measure-entry field guards.
+- Loop-mode score image visibility regression (pre-loop measures hidden): resolved by switching loop score-lane start sourcing to event-derived first, with loop-cache fallback only when event-derived starts are empty.
+
+Known baseline:
+- Editor diagnostics still contain a large pre-existing baseline in `scr_game_viz.gml` / `scr_scoring.gml` (existing analyzer noise not introduced by this slice).
+- Canonical mapper migration remains in staged compatibility mode (helper-first, fallbacks still present).
+
+Tomorrow plan (Phase E):
+1. Phase E1: Remove redundant direct fallback branches now superseded by canonical helpers (`gv_resolve_measure_context`, `gv_review_jump_to_measure`) while preserving minimal safety fallback inside helpers.
+2. Phase E2: Consolidate score-lane mapping precedence across non-loop, loop, and set paths (single ordering contract for seq/nav/measure fallback).
+3. Phase E3: Add one compact diagnostic toggle for score-lane source selection (`event`, `loop_cache_fallback`, `set_segment`) to speed future regressions.
+4. Phase E4: Re-run targeted acceptance matrix:
+  - single tune (no loop),
+  - set mode (no loop),
+  - single tune loop (internal range),
+  - verify score tile/popup selection stability for repeated measures.
+
+After Phase E (follow-on):
+1. Phase F: retire transitional state paths that are no longer read (legacy measure-only selectors/maps).
+2. Phase G: finalize docs (`WORKSPACE_MAP.md` script-registry callers and state inventory) and freeze the canonical key contract (`part:measure[:nav]`).
+3. Phase H: optional focused analyzer cleanup pass (separate from runtime behavior work).
+
+Implementation update (2026-07-31, Phase E1 start):
+- Removed ambiguous measure-only review jump fallback in `gv_review_jump_to_measure`; local fallback now remains constrained to canonical/part/nav-consistent nav entries.
+- Updated review/nav click callers to pass nav-aware keys (`part:measure:nav`) into `gv_review_jump_to_measure` when nav identity is available.
+- Goal: keep fallback safety while preventing cross-occurrence jumps in repeated-measure layouts.
+
+Implementation update (2026-07-31, Phase E2):
+- Consolidated score-lane sprite index precedence to a single candidate chain before map lookup:
+  - primary structural candidate (loop nav-aware when available),
+  - seq candidate,
+  - measure candidate (`measure-1`).
+- Applied the same ordered contract to both `playback_to_image` and legacy `score_measure_map` lookup paths.
+
+Implementation update (2026-07-31, Phase E3):
+- Added compact score-lane source diagnostics toggle via `timeline_cfg.score_lane_debug_show_source`.
+- When enabled alongside score debug logs, each sampled view now records mapping source (`override`, `pbmap_primary`, `pbmap_seq`, `pbmap_measure`, `map_primary`, `map_seq`, `map_measure`, `map_pickup`, `raw`).
+
+Validation update (2026-07-31, Phase E2/E3 acceptance):
+- User runtime verification passed in all targeted paths:
+  - single tune mode,
+  - set mode,
+  - Strathan Reel loop scenario.
+- Outcome: unified mapping precedence and optional source diagnostics are behaving as intended in active runtime checks.
+
+Implementation update (2026-07-31, Phase F start):
+- Retired legacy runtime score map storage (`timeline_state.score_measure_maps`) from scoring apply/merge paths and from per-segment score payload writes.
+- Score style resolution is now canonical-map-only (`score_measure_maps_by_key`) with key-first then seed fallback.
+- Updated gameviz selected-judge restore guard to key-map availability and removed legacy map reset writes from timeline reset paths.
+- Updated summary export scoring snapshot to source canonical maps and publish `measure_map_by_key_by_judge`.
+
+Implementation update (2026-07-31, Phase F pass 2):
+- Removed remaining measure-only review/tile selection fallbacks in gameviz:
+  - score tile selected-highlight now requires canonical key match (`part:measure[:nav]`),
+  - review click deselect-toggle now compares canonical key identity only.
+- Outcome: selection behavior now consistently follows structural identity instead of raw measure number.
+
+Implementation update (2026-07-31, Phase F completion):
+- Option 1 complete: summary export scoring payload now publishes canonical score maps only (`measure_map_by_key_by_judge`); compatibility mirror field (`measure_map_by_judge`) removed.
+- Option 2 complete: gameviz score selection now treats `score_popup_measure_key` as the authoritative selection source; numeric `score_popup_measure` remains derived compatibility state written from key parsing.
+
+Phase F closed checkpoint (2026-07-31):
+- Runtime validation status: pass in single tune mode, set mode, and Strathan Reel loop scenario.
+- Migration status: structure-time Phase F cleanup complete; canonical key identity and canonical score-map contract are now the active model.
+
+Side issues queue (post-Phase F):
+1. Issue #1 (Dreams reprise score part routing): implemented (Options B+C runtime path); pending runtime validation in melody-part and harmony-part selections.
+2. Minor remaining behavior issue (reported during post-Phase-F validation) — pending exact repro notes.
+3. Next action: validate issue #1 fix in runtime, then capture precise repro for issue #2 and patch with focused regression check.
+
+Implementation update (2026-07-31, Side issue #1 — Dreams reprise score part routing):
+- Implemented centralized score source resolver in `scr_tune_load.gml` (`scr_score_manifest_resolve_source`) and routed score sprite loading through it.
+- New resolution order supports explicit schema defaults and robust fallback:
+  1. exact group-part channel match,
+  2. explicit `default_group`,
+  3. explicit `default_part_channel`/`default_channel`,
+  4. group-level default marker (`is_default`/`default`),
+  5. base-manifest fallback when no group matches.
+- Updated `.score_groups.json` merge/read path to ingest explicit default fields from sidecar manifest.
+- Added explicit default metadata to `Dreams (Reprise).score_groups.json` (`default_part_channel: 2`) and kept harmony group mapped to channel 3.
+
+Implementation update (2026-07-31, Side issue #1 residual tail visuals — option 1 runtime guard):
+- Added selected-part runtime cap for single-tune non-loop structural score-lane rendering in `scr_game_viz.gml`.
+- New helper `gv_count_selected_channel_score_measures(_events)` counts distinct playable measures on the active tune channel from planned event ownership labels.
+- Structural duration path now clamps rendered snippet count to selected-part playable measure extent (pickup-aware), preventing non-playing trailing images when base manifests contain extra part material.
+- Updated single-tune score render-plan and layout-cache keys to include selected channel context, preventing stale cross-part plan reuse after part switching.
+
+Deferred schema note (not implementing now):
+- Keep future option for explicit per-part score schema (`score_groups` completeness or slice metadata such as start/count mapping) in backlog, but defer while planning self-contained in-GameMaker content generation workflow (no immediate VBA-side schema expansion work).
+
+Loop boundary model decision (2026-07-31):
+- Keep measure selection as the default/initial loop UI for speed and clarity.
+- Move loop engine authority to canonical timeline boundaries (`start_ms`, `end_ms`) with beat-aware boundary metadata.
+- Add optional beat-level refinement for edge cases (alternate endings, internal pickups, borrowed-time phrase joins) while preserving measure-only workflow as default.
+
+Planned implementation slice (loop robustness across idioms/time signatures):
+1. Canonical boundary contract (engine)
+  - Introduce loop boundary endpoints as first-class state: `loop_start_boundary` and `loop_end_boundary` with fields:
+    - `part`, `measure`, `beat`, `beat_fraction`, `nav_idx`, `time_ms`, `source`.
+  - Keep loop selection tiles as source UI state, but derive runtime `[loop_start_ms, loop_end_ms)` strictly from boundary endpoints.
+  - Retain closure-note-off rule at exact end boundary.
+
+2. Measure-first mapping (default UX unchanged)
+  - Measure range selection maps to boundaries automatically:
+    - start boundary = selected first measure at beat 1
+    - end boundary = first boundary after selected last measure
+  - This preserves existing user behavior for normal tunes.
+
+3. Optional beat refinement (advanced mode)
+  - Allow endpoint refinement to beat precision:
+    - start: `measure + beat + optional fraction`
+    - end: `measure + beat + optional fraction`
+  - Use half-open semantics everywhere: include events where `time >= start` and `time < end`.
+  - Validate endpoint ordering and snap to nearest canonical boundary event when exact beat timestamp is absent.
+
+4. Time-signature and idiom robustness rules
+  - Derive beats-per-measure from tune meter metadata per segment (not hard-coded to 4/4 or 6/8).
+  - Preserve pickup/internal-pickup representation without relabel heuristics in loop window selection.
+  - Keep owner identity (`owner_nav_idx`, `owner_measure`) as inclusion filter, but avoid measure-label fallback when canonical boundary refs are present.
+  - Support alternate endings by boundary windows rather than measure-number assumptions.
+
+5. UI evolution path
+  - Phase A: no visible UI change; boundary fields populated from measure selection only.
+  - Phase B: add "Refine endpoints" toggle in loop controls.
+  - Phase C: endpoint editors show meter-aware beat pickers (e.g., 6 beats in 6/8, 3 beats in 3/4), with reset-to-measure-default action.
+  - Phase D: optional visual boundary markers on tune structure panel for advanced mode.
+
+6. Acceptance targets
+  - Jig of Slurs: support musically coherent loops such as `16:beat6 -> 24:beat5` without dropping/duplicating boundary material.
+  - Existing measure-only loops unchanged.
+  - Non-loop playback unaffected.
+  - Set mode and single tune mode both preserve deterministic boundary behavior.
+
+Implementation update (2026-07-31, Loop boundary Phase A backend):
+- Added canonical boundary endpoint resolver `gv_loop_resolve_boundary_endpoints(_selected_refs)` in `scr_game_viz.gml`.
+- `scr_button_loop_build_playback_events` now prefers boundary-derived loop window (`start_ms`/`end_ms`) from that resolver, with prior timeline-window scan retained as fallback.
+- Loop runtime session now stores explicit boundary metadata fields:
+  - `timeline_state.loop_session.loop_start_boundary`
+  - `timeline_state.loop_session.loop_end_boundary`
+- Reset/bind defaults were updated so loop_session always carries the new boundary fields.
+- No UI changes in this phase; measure selection remains the default front-end selection path.
+
+Implementation update (2026-07-31, Loop boundary Phase B backend wiring):
+- Added backend-only optional boundary refinement state on timeline:
+  - `timeline_state.loop_boundary_refinement = {enabled, start_part, start_measure, start_beat, start_beat_fraction, end_part, end_measure, end_beat, end_beat_fraction}`.
+- Extended `gv_loop_resolve_boundary_endpoints(_selected_refs)` to apply beat-level refinement when `enabled=true`, by snapping endpoints to canonical marker events in `global.playback_events`.
+- Added validation fallback: if refined endpoints produce invalid ordering (`end <= start`), resolver reverts to the baseline measure-derived window.
+- Loop runtime session now captures the refinement payload in `timeline_state.loop_session.boundary_refinement` for observability.
+- Existing measure click/range selection now auto-seeds refinement defaults (`start` = first selected boundary, `end` = following boundary after last selected span) via `gv_loop_sync_boundary_refinement_from_selection()`, with no new UI controls.
+- No UI/editor work in this phase; existing measure selection flow remains default behavior when refinement is unset/disabled.
+
+Implementation update (2026-07-31, Loop boundary UI placement swap):
+- Moved timeline score visibility toggle (`Score` / `Marker`) from game-info body into the existing `fp_gameviz_controls` top-left button slot (replacing legacy player/all-events-style toggle behavior).
+- Repurposed `gameinfo_timeline_visibility_anchor` rendering/click handling to show compact loop boundary text in loop mode:
+  - format: `M# B# - M# B#`
+  - beat tokens are clickable controls
+  - start beat click cycles forward
+  - end beat click cycles backward
+- Beat click updates `timeline_state.loop_boundary_refinement` and validates through boundary resolver; invalid endpoint ordering reverts automatically.
+
+Implementation update (2026-07-31, internal-pickup loop refinement fix):
+- Adjusted start-beat implied-final mapping for internal-pickup bars: when UI requests `max_seen_beat + 1` and no explicit marker exists, start boundary now maps to the last in-measure marker time (pickup-inclusive) instead of next-measure downbeat.
+- Clipped loop-session selected refs and pass-0 timeline segments to resolved loop boundaries during loop build, so partial-beat starts/ends do not render as compressed full measures in score lane.
+
+Implementation update (2026-07-31, strict window loop payload + sequence-first loop score mapping):
+- Enforced strict loop event contract in `scr_button_loop_build_playback_events`: selected payload now uses exact half-open time window inclusion (`start_ms <= t < end_ms`) without post-slice structural pruning by `owner_nav_idx`/measure keys; only explicit loop-end closure note_off behavior remains as intentional delta.
+- Updated single-tune loop score image lookup in `gv_draw_timeline_canvas_overlay` to keep primary `playback_to_image` lookup sequence-aligned with non-loop path (removed loop-only nav-index override as primary remap), reducing loop/non-loop sprite identity drift.
+
+Implementation update (2026-07-31, Loop V3 minimal foundation):
+- Added new script module `scr_loop_manifest` with `loop_build_manifest(start_ref, end_ref, options)` that returns a canonical Loop V3 manifest containing strict `[start_ms,end_ms)` payload events, explicit boundary cleanup note_off events, minimal loop-time spans/segments metadata, and pass-1 note_on parity assertions against the base-window event slice.
+- Wired `scr_button_loop_build_playback_events` to use manifest-driven payload/cleanup generation as the only loop payload path (legacy fallback removed). If manifest is unavailable/invalid, loop payload build aborts instead of executing old loop logic; prefix/spacer/session wiring remains intact for low-churn migration.
+
+### Tune Structure Canonical Model Plan (2026-08-01)
+
+Decision:
+- Proceed with a single canonical tune-structure model as shared authority for structure identity, loop boundary ownership, tune-structure tiles, and timeline measure labels.
+- Implement on an isolated branch/save first, with feature flags and parity logging before behavior cutover.
+
+Assessment of proposed tweaks:
+1. `musical_measure_idx` (musician-friendly numbering)
+  - Recommendation: include.
+  - Why: separate canonical structural identity from user-facing numbering so UI can remain musical while runtime identity stays stable.
+  - Contract: do not use `musical_measure_idx` as a join key for runtime ownership/mapping.
+
+2. Rule: segment-beat-count classification
+  - Recommendation: include.
+  - Why: this is the minimum explainable rule layer needed to classify edge cases consistently (`full`, `pickup`, `partial`, `rest_only`).
+  - Placement: central rule registry/helper module, not in draw or click handlers.
+
+3. `display_row_kind` for tune-structure panel (`full_row`, `pickup_row`)
+  - Recommendation: include as a display hint field.
+  - Why: keeps display grouping explicit and tweakable without mutating canonical segment identity.
+  - Scope: UI/layout only; never a boundary/ownership key.
+
+Model schema v1 (proposed core + display fields):
+- `segment_id` (stable canonical id)
+- `part`
+- `source_measure`
+- `canonical_measure_idx` (strict structural progression)
+- `musical_measure_idx` (player-facing label index)
+- `start_ms`, `end_ms` (half-open)
+- `start_beat`, `end_beat`
+- `beat_count`
+- `classification` (`full`, `pickup`, `partial`, `rest_only`, `transition`)
+- `boundary_role` (`normal`, `loop_start_candidate`, `loop_end_candidate`)
+- `display_row_kind` (`full_row`, `pickup_row`)
+- `display_part_group`, `display_line_group`, `display_col`
+
+Inference rules plan (human-readable + tweakable):
+1. Host location:
+  - Add a dedicated tune-structure model/rules script pair (builder + rules) so rules are centralized and greppable.
+2. Rule format:
+  - One rule per function with plain-language header comment and deterministic input/output fields.
+  - Rules run in fixed order with explicit priority.
+3. Initial rule set:
+  - Rule A: derive beat span/count from canonical marker stream and meter fallback.
+  - Rule B: classify segment by beat coverage (`pickup`/`partial`/`full`) and content.
+  - Rule C: mark `rest_only` when no playable note_on exists in segment channel scope.
+  - Rule D: derive `musical_measure_idx` from display policy (preserve musician-friendly numbering).
+  - Rule E: derive `display_row_kind` and row/column grouping hints from classification + part/line context.
+4. Observability:
+  - Add debug export fields: `segment_id`, `classification`, `musical_measure_idx`, `display_row_kind`, rule reason tags.
+
+Staged rollout (isolated branch/save):
+1. Stage 0: Safety + instrumentation
+  - Create isolated branch/save snapshot.
+  - Add feature flag: `timeline_cfg.use_canonical_tune_structure_model` (default false).
+  - Add parity logger comparing legacy nav rows vs model rows.
+
+2. Stage 1: Build model only (no UI/runtime behavior changes)
+  - Build and cache model in tune bind/preprocess flow.
+  - Emit model diagnostics to debug exports.
+
+3. Stage 2: Tune-structure window cutover
+  - `gv_draw_tune_structure_panel` reads model-derived display rows.
+  - Keep existing visual grouping intent; replace identity source with `segment_id` and model fields.
+
+4. Stage 3: Timeline measure numbering cutover
+  - Timeline labels read `musical_measure_idx` from active model context.
+  - Runtime ownership remains keyed by canonical fields (`segment_id`, canonical index, time bounds).
+
+5. Stage 4: Validation + default flip
+  - Run targeted regressions (including Jig of Slurs boundary cases and repeated pass label stability).
+  - Flip feature flag default only after parity and behavior acceptance.
+
+Implementation update (2026-08-01, Stage 0/1 scaffold):
+- Added config flags in `gv_ensure_timeline_cfg_defaults()`:
+  - `use_canonical_tune_structure_model` (default `false`)
+  - `tune_structure_model_build_enabled` (default `true`)
+  - `tune_structure_model_parity_log` (default `false`)
+- Added additive canonical model builder + rule helpers in `scr_game_viz.gml`:
+  - `gv_build_tune_structure_model_from_measure_nav(_measure_nav)`
+  - `gv_tune_structure_rule_classify_segment(...)`
+  - `gv_tune_structure_rule_musical_measure_idx(...)`
+  - `gv_tune_structure_rule_display_row_kind(...)`
+- Added parity summary helper + refresh wiring:
+  - `gv_tune_structure_build_parity(_measure_nav, _model)`
+  - `gv_tune_structure_refresh_model_from_measure_nav(_measure_nav, _reason)`
+  - invoked from `gv_measure_nav_apply_to_timeline_state(...)`.
+- Added Stage-3 bridge (flag-gated, fallback-safe):
+  - `gv_tune_structure_model_resolve_musical_measure_at_time(_time_ms, _fallback_measure)`
+  - `gv_draw_structure_row(...)` now uses model-based `musical_measure_idx` only when `use_canonical_tune_structure_model=true`; legacy labels remain default path.
+- Added tune-structure panel label bridge (flag-gated):
+  - `gv_tune_structure_model_resolve_musical_measure_for_nav_idx(_source_nav_idx, _fallback_measure)`
+  - `gv_draw_tune_structure_panel(...)` section labels use model-derived display index when enabled, with legacy fallback.
+ - Added Stage-2 tune-structure panel source bridge (flag-gated):
+  - `gv_tune_structure_model_build_panel_entries(_fallback_entries)`
+  - `gv_draw_tune_structure_panel(...)` now sources tile rows from canonical model segments when enabled, preserving legacy fallback and source nav identity mapping.
+ - Activated `display_row_kind` consumption in panel row policy:
+  - new cfg `timeline_cfg.tune_structure_show_pickup_rows` (default `false`)
+  - pickup rows (`display_row_kind=pickup_row` or measure<1) remain hidden by default for compatibility.
+ - Branch-testing switch: `timeline_cfg.use_canonical_tune_structure_model` default changed to `true` because there is currently no UI control for toggling; fallback-safe read paths remain in place.
+ - Highlight consistency update (loop/repeat-safe):
+  - tune-structure current-tile detection now prefers source-nav identity by normalized panel time window (with measure fallback), instead of measure-number-only matching.
+  - current context resolution in panel now uses `nav_display_ms` normalization path for loop/live-review consistency.
+ - Canonical context rollout:
+  - added `gv_tune_structure_model_resolve_context_at_time(_time_ms)` to resolve structural context directly from canonical model windows.
+  - `gv_resolve_measure_context(_time_ms)` now prefers canonical model context when enabled, then falls back to existing mapper and legacy measure resolution.
+ - Canonical window/boundary rollout:
+  - added canonical model segment lookup helpers for exact/current and next-segment resolution by structural identity.
+  - `map_context_to_window(_measure_ref_key)` now prefers canonical model windows after active loop-session refs and before legacy measure-nav fallback.
+  - `gv_loop_resolve_boundary_endpoints(_selected_refs)` now prefers canonical-model next-segment metadata for loop end-boundary identity before raw nav adjacency fallback.
+ - Canonical segment window rule upgrade:
+  - canonical model segments are no longer plain copies of `measure_nav_entries`; they now carry both timeline windows and ownership windows sourced from `scr_button_build_measure_nav_map_for_ownership(global.playback_events)` when available.
+  - canonical window lookup now returns those richer ownership/timeline fields from model segments instead of mirroring `start_ms/end_ms` into every window slot.
+ - Internal-pickup loop boundary fix:
+  - selected loop refs now treat `start_ms/end_ms` as the envelope of timeline and ownership windows when both exist.
+  - loop boundary endpoint resolution now expands first/last selected bounds to include ownership windows when those extend beyond display timeline windows, preventing selected leading/trailing material from being silently dropped.
+ - Current cutover status: timeline and tune-structure read bridges are implemented behind `use_canonical_tune_structure_model`; default behavior remains unchanged while model/parity data is populated.
+
+Implementation notes:
+- Keep all joining/matching logic canonical (`segment_id`, canonical/time fields).
+- Treat `musical_measure_idx` and `display_row_kind` as view-layer metadata.
+- This plan is intentionally additive and rollback-safe.
+
+### Canonical Matcher Upgrade (2026-07-03 — in progress)
+**Goal**: Replace ad-hoc per-judge matching with a single authoritative event-to-note matcher whose output is consumed by all judges. Motivated by note-by-note walkthrough analysis showing grace-anchor ownership conflicts, strict-window misses on musically correct notes, and red/green contradictions between judges.
+
+**2026-07-04 architectural pivot**: the canonical slot model stays, but the primary matcher is moving away from one whole-tune DP pass. The new target behavior is measure-windowed and target-first: each committed measure is solved with carry-in/carry-out context, note targets are reserved before embellishment-unit assignment, and local crossing/grace-split artifacts are handled before residual DP matching.
+
+**2026-07-04 judge reset decision**: keep only `ms_overlap` and `ms_overlap_uncal` as active production judges. Remove `ms_overlap_emb_window` from active selection, and temporarily blank-slate all other non-overlap judges (`event_match_core`, `note_match`, `on_beat*`) so requirements can be redefined before rebuilding them on top of canonical matcher output.
+
+**Phases**:
+1. **Phase 1 — Output schema** *(started)*: Add `confidence`, `pitch_plausible`, `duration_plausible`, `is_noise`, `is_unassigned`, `assignment_margin`, `window_drift_ms`, `pitch_delta`, `envelope_class` to every assignment struct returned by `scoring_event_match_assign_targets`. Additive-only, no behavior change.
+2. **Phase 2 — Gesture units**: Add `gesture_id` / `gesture_role` (`"standalone"` | `"embellishment_unit"` | `"target_melody_note"`) to target collection in `scoring_event_match_collect_targets`. Link each embellishment unit to its target melody note by shared expected time and gesture id. Introduce `grace_order_penalty` (default 0, backwards-safe) in `scoring_event_match_pair_cost` to discourage early-onset → target-melody direct assignment when an embellishment slot exists.
+3. **Phase 3 — Plausibility checks**: Populate `pitch_plausible`, `duration_plausible`, `is_noise`, `envelope_class`, and `pitch_delta` via shared pair classification and feed plausibility penalties into `scoring_event_match_pair_cost` (`pitch_implausible_penalty`, `duration_implausible_penalty`, `noise_pair_penalty`). Keep `noise_floor_ms` configurable (default 25 ms).
+4. **Phase 4 — Observability**: `assignment_margin` (second-best minus best cost per player column), `window_drift_ms` alias, `pitch_delta`. Reassignment reason and state snapshot debug-only behind toggle.
+5. **Phase 5 — Judge isolation**: Block judge-side rematching. Wire On Beat and other judges to read canonical assignment output only.
+6. **Phase 6 — Validation**: Run acceptance tests A1–E2 using match dump export. Gate on: no grace-anchor swaps in common motifs, stable assignments under small timing drift, no red/green contradictions on musically correct notes.
+
+**Next execution slice**:
+1. Add measure-window settings and per-measure ownership/commit model to `scoring_event_match_assign_targets`.
+2. Reserve note / target-melody anchors before embellishment assignment, strongly preferring exact-lane anchors over mismatch cascades.
+3. Keep residual embellishment matching on local DP inside the measure window.
+4. Re-check the Jig of Slurs m3→m4 case: one extra note should be isolated, while the downstream melody targets re-lock instead of chaining mismatches.
+
+**Acceptance test shortlist**: A1 grace-anchor no-swap, A2 early grace stable, B2 correct-pitch early onset still assigned, C1 noise spike flagged, D1 many-to-one handled, E1 judges do not re-run DP.
+
+**Key files**: `scripts/scr_scoring/scr_scoring.gml` (all phases), `scripts/scr_game_viz/scr_game_viz.gml` (judge display reads), `WORKSPACE_MAP.md` (registry updates per function changed).
+
+### Post-Play Judge Assessment and De-scope Proposal (2026-07-23)
+
+Decision intent (requested):
+- Keep `ms_overlap` and `ms_overlap_uncal`.
+- Keep the modular/extensible judge framework (registry + dispatch + per-judge settings).
+- Remove played-to-planned event matching as a runtime/post-play dependency.
+
+Current state assessment:
+- Runtime judge execution is already framework-driven (`gv_on_tune_playback_finished` loops enabled registry rows and calls `scoring_run_judge_summary`).
+- Dispatch is currently effectively overlap-only for production scoring: `scoring_run_judge_summary` sends `ms_overlap_uncal` to uncal overlap and everything else to calibrated overlap, except `note_match` which still executes event-match internals.
+- Event matching code remains large and active in codebase (`scoring_event_match_*`, `scoring_build_event_match_summary`, `scoring_build_note_match_summary`, and On Beat path using event-match assignment).
+- Registry still exposes `note_match` as enabled by default; this keeps played-to-planned assignment alive in post-play flows.
+- Notebeam review click-focus and match-debug export still depend on assignment maps (`assignment_by_player_span_index`) populated by note/event matching raw payloads.
+
+What removing played-to-planned matching means in practice:
+- Remove `note_match` from active registry output (and any production default selection).
+- Keep overlap judges as the only executed/visible judges (`ms_overlap`, `ms_overlap_uncal`).
+- Preserve framework primitives:
+  - judge registry rows with `id/name/enabled/settings`
+  - judge normalization and selected-judge persistence
+  - `scoring_run_judge_summary` dispatch pattern
+  - judge table/detail popup infrastructure
+- Gate or remove event-match-only review features:
+  - notebeam pair-focus overlay behavior tied to `note_match`
+  - selected match debug packet export path
+  - popup branches that attempt event-match assignment lookup
+
+Estimated implementation scope:
+1. Batch A (low risk, small): registry + settings cleanup
+  - Remove `note_match` from `scoring_judge_settings_get_registry` descriptors.
+  - Keep compatibility load behavior so persisted `selected_judge_id=note_match` normalizes/falls back to `ms_overlap`.
+  - Restrict `scoring_judge_get_setting_defs` to overlap-relevant settings for active judges.
+2. Batch B (medium risk): scoring dispatch hardening
+  - Ensure `scoring_run_judge_summary` never routes to event-match/note-match/on-beat paths in production mode.
+  - Keep functions in file (for future re-introduction) but unreachable from runtime judge loop.
+3. Batch C (medium risk): post-play UI behavior cleanup
+  - Disable note-match-specific focus mode in notebeam overlay.
+  - Make note popup scoring path always use overlap/measure logic for active judges.
+  - Hide or disable match-debug export affordance when no event-match raw payload exists.
+4. Batch D (optional, later): code archive/delete pass
+  - Either keep event-match functions dormant (safer rollback) or move/remove after stability window.
+
+Primary files impacted:
+- `scripts/scr_scoring/scr_scoring.gml`
+- `scripts/scr_game_viz/scr_game_viz.gml`
+- `WORKSPACE_MAP.md` (script-registry rows should reflect active system state after changes)
+
+Risk notes:
+- Main regression risk is UI paths expecting assignment maps when selected judge is stale from old settings payloads.
+- Secondary risk is hidden coupling in debug/export buttons that assume match payloads exist.
+- Scoring correctness risk is low if only overlap judges remain active, because they are already independent of event-match assignment.
+
+Acceptance checks for this de-scope:
+- End-of-play runs execute only `ms_overlap` and `ms_overlap_uncal`.
+- Judge table shows only these two judges.
+- Clicking notes in review still shows stable popup score/details with no assignment-map dependency errors.
+- No calls to `scoring_build_event_match_summary` / `scoring_build_note_match_summary` during normal playback-finish scoring path.
+
+Effort estimate:
+- Assessment confirms this is a contained de-scope, not a full scoring rewrite.
+- Expected effort: ~0.5 to 1.5 implementation sessions, depending on whether Batch D (hard removal) is included.
+
+Implementation update (2026-07-23):
+- Batch A complete: active registry now exposes only `ms_overlap` and `ms_overlap_uncal`.
+- Batch B complete: runtime judge dispatch is overlap-only; legacy `note_match` / `event_match*` / `on_beat*` ids normalize to overlap.
+- Runtime UI hooks complete for de-scope: match-dump button and key-trigger export path are removed from overlap-only mode.
+- Documentation sync complete in `WORKSPACE_MAP.md` for updated judge normalization, registry behavior, dispatch behavior, and legacy matcher debug status.
+- Legacy matcher functions remain in codebase as dormant helpers for potential future redesign, but are not in the active playback-finish scoring path.
+
+Batch D implementation update (2026-07-23, later):
+- Removed dormant gameviz matcher-focused helpers and state paths:
+  - deleted `gv_match_debug_get_selected_player_span_index`
+  - deleted `gv_get_event_match_raw_for_debug`
+  - deleted `gv_export_selected_match_debug_packet`
+  - deleted `gv_resolve_event_match_focus_for_player`
+  - deleted now-unused `gv_find_planned_span_by_event_id`
+- Simplified post-play note click resolution to overlap-based planned-span overlap fallback only.
+- Archived non-overlap scorer entry points by converting them to compatibility wrappers that delegate to overlap scoring:
+  - `scoring_build_event_match_summary`
+  - `scoring_build_note_match_summary`
+  - `scoring_build_on_beat_summary`
+  - `scoring_build_on_beat_rollup_summary`
+- Pruned active scoring metadata surface so settings/profile/display paths are overlap-focused.
+- Updated `WORKSPACE_MAP.md` script registry rows to remove deleted helper references and document archive-wrapper behavior.
+
+Loop robustness update (2026-07-24):
+- Hardened single-tune loop measure/highlight/image alignment to use loop phase-aware normalization (`phase_start_ms` + steady-state cycle preference) so pickup and spacer settings do not drift the current-measure highlight or score image projection.
+- Upgraded tune-structure loop selection identity to part-aware keys (`part:measure`) and nav-index range selection, reducing ambiguity when measure numbering is reused across parts.
+- Updated loop playback event windowing/filtering to honor part-aware selected references with backward compatibility for legacy measure-only selections.
+
+Loop behavior contract lock (2026-07-24):
+- Loop count semantics: configured count is total passes through the selected loop window (`10` means exactly `10` passes, not `1 + 9`).
+- Spacer behavior: when enabled, insert exactly one spacer measure between every pass (never before the first pass and never after the last pass).
+- Spacer highlight policy: hide current-measure highlight during spacer windows.
+- No-jump behavior: tune plays from start normally, then enters loop window at selected start without beat discontinuity.
+
+Loop architecture phase 1 implementation (2026-07-25):
+- Added authoritative `global.timeline_state.loop_session` lifecycle wiring across build, bind/reset, and runtime callback paths.
+- `scr_button_loop_build_playback_events` now writes session descriptor fields from normalized part-aware selection refs and resolved loop boundary/duration values.
+- `scr_button_reset_loop_state` and `gv_bind_timeline_on_tune_start` now clear/reinitialize `loop_session` so non-loop runs cannot inherit stale loop phase/pass state.
+- `script_tune_callback_batched` now advances session runtime state from grouped playback metadata (`loop_iteration`, spacer detection) and marks completion deterministically at tune end.
+- Added grouped event metadata (`loop_is_spacer`) in scheduler preprocessing so phase updates are derived from the dispatch stream instead of inferred from UI state.
+- Hotfix follow-up: loop payload selection is now strictly time-window based (not re-filtered by measure label) to prevent last-measure truncation on pickup/label-boundary tunes.
+- Hotfix follow-up: `gv_get_current_planned_measure` and score-lane loop projection now normalize against `loop_session` pass/spacer cycle semantics (with spacer=no-highlight) instead of relying solely on legacy loop runtime cache.
+- Phase 3 slice started: loop score-image fragment lookup now prefers `loop_session.selected_refs[].nav_idx` as canonical fragment identity in single-tune loop mode, replacing pickup/measure-number heuristics in the loop path.
+
+Ownership metadata rollout (2026-07-26, phase 0/1 slice):
+- Added event ownership annotation pass (`scr_button_apply_event_ownership_metadata`) during single-tune playback rebuild and loop expansion outputs.
+- Ownership fields now include `owner_nav_idx`, owner part/measure/start/end, `boundary_role`, and `exec_rank`.
+- Loop payload assembly now uses selected `nav_idx` ownership gating when available: out-of-range structure/note_on events are pruned while note_off events are preserved for release safety.
+- Added ownership annotation counters to debug output (`[OWNERSHIP] base ...`, `[OWNERSHIP] loop ...`) for mismatch/fallback auditing.
+- Follow-up wiring: `gv_loop_get_selected_measure_refs()` now resolves and returns `nav_idx` from `measure_nav_entries`, enabling the ownership-gated loop filter path during loop build.
+- Follow-up wiring: when selected refs include canonical nav bounds (`start_ms`/`end_ms`), loop window start/end now clamp directly to those bounds and disable legacy pre-start selected-measure carry-in, preventing unintended extra-measure duration inflation on non-pickup loops.
+- Refinement: canonical loops now re-allow short pre-start carry-in only for ownership-validated selected-nav events near loop start (bounded pickup window), restoring internal-pickup phrasing (e.g., Jig) without reintroducing full extra-measure inflation.
+- Follow-up refinement: canonical loops now append a bounded post-end support-tail slice (`support_tail_ms`, matched to pickup lead) for pickup-shaped phrasing, while loop-session exposes `core_pass_duration_ms` so highlight/score projection stays pinned to selected measures during the support tail.
+- Root-cause correction: ownership annotation now uses marker-derived measure nav entries with time-window-first owner resolution (measure-label lookup is fallback only). This replaces the temporary last-selected-measure exception and addresses whole-measure misownership under internal pickup structures.
+- Namespace alignment fix: `gv_loop_get_selected_measure_refs()` now resolves `nav_idx/start_ms/end_ms` from the same ownership nav map used by loop event ownership annotation, removing cross-namespace index mismatches that could drop full selected measures in loop mode.
+- Added deterministic compare tooling: with `global.LOOP_COMPARE_DUMP_ENABLED=true`, `start_play` now exports base and active planned-event snapshots plus per-measure summaries (`loop_compare_events_*.csv`, `loop_compare_summary_*.csv`) for side-by-side loop vs non-loop analysis.
+
+### Loop Architecture Spec (Single-Tune, Robust Baseline)
+
+Objective:
+- Replace ad hoc loop-time derivations with one authoritative loop session model consumed by playback, measure highlighting, notebeam, and score-image mapping.
+
+Scope:
+- Single-tune mode only (set mode unchanged in this phase).
+- Must support all tune meters/time signatures and tunes with both initial and internal pickups.
+
+Authoritative data model (`timeline_state.loop_session`):
+- `active: bool`
+- `selected_refs: array` ordered by nav sequence: `[{part, measure, nav_idx, start_ms, end_ms}]`
+- `start_ms: real` (loop window start)
+- `end_ms: real` (loop window end, exclusive)
+- `pass_duration_ms: real` (`end_ms - start_ms`)
+- `passes_total: real` (configured count)
+- `passes_completed: real`
+- `spacer_enabled: bool`
+- `spacer_duration_ms: real` (exactly one measure duration for loop context)
+- `jump_enabled: bool`
+- `phase: string` in `{prelude, pass, spacer, complete}`
+- `current_pass_index: real` (1-based during pass phase)
+- `phase_start_ms: real`
+- `phase_end_ms: real`
+- `pickup_mode: string` in `{none, initial, internal, mixed}`
+- `degraded: bool` (true only if fallback boundary inference was required)
+
+Boundary source-of-truth order:
+1. Explicit part+measure boundary markers from playback events.
+2. Beat-1 markers if bar markers missing.
+3. Existing measure-nav entries.
+4. Structural snippet-derived boundaries.
+
+Hard requirements:
+- Do not infer loop end from last selected note tail.
+- Loop end is boundary of measure immediately after last selected ref in same part context.
+- If next-boundary missing, synthesize using resolved measure duration and mark `degraded=true`.
+- During active loop runtime, all measure/highlight/image decisions must read from `loop_session`; no parallel recomputation paths.
+
+Boundary ownership semantics (contract):
+- Measure ownership is half-open: `[measure_start_ms, next_measure_start_ms)`.
+- Loop payload ownership is half-open: `[loop_start_ms, loop_end_ms)`.
+- Structure markers are measure-start events and belong to the measure that begins at that timestamp.
+- Loop start includes structure + note_on events at `loop_start_ms`.
+- Loop end excludes structure/note_on at `loop_end_ms` (those belong to the next pass).
+- Loop end may include boundary note_off cleanup at `loop_end_ms` for notes started inside the loop payload, to prevent sustained carry into the next pass.
+- Same-timestamp dispatch precedence is: `note_off -> structure(marker) -> note_on`.
+
+Phase semantics:
+- `jump=false`: playback starts at tune start (`prelude`), then enters first loop pass at `start_ms`.
+- `jump=true`: playback starts directly at first loop pass.
+- Pass count is total passes through selected loop window (`passes_total`).
+- Spacer (if enabled) occurs between every pass, never before first pass and never after last pass.
+- Spacer phase has no active measure highlight and no active score image measure identity.
+
+Rendering/measurement invariants:
+- At any runtime instant, expected active measure, tune-structure highlight, and score-image measure id must agree.
+- During spacer, expected measure is `-1` (or `0` internal marker), highlight hidden.
+- Notebeam, score images, and measure labels must not advance to next pass before selected last measure boundary completes.
+
+Compatibility policy:
+- Legacy measure-only loop selections are normalized once to part-aware refs at session build.
+- Runtime loop logic uses part-aware refs only.
+
+Instrumentation policy:
+- Keep concise debug overlays and logs behind existing logs toggle.
+- Required runtime fields in debug output: `phase`, `current_pass_index`, `expected_measure`, `rendered_measure`, `start_ms`, `end_ms`, `spacer_window`.
+
+### Loop Acceptance Matrix (Single-Tune)
+
+Primary reference case:
+- Jig of Slurs, select M17-M24, `jump=false`, `spacer=false`.
+- Must audibly and visually include measure 24 before every wrap.
+
+Acceptance tests:
+1. Selection UX:
+- Two-click range selection (start then end) and shift-range both select contiguous loop range correctly.
+
+2. No-jump, no-spacer:
+- Prelude plays normally from tune start.
+- Loop enters selected first measure at exact boundary.
+- Loop wraps only after selected last measure completes.
+
+3. No-jump, spacer-on:
+- One spacer measure inserted between every pass.
+- Highlight hidden and score image inactive during spacer.
+- Next pass starts at selected first measure without tempo/beat discontinuity.
+
+4. Jump, no-spacer:
+- Playback begins at first selected measure.
+- Pass count still equals configured total passes.
+
+5. Jump, spacer-on:
+- Same as above with spacer between every pass.
+
+6. Time-signature coverage:
+- Validate at least one tune each from simple meter and compound meter (e.g., 2/4 or 4/4 and 6/8 or 9/8).
+
+7. Pickup coverage:
+- Tune with initial pickup only.
+- Tune with internal pickup(s) only.
+- Tune with both initial and internal pickups.
+
+### Loop Rebuild Plan v2 (2026-07-26, approved direction)
+
+Decision summary (locked):
+- Selection source of truth is UI-selected part-aware measure refs (future extension may allow beat-range targeting).
+- Loop window is half-open: include events where `time >= start_ms` and `time < end_ms`.
+- Closure rule: include all `note_off` events at `time == end_ms` as loop-closure events for the finishing pass (do not gate by label/owner_measure at boundary).
+- Spacer mode is metronome-only.
+- Scoring/review target is per-pass, per-measure planned-vs-played analysis.
+- Schema bump is allowed.
+- Rollout mode is immediate replacement with cleanup (no long-lived legacy fork).
+- Scope lock: measure-only selection for this rebuild; beat-range targeting is deferred.
+- Boundary safety invariant: at each loop wrap, emit note-off cleanup for any still-active non-metronome notes before next-pass note_on at the same timestamp.
+
+Rebuild objective:
+- Make single-tune loop playback use the same canonical logic path as non-loop tune play and set play.
+- Eliminate loop-only reinterpretation of measure ownership and pickup behavior.
+- Produce an explicit repeated planned-event array for loop runtime and downstream review/judge features.
+
+Authoritative architecture:
+1. Canonical source:
+- Base planned events from existing preprocess+tune pipeline remain authoritative musical truth.
+- Canonical measure/nav map used by non-loop and set modes is reused without relabel/reindex in loop build.
+
+2. Loop transform (new):
+- Build loop output by deterministic expansion of canonical in-window events across passes.
+- Do not recompute measure identity from labels during expansion.
+- Preserve canonical identity fields on every expanded event.
+
+3. Runtime products (single source):
+- `global.playback_events_active`: repeated loop-planned event array (actual dispatch input).
+- `global.timeline_state.loop_session`: loop runtime state descriptor.
+- `global.timeline_state.loop_pass_manifest`: one row per pass with expected counts/times.
+
+4. Review/judge readiness:
+- Keep per-event canonical and loop-projection identity so each played event can be evaluated by pass and measure.
+- Planned-vs-played views can page by pass and then by measure without re-deriving ownership.
+
+New/updated schema fields:
+- Event identity:
+  - `canonical_event_id`
+  - `canonical_time_ms`
+  - `canonical_part`
+  - `canonical_measure`
+- Loop projection:
+  - `loop_pass_index`
+  - `loop_pass_time_ms`
+  - `loop_cycle_time_ms`
+  - `loop_phase` (`pass` or `spacer`)
+  - `loop_is_closure_boundary` (for explicit `time == end_ms` note_off inclusion)
+- Session/manifest:
+  - `loop_pass_manifest[] = {pass_index, pass_start_ms, pass_end_ms, selected_start_ms, selected_end_ms, expected_note_on, expected_note_off, expected_marker}`
+
+Implementation phases:
+1. Phase A - Feature freeze and cleanup boundary:
+- Stop adding behavioral tweaks to legacy loop builder.
+- Keep compare exports as acceptance instrumentation only.
+
+2. Phase B - Canonical loop transform builder:
+- Add a new loop expansion function that consumes canonical selected refs + base events and emits repeated planned events.
+- Apply half-open inclusion + explicit closure-note_off rule exactly once in this builder.
+- Spacer injection is metronome-only and explicit in event metadata.
+
+3. Phase C - Runtime binding replacement:
+- Route single-tune loop playback to the new expanded array.
+- Keep scheduler/callback engine unchanged aside from data source binding.
+
+4. Phase D - Measure/UI unification:
+- Current-measure indicator, structure highlight, and score projection all read the same pass-local measure identity from the expanded event/nav model.
+- Remove legacy parallel recomputation branches in loop visualization path.
+
+5. Phase E - Review/judge enablement:
+- Add pass/measure indexed planned slices for post-play analysis.
+- Keep per-pass/per-measure hooks for future loop judging.
+
+Acceptance gates (must pass before completion):
+1. Pass-1 parity:
+- Loop pass 1 selected-window content must match canonical selected window (counts, ordering, timing) except allowed closure-note_off at `end_ms`.
+
+2. No full-measure loss:
+- Selected terminal measure (e.g., Jig m24 case) must never disappear in audio or metronome output.
+
+3. Measure identity consistency:
+- Scheduler expected measure, current-measure indicator, and score fragment identity agree at runtime.
+
+4. Spacer correctness:
+- Spacer contains only metronome events and no false measure highlight.
+
+5. Cross-mode consistency:
+- Internal pickup behavior in loop mode matches the canonical behavior observed in non-loop and set modes.
+
+Code removal policy after switchover:
+- Delete legacy loop-only ownership/pruning branches once gates pass.
+- Keep compare tooling and pass manifest export for ongoing regression detection.
+
+8. Boundary coverage:
+- Selection fully within a part.
+- Selection crossing phrase boundaries.
+- Selection ending near tune end.
+
+9. Post-play integrity:
+- Loop score window available after loop completion.
+- Iteration rows match configured pass semantics.
+- Post-play timeline/notebeam reflects final pass state.
+
+Pass/fail gate:
+- No off-by-one warnings in accepted runs.
+- No selected-last-measure truncation.
+- No skipped measure labels within selected range.
+- Beat continuity preserved across all wraps and spacer transitions.
+
 ### Runtime Paths Simplification (2026-05-30)
 - Added split-root path model in `scr_tune_library`:
   - `scr_data_paths_get_user_data_root()` now defines writable runtime root (sets/config/debug/performances).

@@ -49,6 +49,28 @@ if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
 	global.PLAYBACK_DEFERRED_MAX_BUDGET_US = 1800;
 }
 
+// Playback output backend (Phase 0 dual-path scaffold).
+// "midi": current behavior.
+// "hybrid_metronome_sample": metronome channel uses sample sink, other channels stay MIDI.
+if (!variable_global_exists("PLAYBACK_AUDIO_BACKEND_OPTIONS")) {
+	global.PLAYBACK_AUDIO_BACKEND_OPTIONS = ["midi", "hybrid_metronome_sample"];
+}
+if (!variable_global_exists("PLAYBACK_AUDIO_BACKEND")) {
+	global.PLAYBACK_AUDIO_BACKEND = "midi";
+}
+
+// Sample sink defaults (Phase 1 metronome pilot).
+// Use -1 to indicate "asset not configured"; runtime falls back to MIDI safely.
+if (!variable_global_exists("METRONOME_SAMPLE_SOUND_EMPHASIS")) {
+	global.METRONOME_SAMPLE_SOUND_EMPHASIS = -1;
+}
+if (!variable_global_exists("METRONOME_SAMPLE_SOUND_NORMAL")) {
+	global.METRONOME_SAMPLE_SOUND_NORMAL = -1;
+}
+if (!variable_global_exists("METRONOME_SAMPLE_PRIORITY")) {
+	global.METRONOME_SAMPLE_PRIORITY = 5;
+}
+
 //Create Globals
 	// Optional tune content root override loaded from JSON config (runtime_paths.json).
 	// Leave unset/blank in config to use AUTO content-root detection.
@@ -76,8 +98,15 @@ if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
 	var _resolved_content_root = script_exists(asset_get_index("scr_data_paths_get_content_root"))
 		? scr_data_paths_get_content_root()
 		: _resolved_user_root;
+	var _paths_ide_mode = script_exists(asset_get_index("scr_data_paths_is_ide_runtime"))
+		? scr_data_paths_is_ide_runtime()
+		: false;
+	show_debug_message("[PATHS] ide_mode=" + string(_paths_ide_mode));
 	show_debug_message("[PATHS] user_data_root=" + _resolved_user_root);
 	show_debug_message("[PATHS] content_root=" + _resolved_content_root);
+	if (script_exists(asset_get_index("diag_session_marker_write"))) {
+		diag_session_marker_write("startup", -1);
+	}
 
 	// Build tune library using runtime-resolved root (supports zipped/package distribution).
 	var _tune_root = script_exists(asset_get_index("scr_tune_library_get_runtime_root"))
@@ -172,6 +201,9 @@ if (!variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_US")) {
 		}
 		if (!variable_global_exists("loop_jump_to_selection")) {
 			global.loop_jump_to_selection = false;
+		}
+		if (!variable_global_exists("LOOP_COMPARE_DUMP_ENABLED")) {
+			global.LOOP_COMPARE_DUMP_ENABLED = true;
 		}
 	if (room == Room_main_menu) {
 		global.pending_layer_mode = "main";

@@ -1,0 +1,177 @@
+{
+  "tune": "Dreams (Reprise)",
+  "beats_per_measure": 2,
+  "units_per_measure": 8,
+  "images": [
+    "m000.png",
+    "m001.png",
+    "m002.png",
+    "m003.png",
+    "m004.png",
+    "m005.png",
+    "m006.png",
+    "m007.png",
+    "m008.png"
+  ],
+  "image_meta": [
+    {
+      "file": "m000.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 108.33,
+      "duration_units": 2,
+      "is_pickup": true,
+      "beat_anchors": [
+        59.66,
+        null
+      ]
+    },
+    {
+      "file": "m001.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 238.01999999999998,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        135.6
+      ]
+    },
+    {
+      "file": "m002.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 222.28000000000003,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        119.86
+      ]
+    },
+    {
+      "file": "m003.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 238.02999999999997,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        135.6
+      ]
+    },
+    {
+      "file": "m004.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 238.0200000000001,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        135.6
+      ]
+    },
+    {
+      "file": "m005.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 238.01999999999998,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        135.6
+      ]
+    },
+    {
+      "file": "m006.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 222.27999999999997,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        119.86
+      ]
+    },
+    {
+      "file": "m007.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 238.02999999999997,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        135.61
+      ]
+    },
+    {
+      "file": "m008.png",
+      "width_px": 360,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 130.51,
+      "duration_units": 8,
+      "is_pickup": false,
+      "beat_anchors": [
+        29.44,
+        75.81
+      ]
+    }
+  ],
+  "pickup_image_index": 0,
+  "group": "part3",
+  "playback_to_image": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "snippet_durations": [
+    2,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8
+  ]
+}

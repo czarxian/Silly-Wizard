@@ -50,6 +50,24 @@
 	global.Midi_Note_Values[14]="g#";
 	global.Midi_Note_Values[15]="a";
 	
+	/// @function MIDI_enable_manual_polling()
+	/// @description Enable manual MIDI message and error polling.
+	/// @writes none
+	/// @callers MIDI_start_manual_check_messages, timing_calibration_start_midi_loopback, start_play
+	function MIDI_enable_manual_polling() {
+		midi_input_message_manual_checking(1);
+		midi_error_manual_checking(1);
+	}
+
+	/// @function MIDI_disable_manual_polling()
+	/// @description Disable manual MIDI message and error polling.
+	/// @writes none
+	/// @callers MIDI_stop_checking_messages_and_errors, timing_calibration_finish_midi_loopback, script_tune_callback_batched, script_tune_callback
+	function MIDI_disable_manual_polling() {
+		midi_input_message_manual_checking(0);
+		midi_error_manual_checking(0);
+	}
+
 
 
 //Start manual checking
@@ -60,8 +78,7 @@
 	/// @callers obj_game_controller Create
 	function MIDI_start_manual_check_messages()
 	{
-		midi_input_message_manual_checking(1);//Enables manual checking of MIDI Messages
-		midi_error_manual_checking(1);//Enables manual checking of MIDI errors
+		MIDI_enable_manual_polling();//Enables manual checking of MIDI Messages and errors
 		show_debug_message("starting to check MIDI input");
 
 			// Timing diagnostics (off by default). Enable with: global.MIDI_TIMING_DIAG_ENABLED = true;
@@ -180,7 +197,7 @@ function MIDI_timing_diag_record_poll_delay(_delay_ms, _raw_skew_ms = 0, _clock_
 
 /// @function MIDI_process_messages()
 /// @description Process all buffered MIDI input messages for the current frame. Converts raw MIDI to canonical notes, routes to game viz (gv_on_player_note_on/off), passes through to MIDI output, and optionally logs to event history.
-/// @reads   global.midi_input_device, global.midi_output_device, global.chanter_channel, global.midi_input_clock_offset_ms, global.MIDI_chanter, global.tune_start_real, global.EVENT_HISTORY_ENABLED, global.enable_current_note_layer, global.current_tune_name, global.timeline_cfg
+/// @reads   global.midi_input_device, global.midi_output_device, global.chanter_channel, global.midi_input_clock_offset_ms, global.MIDI_chanter, global.tune_start_real, global.EVENT_HISTORY_ENABLED, global.EVENT_RUNTIME_CAPTURE_ENABLED, global.enable_current_note_layer, global.current_tune_name, global.timeline_cfg
 /// @writes  global.midi_input_clock_offset_ms (re-anchor on drift)
 /// @objects none (calls gv_on_player_note_on/off, cn_panel_on_player_note_on/off, event_history_add)
 /// @callers obj_game_controller Step (called every frame during active MIDI session)
@@ -194,10 +211,58 @@ function MIDI_process_messages()
 		byte2note=0;
 		messages = midi_input_message_count(global.midi_input_device);
 
+		static _cal_is_active_idx = -1;
+		static _cal_is_active_has = false;
+		static _cal_rx_idx = -1;
+		static _cal_rx_has = false;
+		static _apply_idx = -1;
+		static _apply_has = false;
+		static _suppress_idx = -1;
+		static _suppress_has = false;
+		if (_cal_is_active_idx < 0) {
+			_cal_is_active_idx = asset_get_index("timing_calibration_is_active");
+			_cal_is_active_has = script_exists(_cal_is_active_idx);
+		}
+		if (_cal_rx_idx < 0) {
+			_cal_rx_idx = asset_get_index("timing_calibration_on_midi_message");
+			_cal_rx_has = script_exists(_cal_rx_idx);
+		}
+		if (_apply_idx < 0) {
+			_apply_idx = asset_get_index("apply_calibration_offset");
+			_apply_has = script_exists(_apply_idx);
+		}
+		if (_suppress_idx < 0) {
+			_suppress_idx = asset_get_index("timing_calibration_should_suppress_midi_thru");
+			_suppress_has = script_exists(_suppress_idx);
+		}
+
+		var _use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
+		var _has_tune_start_real = (variable_global_exists("tune_start_real") && global.tune_start_real != undefined);
+		var _tune_start_real = _has_tune_start_real ? real(global.tune_start_real) : 0;
+		var _suppress_midi_thru = _suppress_has ? bool(script_execute(_suppress_idx)) : false;
+		var _event_history_enabled = variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED;
+		var _use_legacy_history = !variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") || !global.EVENT_RUNTIME_CAPTURE_ENABLED;
+		var _audio_offset_ms = 0;
+		var _visual_offset_ms = 0;
+		var _input_offset_ms = 0;
+		if (_event_history_enabled && variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
+			_audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
+				? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
+				: 0;
+			_visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
+				? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
+				: 0;
+			_input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
+				? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
+				: 0;
+		}
+
 		var _cal_is_active = false;
-		var _cal_is_active_idx = asset_get_index("timing_calibration_is_active");
-		if (script_exists(_cal_is_active_idx)) {
+		if (_cal_is_active_has) {
 			_cal_is_active = bool(script_execute(_cal_is_active_idx));
+		}
+		if (messages <= 0 && !_cal_is_active) {
+			return;
 		}
 		if (_cal_is_active) {
 			static _cal_rx_scan_last_ms = -1000;
@@ -230,6 +295,9 @@ function MIDI_process_messages()
 						+ string(global.midi_input_device) + " '" + string(global.midi_input_device_name) + "'");
 				}
 			}
+		}
+		if (messages <= 0) {
+			return;
 		}
 		_last_MIDI_on_event = 0;
 		_MIDI_input_device = global.midi_input_device;
@@ -274,17 +342,10 @@ function MIDI_process_messages()
 		_MIDI_event_number = global.Midi_event_number;
 		_last_MIDI_on_event = global.Midi_last_event_number;
 
-		for(b = 0; b < bytes; b++)	{
-			byte = midi_input_message_byte(_MIDI_input_device,m,b);
-			if (b==0) {byte1 = midi_input_message_byte(_MIDI_input_device,m,b);
-			}
-			else if (b==1) {
-				byte2 = midi_input_message_byte(_MIDI_input_device,m,b);
-				byte2note = (byte2 - MidiLowNoteOffset);
-			}
-			else if (b==2) { byte3 = midi_input_message_byte(_MIDI_input_device,m,b);
-			}
-		}
+		byte1 = (bytes > 0) ? midi_input_message_byte(_MIDI_input_device, m, 0) : 0;
+		byte2 = (bytes > 1) ? midi_input_message_byte(_MIDI_input_device, m, 1) : 0;
+		byte3 = (bytes > 2) ? midi_input_message_byte(_MIDI_input_device, m, 2) : 0;
+		byte2note = byte2 - MidiLowNoteOffset;
 
 	//	if (byte1>=NoteOnEvent && byte1<=(NoteOnEvent+15)) {
 	//		//write note to MIDI log if it is a note event
@@ -316,8 +377,8 @@ function MIDI_process_messages()
 		//  Having parsed the input, do something with it!
 		var log_channel = (byte1 >= 128) ? (byte1 & 15) : 0;
 		var normalized_time = time;
-		if (variable_global_exists("tune_start_real") && global.tune_start_real != undefined) {
-			normalized_time = time - global.tune_start_real;
+		if (_has_tune_start_real) {
+			normalized_time = time - _tune_start_real;
 		}
 		var status_type = byte1 & 240;  // Clear channel bits
 		var raw_note_midi = byte2;
@@ -334,14 +395,12 @@ function MIDI_process_messages()
 			}
 		}
 
-		var _cal_rx_idx = asset_get_index("timing_calibration_on_midi_message");
-		if (script_exists(_cal_rx_idx)) {
+		if (_cal_rx_has) {
 			// Use raw MIDI note for loopback calibration matching; chanter normalization is gameplay-only.
 			script_execute(_cal_rx_idx, status_type, raw_note_midi, byte3, log_channel);
 		}
 
-		var _apply_idx = asset_get_index("apply_calibration_offset");
-		if (script_exists(_apply_idx)) {
+		if (_apply_has) {
 			normalized_time = script_execute(_apply_idx, "midi_in", normalized_time);
 		}
 
@@ -351,8 +410,7 @@ function MIDI_process_messages()
 			gv_on_player_note_off(normalized_note_midi, log_channel, normalized_time, canonical_note);
 		}
 
-		var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
-		if (use_current_note_panel) {
+		if (_use_current_note_panel) {
 			if (status_type == 144 && byte3 > 0) {
 				cn_panel_on_player_note_on(normalized_note_midi, log_channel, normalized_time);
 			} else if (status_type == 128 || (status_type == 144 && byte3 <= 0)) {
@@ -360,60 +418,50 @@ function MIDI_process_messages()
 			}
 		}
 
-		if (variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED) {
-			// Determine event type from MIDI status byte
-			var ev_type = "unknown";
-			if (status_type == 144) {  // Note On
-				ev_type = (byte3 > 0) ? "note_on" : "note_off";  // Velocity-zero = note off
-			} else if (status_type == 128) {  // Note Off
-				ev_type = "note_off";
-			}
-			var audio_offset_ms = 0;
-			var visual_offset_ms = 0;
-			var input_offset_ms = 0;
+		// Determine event type from MIDI status byte once for runtime capture and legacy fallback.
+		var ev_type = "unknown";
+		if (status_type == 144) {  // Note On
+			ev_type = (byte3 > 0) ? "note_on" : "note_off";  // Velocity-zero = note off
+		} else if (status_type == 128) {  // Note Off
+			ev_type = "note_off";
+		}
 
-			if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
-				audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
-					? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
-					: 0;
-				visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
-					? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
-					: 0;
-				input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
-					? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
-					: 0;
+		event_runtime_capture_player(ev_type, normalized_time, normalized_note_midi, log_channel, byte3);
+
+		if (_event_history_enabled) {
+			if (_use_legacy_history) {
+				// Legacy export/judge path fallback when runtime sidecar capture is disabled.
+				event_history_add({
+					timestamp_ms: normalized_time,
+					raw_timestamp_ms: raw_abs_time,
+					normalized_time_ms: normalized_time,
+					processing_delay_ms: processing_delay_ms,
+					clock_source: clock_source,
+					expected_time_ms: 0,
+					actual_time_ms: normalized_time,
+					delta_ms: 0,
+					canonical_time_ms: normalized_time + _input_offset_ms,
+					audio_target_time_ms: normalized_time + _audio_offset_ms,
+					visual_target_time_ms: normalized_time + _visual_offset_ms,
+					input_aligned_time_ms: normalized_time + _input_offset_ms,
+					event_type: ev_type,
+					source: "player",
+					note_midi: normalized_note_midi,
+					note_midi_raw: raw_note_midi,
+					note_canonical: canonical_note,
+					velocity: byte3,
+					channel: log_channel,
+					tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
+					event_id: 0,
+					marker_type: "",
+					measure: 0,
+					beat: 0,
+					beat_fraction: 0,
+					audio_output_offset_ms: _audio_offset_ms,
+					visual_alignment_offset_ms: _visual_offset_ms,
+					input_capture_offset_ms: _input_offset_ms,
+				});
 			}
-			// Raw log for player MIDI input (minimal fields)
-			event_history_add({
-				timestamp_ms: normalized_time,
-				raw_timestamp_ms: raw_abs_time,
-				normalized_time_ms: normalized_time,
-				processing_delay_ms: processing_delay_ms,
-				clock_source: clock_source,
-				expected_time_ms: 0,
-				actual_time_ms: normalized_time,
-				delta_ms: 0,
-				canonical_time_ms: normalized_time + input_offset_ms,
-				audio_target_time_ms: normalized_time + audio_offset_ms,
-				visual_target_time_ms: normalized_time + visual_offset_ms,
-				input_aligned_time_ms: normalized_time + input_offset_ms,
-				event_type: ev_type,
-				source: "player",
-				note_midi: normalized_note_midi,
-				note_midi_raw: raw_note_midi,
-				note_canonical: canonical_note,
-				velocity: byte3,
-				channel: log_channel,
-				tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
-				event_id: 0,
-				marker_type: "",
-				measure: 0,
-				beat: 0,
-				beat_fraction: 0,
-				audio_output_offset_ms: audio_offset_ms,
-				visual_alignment_offset_ms: visual_offset_ms,
-				input_capture_offset_ms: input_offset_ms,
-			});
 		}
 		var out_status = byte1;
 		if (byte1 < 240) {
@@ -424,11 +472,12 @@ function MIDI_process_messages()
 		if (is_note_message) {
 			out_data1 = normalized_note_midi;
 		}
-		var _suppress_idx = asset_get_index("timing_calibration_should_suppress_midi_thru");
-		var suppress_midi_thru = script_exists(_suppress_idx)
-			? bool(script_execute(_suppress_idx))
-			: false;
-		if (!suppress_midi_thru) {
+		var _playback_complete = false;
+		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+			&& variable_struct_exists(global.timeline_state, "playback_complete")) {
+			_playback_complete = bool(global.timeline_state.playback_complete);
+		}
+		if (!_suppress_midi_thru && !_playback_complete) {
 			midi_output_message_send_short(_MIDI_output_device, out_status, out_data1, byte3);  //Sends the MIDI Message to the MIDI Output Device
 		}
 //```
@@ -454,12 +503,19 @@ function MIDI_send_off() 	{
 		show_debug_message("MIDI output device not initialized");
 		return;
 	}
+
+	var out_idx = floor(real(global.midi_output_device));
+	var out_count = midi_output_device_count();
+	if (out_idx < 0 || out_idx >= out_count) {
+		show_debug_message("MIDI_send_off skipped: invalid output device index " + string(out_idx));
+		return;
+	}
 	
 	var channel, note;
 	for (channel = 0; channel < 16; channel++) {
 		var status_byte = 128 + channel; // Note-off (128) + channel
 		for (note = 0; note < 128; note++) {
-			midi_output_message_send_short(global.midi_output_device, status_byte, note, 0);
+			midi_output_message_send_short(out_idx, status_byte, note, 0);
 		}
 	}
 	show_debug_message("✓ All notes stopped on all channels");
@@ -480,8 +536,7 @@ function MIDI_check_errors() 	{
 /// @description Disable manual MIDI checking and close all input/output devices.
 /// @callers obj_game_controller Destroy, scr_button_scripts
 function MIDI_stop_checking_messages_and_errors()  {
-	midi_input_message_manual_checking(0);//Disables manual checking of MIDI Messages
-	midi_error_manual_checking(0);//Disables manual checking of MIDI errors
+	MIDI_disable_manual_polling();//Disables manual checking of MIDI Messages and errors
 	midi_input_device_close_all();
 	midi_output_device_close_all();
 }

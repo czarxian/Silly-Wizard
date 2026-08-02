@@ -1,0 +1,107 @@
+{
+      "tune": "Lady Carmichael of Castlecraig",
+      "header": "X:1\nT:Lady Carmichael of Castlecraig\nM:C\nL:1/8\nR:Strathspey\nC:Traditional\nQ:106\nK:HP",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "has_pickup": false,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "body": "{Gdc}d3/2e/2{g}f3/2d/2{g}B/2d3/2{g}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 1,
+          "body": "{g}B/2d3/2{g}A3/2f/2{g}e3/2d/2{g}e/2f3/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 2,
+          "body": "{Gdc}d3/2e/2{g}f3/2d/2{g}B/2d3/2{g}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 3,
+          "body": "{g}A3/2B/2{Gdc}d3/2f/2{g}e2{Gdc}d3/2A/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 4,
+          "body": "{Gdc}d3/2e/2{g}f3/2d/2{g}B/2d3/2{g}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 5,
+          "body": "{g}B/2d3/2{g}A3/2f/2{g}e3/2d/2{g}e/2f3/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 6,
+          "body": "{Gdc}d3/2e/2{g}f3/2d/2{g}B/2d3/2{g}A2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 7,
+          "body": "{g}A3/2B/2{Gdc}d3/2f/2{g}e2{Gdc}d3/2A/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 8,
+          "body": "{Gdc}d3/2e/2{g}f3/2g/2a/2d3/2{g}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 9,
+          "body": "{gf}g3/2e/2{g}f3/2d/2{g}e3/2d/2{gBd}B2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
+          "body": "{Gdc}d3/2e/2{g}f3/2g/2a/2d3/2{g}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 11,
+          "body": "{GdG}e2a3/2f/2{g}f/2e3/2{Gdc}d2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 12,
+          "body": "{Gdc}d3/2e/2{g}f3/2g/2a/2d3/2{g}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 13,
+          "body": "{gf}g3/2e/2{g}f3/2d/2{g}e3/2d/2{gBd}B2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 14,
+          "body": "{Gdc}d3/2e/2{g}f3/2g/2a/2d3/2{g}f2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 15,
+          "body": "{GdG}e2a3/2f/2{g}f/2e3/2{Gdc}d2",
+          "duration_units": 8,
+          "is_pickup": false
+        }
+      ]
+    }

@@ -19,17 +19,18 @@
     "m013.png",
     "m014.png",
     "m015.png",
-    "m016.png"
+    "m016.png",
+    "m017.png"
   ],
   "image_meta": [
     {
       "file": "m000.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 116.78999999999999,
+      "content_right_px": 116.22,
       "duration_units": 2,
       "is_pickup": true,
       "beat_anchors": [
@@ -40,236 +41,252 @@
     },
     {
       "file": "m001.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.22000000000003,
+      "content_right_px": 171.82999999999998,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.88,
-        116.09
+        83.36,
+        115.27
       ]
     },
     {
       "file": "m002.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.21999999999997,
+      "content_right_px": 171.83000000000004,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.88,
-        116.08
+        83.36,
+        115.27
       ]
     },
     {
       "file": "m003.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 183.20999999999998,
+      "content_right_px": 181.83000000000004,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         38.09,
-        93.87,
-        126.08
+        93.36,
+        125.28
       ]
     },
     {
       "file": "m004.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 139.64,
+      "content_right_px": 138.4699999999999,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         19.44,
         null,
-        82.51
+        81.92
       ]
     },
     {
       "file": "m005.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.22000000000003,
+      "content_right_px": 171.84000000000003,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.88,
-        116.09
+        83.37,
+        115.28
       ]
     },
     {
       "file": "m006.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.22000000000003,
+      "content_right_px": 171.82999999999993,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.88,
-        116.08
+        83.36,
+        115.27
       ]
     },
     {
       "file": "m007.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 208.75,
+      "content_right_px": 207.22000000000003,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         48.09,
-        103.87,
-        136.08
+        103.36,
+        135.27
       ]
     },
     {
       "file": "m008.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.22000000000003,
-      "duration_units": 6,
+      "content_right_px": 110.18000000000006,
+      "duration_units": 4,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
         null,
-        116.08
+        null
       ]
     },
     {
       "file": "m009.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.21000000000004,
-      "duration_units": 6,
+      "content_right_px": 84.65000000000009,
+      "duration_units": 2,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.87,
-        116.08
+        null,
+        null
       ]
     },
     {
       "file": "m010.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 173.22000000000003,
+      "content_right_px": 171.82999999999993,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         28.09,
-        83.88,
-        116.09
+        83.36,
+        115.28
       ]
     },
     {
       "file": "m011.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 183.2199999999998,
+      "content_right_px": 171.83999999999992,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
-        38.09,
-        93.88,
-        126.08
+        28.09,
+        83.37,
+        115.28
       ]
     },
     {
       "file": "m012.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 139.64000000000033,
+      "content_right_px": 181.83000000000015,
+      "duration_units": 6,
+      "is_pickup": false,
+      "beat_anchors": [
+        38.09,
+        93.36,
+        125.27
+      ]
+    },
+    {
+      "file": "m013.png",
+      "width_px": 415,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 138.4699999999998,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
         19.44,
         null,
-        82.5
-      ]
-    },
-    {
-      "file": "m013.png",
-      "width_px": 800,
-      "height_px": 80,
-      "staff_top_px": 24,
-      "staff_bottom_px": 55.7,
-      "content_left_px": 0,
-      "content_right_px": 173.20999999999958,
-      "duration_units": 6,
-      "is_pickup": false,
-      "beat_anchors": [
-        28.09,
-        83.87,
-        116.08
+        81.91
       ]
     },
     {
       "file": "m014.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 163.22000000000025,
+      "content_right_px": 171.82999999999993,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
-        18.09,
-        73.88,
-        106.09
+        28.09,
+        83.36,
+        115.27
       ]
     },
     {
       "file": "m015.png",
-      "width_px": 800,
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 101.88999999999987,
+      "content_right_px": 161.83000000000038,
+      "duration_units": 6,
+      "is_pickup": false,
+      "beat_anchors": [
+        18.09,
+        73.36,
+        105.27
+      ]
+    },
+    {
+      "file": "m016.png",
+      "width_px": 415,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 101.16999999999962,
       "duration_units": 6,
       "is_pickup": false,
       "beat_anchors": [
@@ -279,13 +296,13 @@
       ]
     },
     {
-      "file": "m016.png",
-      "width_px": 800,
+      "file": "m017.png",
+      "width_px": 415,
       "height_px": 80,
       "staff_top_px": 24,
       "staff_bottom_px": 55.7,
       "content_left_px": 0,
-      "content_right_px": 107.42000000000007,
+      "content_right_px": 106.82000000000016,
       "duration_units": 4,
       "is_pickup": false,
       "beat_anchors": [
@@ -313,7 +330,8 @@
     13,
     14,
     15,
-    16
+    16,
+    17
   ],
   "snippet_durations": [
     2,
@@ -324,7 +342,8 @@
     6,
     6,
     6,
-    6,
+    4,
+    2,
     6,
     6,
     6,
