@@ -2,7 +2,7 @@
   "$GMProject":"v1",
   "%Name":"Silly-Wizard",
   "AudioGroups":[
-    {"$GMAudioGroup":"v1","%Name":"audiogroup_default","exportDir":"","name":"audiogroup_default","resourceType":"GMAudioGroup","resourceVersion":"2.0","targets":-1,},
+    {"$GMAudioGroup":"","%Name":"audiogroup_default","name":"audiogroup_default","resourceType":"GMAudioGroup","resourceVersion":"2.0","targets":-1,},
   ],
   "configs":{
     "children":[],
@@ -34,13 +34,6 @@
     {"$GMIncludedFile":"","%Name":"app_settings.json","CopyToMask":-1,"filePath":"datafiles/config/players/player_1","name":"app_settings.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"tune_overrides.json","CopyToMask":-1,"filePath":"datafiles/config/players/player_1","name":"tune_overrides.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"runtime_paths.json","CopyToMask":-1,"filePath":"datafiles/config","name":"runtime_paths.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"bpm_trace.log","CopyToMask":-1,"filePath":"datafiles/debug","name":"bpm_trace.log","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"calibration_debug.log","CopyToMask":-1,"filePath":"datafiles/debug","name":"calibration_debug.log","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"perf_benchmark.log","CopyToMask":-1,"filePath":"datafiles/debug","name":"perf_benchmark.log","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"perf_benchmark.log.1","CopyToMask":-1,"filePath":"datafiles/debug","name":"perf_benchmark.log.1","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"perf_benchmark.log.2","CopyToMask":-1,"filePath":"datafiles/debug","name":"perf_benchmark.log.2","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"perf_benchmark.log.3","CopyToMask":-1,"filePath":"datafiles/debug","name":"perf_benchmark.log.3","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
-    {"$GMIncludedFile":"","%Name":"score_lane_debug.latest.log","CopyToMask":-1,"filePath":"datafiles/debug","name":"score_lane_debug.latest.log","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"embellishments.json","CopyToMask":-1,"filePath":"datafiles","name":"embellishments.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Runtime data folder.lnk","CopyToMask":-1,"filePath":"datafiles","name":"Runtime data folder.lnk","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"runtime_paths.json","CopyToMask":-1,"filePath":"datafiles","name":"runtime_paths.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},

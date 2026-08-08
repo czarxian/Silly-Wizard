@@ -312,7 +312,6 @@ function gv_build_loop_runtime_cache(_events) {
             var _ms_p = floor(real(_ms[$ "p"] ?? 1));
             if (_ms_p < 1) _ms_p = 1;
             if (_ms_m < 1) continue;
-
             var _ms_t = real(_ms[$ "t"] ?? 0);
             var _prev_t = (_msi > 0)
                 ? real(_measure_starts[_msi - 1][$ "t"] ?? (_ms_t - _fallback_measure_ms))
@@ -1243,6 +1242,35 @@ function gv_rebuild_measure_nav_for_segment(_seg_idx) {
     }
 }
 
+/// @function gv_apply_cached_segment_runtime(_seg_idx)
+/// @description Apply prebuilt score, measure-nav, and canonical model references for one set segment without rebuilding.
+/// @param {real} _seg_idx Segment index into global.score_segments_sprites.
+/// @returns {bool} True when a complete runtime cache was applied.
+/// @reads global.score_segments_sprites
+/// @writes score globals, global.timeline_state measure-nav/model fields
+/// @callers gv_timeline_step_tick
+function gv_apply_cached_segment_runtime(_seg_idx) {
+    var cache_entries = variable_global_exists("score_segments_sprites") ? global.score_segments_sprites : [];
+    var segment_index = floor(real(_seg_idx));
+    if (!is_array(cache_entries) || segment_index < 0 || segment_index >= array_length(cache_entries)) return false;
+    var cache_entry = cache_entries[segment_index];
+    if (!is_struct(cache_entry) || !is_struct(cache_entry[$ "measure_nav"] ?? undefined)) return false;
+    if (!variable_global_exists("timeline_state") || !is_struct(global.timeline_state)) return false;
+
+    gv_restore_score_segment_cache(segment_index, true);
+    global.score_override_groups = cache_entry[$ "override_groups"] ?? {};
+
+    var nav = cache_entry[$ "measure_nav"];
+    global.timeline_state.measure_nav_entries = nav[$ "entries"] ?? [];
+    global.timeline_state.measure_nav_parts = nav[$ "parts"] ?? [1];
+    global.timeline_state.measure_nav_pickup_by_part = nav[$ "pickup_by_part"] ?? {};
+    global.timeline_state.tune_structure_model = cache_entry[$ "tune_structure_model"] ?? { segments: [] };
+    global.timeline_state.tune_structure_model_parity = cache_entry[$ "tune_structure_model_parity"] ?? {};
+    global.timeline_state.tune_structure_model_reason = "set_segment_cache";
+    global.timeline_state.measure_nav_scroll_row = 0;
+    return true;
+}
+
 /// @function gv_build_set_measure_nav_all()
 /// @description Build a flat, sorted array of measure-nav entries covering ALL segments of the
 ///              active set, each tagged with segment_idx.  Called once at load time (after the
@@ -1310,6 +1338,39 @@ function gv_build_set_measure_nav_all() {
 
         var _nav = gv_build_measure_nav_map(_bar_evts);
         if (!is_struct(_nav) || !is_array(_nav.entries)) continue;
+
+        var _seg_start = real(_seg[$ "start_ms"] ?? 0);
+        var _seg_end = real(_seg[$ "end_ms"] ?? 0);
+        var _trimmed_entries = [];
+        for (var _trim_i = 0; _trim_i < array_length(_nav.entries); _trim_i++) {
+            var _trim_entry = _nav.entries[_trim_i];
+            if (!is_struct(_trim_entry)) continue;
+            var _trim_start = real(_trim_entry[$ "start_ms"] ?? 0);
+            if (_seg_end > 0 && _trim_start >= _seg_end - 0.001) continue;
+            var _trim_end = real(_trim_entry[$ "end_ms"] ?? _trim_start);
+            _trim_entry.start_ms = max(_seg_start, _trim_start);
+            _trim_entry.end_ms = (_seg_end > 0)
+                ? min(_seg_end, max(_trim_entry.start_ms, _trim_end))
+                : max(_trim_entry.start_ms, _trim_end);
+            array_push(_trimmed_entries, _trim_entry);
+        }
+        if (array_length(_trimmed_entries) > 0 && _seg_end > 0) {
+            var _trim_last = array_length(_trimmed_entries) - 1;
+            _trimmed_entries[_trim_last].end_ms = max(real(_trimmed_entries[_trim_last].start_ms), _seg_end);
+        }
+        _nav.entries = gv_measure_nav_normalize_struct_idx(_trimmed_entries);
+
+        if (variable_global_exists("score_segments_sprites")
+            && is_array(global.score_segments_sprites)
+            && _si < array_length(global.score_segments_sprites)
+            && is_struct(global.score_segments_sprites[_si])) {
+            var _runtime_cache = global.score_segments_sprites[_si];
+            var _model = gv_build_tune_structure_model_from_measure_nav(_nav);
+            _runtime_cache.measure_nav = _nav;
+            _runtime_cache.tune_structure_model = _model;
+            _runtime_cache.tune_structure_model_parity = gv_tune_structure_build_parity(_nav, _model);
+            global.score_segments_sprites[_si] = _runtime_cache;
+        }
 
         var _en = array_length(_nav.entries);
         for (var _ei = 0; _ei < _en; _ei++) {
@@ -2966,7 +3027,7 @@ function gv_perf_summary_struct_get(_s, _k, _default = undefined) {
 }
 
 /// @function gv_perf_summary_get_latest(_force_refresh)
-/// @description Load/cache the latest compact performance run summary from run_summaries.jsonl.
+/// @description Return the runtime-published schema-v3 report immediately, with cached JSONL fallback for the current ledger.
 /// @param {bool} _force_refresh True to bypass cache and reread disk
 /// @returns {struct|undefined} Latest summary object, or undefined when unavailable
 function gv_perf_summary_get_latest(_force_refresh = false) {
@@ -2975,6 +3036,13 @@ function gv_perf_summary_get_latest(_force_refresh = false) {
         last_read_ms: -1000000000,
         summary: undefined
     };
+
+    if (variable_global_exists("PERF_REPORT_LATEST") && is_struct(global.PERF_REPORT_LATEST)) {
+        cache.loaded = true;
+        cache.last_read_ms = timing_get_engine_now_ms();
+        cache.summary = global.PERF_REPORT_LATEST;
+        return cache.summary;
+    }
 
     var now_ms = timing_get_engine_now_ms();
     if (!_force_refresh && cache.loaded && (now_ms - cache.last_read_ms) < 750) {
@@ -3014,7 +3082,8 @@ function gv_perf_summary_get_latest(_force_refresh = false) {
 
     try {
         var parsed = json_parse(last_line);
-        if (is_struct(parsed)) {
+        if (is_struct(parsed)
+            && floor(real(gv_perf_summary_struct_get(parsed, "schema_version", 0))) == 3) {
             cache.summary = parsed;
             return cache.summary;
         }
@@ -3026,24 +3095,16 @@ function gv_perf_summary_get_latest(_force_refresh = false) {
 }
 
 /// @function gv_perf_summary_is_warn(_summary)
-/// @description Classify latest run summary using conservative warning thresholds.
+/// @description Read schema-v3 centralized warning status.
 /// @param {struct} _summary Run summary struct
 /// @returns {bool} True when any metric exceeds warn threshold
 function gv_perf_summary_is_warn(_summary) {
     if (!is_struct(_summary)) return false;
 
-    var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
-    var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
-    var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
-    var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
-    var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
-
-    var warn_ctrl_p95_ms = 6.0;
-    var warn_sched_p95_ms = 6.0;
-    var warn_spikes = 1;
-    return (ctrl_p95 >= warn_ctrl_p95_ms)
-        || (sched_p95 >= warn_sched_p95_ms)
-        || (spikes >= warn_spikes);
+    if (floor(real(gv_perf_summary_struct_get(_summary, "schema_version", 0))) != 3) return false;
+    var overall = gv_perf_summary_struct_get(_summary, "overall", undefined);
+    var report_status = gv_perf_summary_struct_get(overall, "status", undefined);
+    return string(gv_perf_summary_struct_get(report_status, "status", "n/a")) == "warn";
 }
 
 /// @function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled)
@@ -3057,10 +3118,20 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
     var x2 = _rect[2];
     var y2 = _rect[3];
 
-    var has_summary = is_struct(_summary);
-    var warn = has_summary && gv_perf_summary_is_warn(_summary);
+    var has_summary = is_struct(_summary)
+        && floor(real(gv_perf_summary_struct_get(_summary, "schema_version", 0))) == 3;
+    var display_summary = has_summary
+        ? gv_perf_summary_struct_get(_summary, "overall", undefined)
+        : undefined;
+    var status_info = gv_perf_summary_struct_get(display_summary, "status", undefined);
+    var status = "n/a";
+    if (has_summary) {
+        status = string(gv_perf_summary_struct_get(status_info, "status", "n/a"));
+    }
+    var warn = status == "warn";
+    var caution = status == "caution";
 
-    if (!_enabled || !has_summary) {
+    if (!_enabled || !has_summary || status == "n/a") {
         draw_set_colour(make_colour_rgb(28, 28, 28));
         draw_rectangle(x1, y1, x2, y2, false);
         draw_set_colour(c_dkgray);
@@ -3070,6 +3141,12 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
         draw_set_colour(make_colour_rgb(92, 34, 34));
         draw_rectangle(x1, y1, x2, y2, false);
         draw_set_colour(make_colour_rgb(220, 130, 130));
+        draw_rectangle(x1, y1, x2, y2, true);
+        draw_set_colour(c_white);
+    } else if (caution) {
+        draw_set_colour(make_colour_rgb(104, 76, 24));
+        draw_rectangle(x1, y1, x2, y2, false);
+        draw_set_colour(make_colour_rgb(226, 184, 92));
         draw_rectangle(x1, y1, x2, y2, true);
         draw_set_colour(c_white);
     } else {
@@ -3082,13 +3159,15 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
 
     var line1 = "Perf: N/A";
     var line2 = "Tap for details";
-    if (has_summary) {
-        var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
-        var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
+    if (has_summary && status != "n/a") {
+        var ctrl = gv_perf_summary_struct_get(display_summary, "controller_step_interval_ms", undefined);
+        var sched = gv_perf_summary_struct_get(display_summary, "scheduler_late_ms", undefined);
         var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
         var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
-        var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
-        line1 = warn ? "Perf: WARN" : "Perf: OK";
+        var accuracy = gv_perf_summary_struct_get(display_summary, "scheduler_accuracy", undefined);
+        sched_p95 = real(gv_perf_summary_struct_get(accuracy, "abs_p95_ms", sched_p95));
+        var spikes = floor(real(gv_perf_summary_struct_get(display_summary, "spike_count", 0)));
+        line1 = "Perf: " + string_upper(status);
         line2 = "c95 " + string_format(ctrl_p95, 0, 2)
             + " s95 " + string_format(sched_p95, 0, 2)
             + " sp " + string(spikes);
@@ -3102,11 +3181,34 @@ function gv_gameviz_draw_perf_summary_button(_rect, _summary, _enabled = true) {
     draw_set_valign(fa_top);
 }
 
-/// @function gv_perf_summary_build_lines(_summary)
+/// @function gv_perf_summary_select_scope(_summary, _scope_mode)
+/// @description Select set overall or active-tune metrics from a schema-v3 report.
+/// @param {struct|undefined} _summary Complete report.
+/// @param {string} _scope_mode "tune" or "overall".
+/// @returns {struct|undefined} Selected scope summary.
+/// @reads global.playback_context.active_segment
+function gv_perf_summary_select_scope(_summary, _scope_mode = "tune") {
+    if (!is_struct(_summary)) return undefined;
+    if (floor(real(gv_perf_summary_struct_get(_summary, "schema_version", 0))) != 3) return undefined;
+    if (string(_scope_mode) == "overall" || string(gv_perf_summary_struct_get(_summary, "mode", "tune")) != "set") {
+        return gv_perf_summary_struct_get(_summary, "overall", undefined);
+    }
+    var segments = gv_perf_summary_struct_get(_summary, "segments", []);
+    if (!is_array(segments) || array_length(segments) <= 0) return gv_perf_summary_struct_get(_summary, "overall", undefined);
+    var active_segment = 0;
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        active_segment = floor(real(gv_perf_summary_struct_get(global.playback_context, "active_segment", 0)));
+    }
+    active_segment = clamp(active_segment, 0, array_length(segments) - 1);
+    return segments[active_segment];
+}
+
+/// @function gv_perf_summary_build_lines(_summary, _report)
 /// @description Build multi-line detail strings for the performance summary popup.
-/// @param {struct|undefined} _summary Latest run summary
+/// @param {struct|undefined} _summary Selected scope summary
+/// @param {struct|undefined} _report Complete schema-v3 report, when available
 /// @returns {array} Text lines for popup body
-function gv_perf_summary_build_lines(_summary) {
+function gv_perf_summary_build_lines(_summary, _report = undefined) {
     if (!is_struct(_summary)) {
         return [
             "No run summary available.",
@@ -3114,42 +3216,130 @@ function gv_perf_summary_build_lines(_summary) {
         ];
     }
 
-    var mode = string(gv_perf_summary_struct_get(_summary, "mode", "single"));
-    var title = string(gv_perf_summary_struct_get(_summary, "title", "unknown"));
-    var segs = floor(real(gv_perf_summary_struct_get(_summary, "segments", 0)));
-    var elapsed = real(gv_perf_summary_struct_get(_summary, "elapsed_ms", 0));
-    var groups = floor(real(gv_perf_summary_struct_get(_summary, "groups_total", 0)));
-    var events = floor(real(gv_perf_summary_struct_get(_summary, "events_total", 0)));
-    var spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
-
-    var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
-    var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
-    var draw = gv_perf_summary_struct_get(_summary, "draw_ms", undefined);
-    var midi = gv_perf_summary_struct_get(_summary, "midi_process_ms", undefined);
-
-    var ctrl_p95 = real(gv_perf_summary_struct_get(ctrl, "p95", 0));
-    var ctrl_p99 = real(gv_perf_summary_struct_get(ctrl, "p99", 0));
-    var ctrl_max = real(gv_perf_summary_struct_get(ctrl, "max", 0));
-    var sched_p95 = real(gv_perf_summary_struct_get(sched, "p95", 0));
-    var sched_p99 = real(gv_perf_summary_struct_get(sched, "p99", 0));
-    var sched_max = real(gv_perf_summary_struct_get(sched, "max", 0));
-    var draw_p95 = real(gv_perf_summary_struct_get(draw, "p95", 0));
-    var midi_p95 = real(gv_perf_summary_struct_get(midi, "p95", 0));
-
-    var short_title = title;
-    if (string_length(short_title) > 40) {
-        short_title = string_copy(short_title, 1, 40) + "...";
+    var schema_version = floor(real(gv_perf_summary_struct_get(_report, "schema_version", 0)));
+    if (schema_version == 3) {
+        var title = string(gv_perf_summary_struct_get(_summary, "title", gv_perf_summary_struct_get(_report, "title", "unknown")));
+        if (string_length(title) > 40) title = string_copy(title, 1, 40) + "...";
+        var status_info = gv_perf_summary_struct_get(_summary, "status", undefined);
+        var status = string_upper(string(gv_perf_summary_struct_get(status_info, "status", "n/a")));
+        var reasons = gv_perf_summary_struct_get(status_info, "reasons", []);
+        var ctrl = gv_perf_summary_struct_get(_summary, "controller_step_interval_ms", undefined);
+        var sched = gv_perf_summary_struct_get(_summary, "scheduler_late_ms", undefined);
+        var midi = gv_perf_summary_struct_get(_summary, "midi_process_ms", undefined);
+        var step = gv_perf_summary_struct_get(_summary, "controller_step_ms", undefined);
+        var group = gv_perf_summary_struct_get(_summary, "scheduler_group_proc_ms", undefined);
+        var send = gv_perf_summary_struct_get(_summary, "midi_send_ms", undefined);
+        var deferred = gv_perf_summary_struct_get(_summary, "deferred_work_ms", undefined);
+        var render_total = gv_perf_summary_struct_get(_summary, "render_total_ms", undefined);
+        var timeline = gv_perf_summary_struct_get(_summary, "timeline_draw_ms", undefined);
+        var accuracy = gv_perf_summary_struct_get(_summary, "scheduler_accuracy", undefined);
+        var context = gv_perf_summary_struct_get(_report, "context", undefined);
+        var workload = string(gv_perf_summary_struct_get(context, "workload_profile", "unknown"));
+        var player_events = floor(real(gv_perf_summary_struct_get(context, "player_input_event_count", 0)));
+        var set_prepare_total_ms = real(gv_perf_summary_struct_get(context, "set_prepare_total_ms", 0));
+        var set_prepare_score_ms = real(gv_perf_summary_struct_get(context, "set_prepare_score_ms", 0));
+        var set_prepare_nav_ms = real(gv_perf_summary_struct_get(context, "set_prepare_nav_ms", 0));
+        var segment_switches = gv_perf_summary_struct_get(_report, "segment_switches", []);
+        var switch_total_max_ms = 0;
+        var switch_cache_max_ms = 0;
+        var switch_ui_max_ms = 0;
+        var switch_cache_misses = 0;
+        if (is_array(segment_switches)) {
+            for (var switch_index = 0; switch_index < array_length(segment_switches); switch_index++) {
+                var switch_record = segment_switches[switch_index];
+                if (!is_struct(switch_record)) continue;
+                switch_total_max_ms = max(switch_total_max_ms, real(gv_perf_summary_struct_get(switch_record, "total_ms", 0)));
+                switch_cache_max_ms = max(switch_cache_max_ms, real(gv_perf_summary_struct_get(switch_record, "cache_ms", 0)));
+                switch_ui_max_ms = max(switch_ui_max_ms, real(gv_perf_summary_struct_get(switch_record, "ui_ms", 0)));
+                if (!bool(gv_perf_summary_struct_get(switch_record, "cache_hit", false))) switch_cache_misses += 1;
+            }
+        }
+        var startup_spikes = floor(real(gv_perf_summary_struct_get(_summary, "startup_spike_count", 0)));
+        var boundary_spikes = floor(real(gv_perf_summary_struct_get(_summary, "boundary_spike_count", 0)));
+        var total_active_spikes = floor(real(gv_perf_summary_struct_get(_summary, "spike_count", 0)));
+        var content_spikes = max(0, total_active_spikes - boundary_spikes);
+        var worst_incidents = gv_perf_summary_struct_get(accuracy, "worst_incidents", []);
+        var detail_lines = [status + "  " + title];
+        if (is_array(reasons) && array_length(reasons) > 0) {
+            for (var reason_index = 0; reason_index < array_length(reasons); reason_index++) {
+                array_push(detail_lines, "Reason: " + string(reasons[reason_index]));
+            }
+        } else {
+            array_push(detail_lines, "Within configured targets");
+        }
+        if (is_struct(accuracy)) {
+            array_push(detail_lines,
+                "Workload: " + workload + "  player events " + string(player_events),
+            "Dispatch |error| p50 " + string_format(real(gv_perf_summary_struct_get(accuracy, "abs_p50_ms", 0)), 0, 2)
+                + "  p95 " + string_format(real(gv_perf_summary_struct_get(accuracy, "abs_p95_ms", 0)), 0, 2)
+                + "  p99 " + string_format(real(gv_perf_summary_struct_get(accuracy, "abs_p99_ms", 0)), 0, 2)
+                + "  max " + string_format(real(gv_perf_summary_struct_get(accuracy, "abs_max_ms", 0)), 0, 2),
+            "Within 1ms " + string_format(real(gv_perf_summary_struct_get(accuracy, "within_1_pct", 0)), 0, 1) + "%"
+                + "  2ms " + string_format(real(gv_perf_summary_struct_get(accuracy, "within_2_pct", 0)), 0, 1) + "%"
+                + "  5ms " + string_format(real(gv_perf_summary_struct_get(accuracy, "within_5_pct", 0)), 0, 1) + "%"
+                + "  n " + string(floor(real(gv_perf_summary_struct_get(accuracy, "n", 0))))
+            );
+        }
+        if (string(gv_perf_summary_struct_get(_report, "mode", "tune")) == "set") {
+            array_push(detail_lines,
+                "Set prep " + string_format(set_prepare_total_ms, 0, 2)
+                    + " ms  score " + string_format(set_prepare_score_ms, 0, 2)
+                    + "  nav/model " + string_format(set_prepare_nav_ms, 0, 2),
+                "Boundary max " + string_format(switch_total_max_ms, 0, 2)
+                    + " ms  cache " + string_format(switch_cache_max_ms, 0, 2)
+                    + "  enqueue " + string_format(switch_ui_max_ms, 0, 2)
+                    + "  misses " + string(switch_cache_misses)
+            );
+        }
+        array_push(detail_lines,
+            "Cadence p50 " + string_format(real(gv_perf_summary_struct_get(ctrl, "p50", 0)), 0, 2)
+                + "  p95 " + string_format(real(gv_perf_summary_struct_get(ctrl, "p95", 0)), 0, 2)
+                + "  p99 " + string_format(real(gv_perf_summary_struct_get(ctrl, "p99", 0)), 0, 2)
+                + "  max " + string_format(real(gv_perf_summary_struct_get(ctrl, "max", 0)), 0, 2)
+                + "  n " + string(floor(real(gv_perf_summary_struct_get(ctrl, "n", 0)))),
+            "Scheduler p50 " + string_format(real(gv_perf_summary_struct_get(sched, "p50", 0)), 0, 2)
+                + "  p95 " + string_format(real(gv_perf_summary_struct_get(sched, "p95", 0)), 0, 2)
+                + "  p99 " + string_format(real(gv_perf_summary_struct_get(sched, "p99", 0)), 0, 2)
+                + "  max " + string_format(real(gv_perf_summary_struct_get(sched, "max", 0)), 0, 2)
+                + "  n " + string(floor(real(gv_perf_summary_struct_get(sched, "n", 0)))),
+            "Step " + string_format(real(gv_perf_summary_struct_get(step, "p95", 0)), 0, 2)
+                + "  MIDI " + string_format(real(gv_perf_summary_struct_get(midi, "p95", 0)), 0, 2)
+                + "  Render " + string_format(real(gv_perf_summary_struct_get(render_total, "p95", 0)), 0, 2) + " ms p95",
+            "Incidents: content " + string(content_spikes)
+                + "  boundary " + string(boundary_spikes)
+                + "  startup " + string(startup_spikes)
+        );
+        if (is_array(worst_incidents)) {
+            var worst_active = undefined;
+            var worst_startup = undefined;
+            for (var incident_index = 0; incident_index < array_length(worst_incidents); incident_index++) {
+                var incident = worst_incidents[incident_index];
+                if (!is_struct(incident)) continue;
+                var incident_category = string(gv_perf_summary_struct_get(incident, "category", "unknown"));
+                if (incident_category == "startup") {
+                    if (!is_struct(worst_startup)) worst_startup = incident;
+                } else if (!is_struct(worst_active)) {
+                    worst_active = incident;
+                }
+            }
+            if (is_struct(worst_active)) {
+                array_push(detail_lines, "Worst active: " + string_format(real(gv_perf_summary_struct_get(worst_active, "signed_error_ms", 0)), 0, 2)
+                    + " ms at " + string_format(real(gv_perf_summary_struct_get(worst_active, "scheduled_ms", 0)), 0, 0)
+                    + " ms  " + string(gv_perf_summary_struct_get(worst_active, "category", "unknown")));
+            }
+            if (is_struct(worst_startup)) {
+                array_push(detail_lines, "Worst startup (excluded): " + string_format(real(gv_perf_summary_struct_get(worst_startup, "signed_error_ms", 0)), 0, 2) + " ms");
+            }
+        }
+        if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW") && global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW) {
+            array_push(detail_lines, "Beta: group " + string_format(real(gv_perf_summary_struct_get(group, "p95", 0)), 0, 2)
+                + "  send " + string_format(real(gv_perf_summary_struct_get(send, "p95", 0)), 0, 2)
+                + "  deferred " + string_format(real(gv_perf_summary_struct_get(deferred, "p95", 0)), 0, 2)
+                + "  timeline " + string_format(real(gv_perf_summary_struct_get(timeline, "p95", 0)), 0, 2));
+        }
+        return detail_lines;
     }
-
-    return [
-        "Mode: " + mode + "   Segments: " + string(segs),
-        "Title: " + short_title,
-        "Elapsed: " + string_format(elapsed, 0, 2) + " ms   Groups: " + string(groups) + "   Events: " + string(events),
-        "Ctrl ms p95 " + string_format(ctrl_p95, 0, 2) + "  p99 " + string_format(ctrl_p99, 0, 2) + "  max " + string_format(ctrl_max, 0, 2),
-        "Sched ms p95 " + string_format(sched_p95, 0, 2) + "  p99 " + string_format(sched_p99, 0, 2) + "  max " + string_format(sched_max, 0, 2),
-        "Draw p95 " + string_format(draw_p95, 0, 2) + " ms   MIDI p95 " + string_format(midi_p95, 0, 2) + " ms",
-        "Spikes: " + string(spikes)
-    ];
+    return ["Unsupported performance report schema."];
 }
 
 /// @function gv_perf_summary_popup_visible()
@@ -3183,7 +3373,12 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _repla
     var popup_state = global.timeline_state.perf_summary_popup;
     if (!variable_struct_exists(popup_state, "visible") || !popup_state.visible) return;
 
-    var lines = gv_perf_summary_build_lines(_summary);
+    var scope_mode = string(gv_perf_summary_struct_get(popup_state, "scope", "tune"));
+    var selected_summary = gv_perf_summary_select_scope(_summary, scope_mode);
+    var lines = gv_perf_summary_build_lines(selected_summary, _summary);
+    var show_scope_control = is_struct(_summary)
+        && floor(real(gv_perf_summary_struct_get(_summary, "schema_version", 0))) == 3
+        && string(gv_perf_summary_struct_get(_summary, "mode", "tune")) == "set";
     var body_scale = 0.64;
     var title_scale = 0.78;
     var body_line_h = max(14, ceil(string_height("Ag") * body_scale) + 2);
@@ -3195,7 +3390,8 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _repla
 
     var edge_pad = 8;
     var popup_w = clamp(ceil(popup_inner_w) + 30, 300, max(300, floor(_x2 - _x1) - (edge_pad * 2)));
-    var popup_h = 40 + (array_length(lines) * body_line_h) + 14;
+    var scope_control_h = show_scope_control ? 26 : 0;
+    var popup_h = 40 + scope_control_h + (array_length(lines) * body_line_h) + 14;
     var popup_x1 = max(_x1 + 6, min(_x2 - popup_w - 6, _x1 + 10));
     var popup_y1 = max(_y1 + 6, _y1 + 8);
     var popup_x2 = popup_x1 + popup_w;
@@ -3229,7 +3425,19 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _repla
     draw_set_halign(fa_left);
     draw_set_valign(fa_top);
 
+    var scope_tune_rect = [];
+    var scope_overall_rect = [];
     var line_y = popup_y1 + 28;
+    if (show_scope_control) {
+        var scope_y1 = line_y;
+        var scope_y2 = scope_y1 + 20;
+        var scope_w = min(96, max(62, floor((popup_x2 - popup_x1 - 24) * 0.32)));
+        scope_tune_rect = [popup_x1 + 8, scope_y1, popup_x1 + 8 + scope_w, scope_y2];
+        scope_overall_rect = [scope_tune_rect[2] + 5, scope_y1, scope_tune_rect[2] + 5 + scope_w, scope_y2];
+        gv_gameviz_draw_toggle_button(scope_tune_rect, "Tune", scope_mode != "overall", true);
+        gv_gameviz_draw_toggle_button(scope_overall_rect, "Set Overall", scope_mode == "overall", true);
+        line_y = scope_y2 + 6;
+    }
     for (var li = 0; li < array_length(lines); li++) {
         draw_set_color(c_ltgray);
         gv_draw_text_scaled_top_left(popup_x1 + 8, line_y, string(lines[li]), body_scale);
@@ -3239,8 +3447,11 @@ function gv_gameviz_draw_perf_summary_popup(_x1, _y1, _x2, _y2, _summary, _repla
 
     global.timeline_state.perf_summary_popup = {
         visible: true,
+        scope: scope_mode,
         popup_rect: [popup_x1, popup_y1, popup_x2, popup_y2],
-        close_rect: close_rect
+        close_rect: close_rect,
+        scope_tune_rect: scope_tune_rect,
+        scope_overall_rect: scope_overall_rect
     };
 }
 
@@ -3285,7 +3496,7 @@ function gv_draw_gameviz_controls_panel(_x1, _y1, _x2, _y2) {
             gv_gameviz_draw_toggle_button(layout.btn_slot4, "Loop Scores", _ls_visible, true);
         }
 
-        // Phase 1 perf tile: show latest compact run summary status.
+        // Compact tile always shows the latest overall playback status.
         var perf_summary = gv_perf_summary_get_latest(false);
         gv_gameviz_draw_perf_summary_button(layout.btn_slot5, perf_summary, true);
     }
@@ -3347,7 +3558,7 @@ function gv_handle_gameviz_controls_click(_mx, _my, _x1, _y1, _x2, _y2) {
             || !global.timeline_state.playback_complete) return false;
         gv_perf_summary_get_latest(true);
         global.timeline_state.score_detail_popup = { visible: false };
-        global.timeline_state.perf_summary_popup = { visible: true };
+        global.timeline_state.perf_summary_popup = { visible: true, scope: "tune" };
         return true;
     }
 
@@ -3684,49 +3895,28 @@ global.gv_timeline_step_tick_ref = gv_timeline_step_tick;
             }
             var _ac_prev = floor(real(global.playback_context[$ "active_segment"] ?? 0));
             if (_ac_cur != _ac_prev) {
+                var _switch_start_us = get_timer();
                 global.playback_context[$ "active_segment"] = _ac_cur;
-                gv_rebuild_measure_nav_for_segment(_ac_cur);
-                scr_gameinfo_update_title(_ac_cur);
                 var _new_seg = _ac_segs[_ac_cur];
-                
-                if (score_images_visible) {
-                    // Restore score sprites from preloaded segment cache.
-                    gv_restore_score_segment_cache(_ac_cur, true);
-                    var _seg_filename = string(_new_seg[$ "filename"] ?? "");
-                    if (_seg_filename != "") scr_score_override_groups_load_for_current_segment(_seg_filename);
-
-                    // Segment switches invalidate any future precomputed score render plan.
-                    global.timeline_state.score_render_plan_needs_rebuild = true;
-                    global.timeline_state.score_render_plan_pending_reason = "segment_change_step";
-                    if (variable_struct_exists(global.timeline_state, "score_render_plan")
-                        && is_struct(global.timeline_state.score_render_plan)) {
-                        global.timeline_state.score_render_plan.valid = false;
-                        global.timeline_state.score_render_plan.status = "pending";
-                        global.timeline_state.score_render_plan.reason = "segment_change_step";
-                    }
-                    if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
-                        && is_struct(global.timeline_state.score_render_plan_stats)) {
-                        global.timeline_state.score_render_plan_stats.invalidations += 1;
-                        global.timeline_state.score_render_plan_stats.last_reason = "segment_change_step";
-                    }
-                    global.timeline_state.score_lane_layout_cache_single = {};
-                } else {
-                    // Keep the timeline responsive without paying for score-lane rebuild work while the
-                    // score imagery is hidden. The next visible draw will rebuild the plan on demand.
-                    global.timeline_state.score_render_plan_needs_rebuild = true;
-                    global.timeline_state.score_render_plan_pending_reason = "segment_change_step_hidden";
-                    if (variable_struct_exists(global.timeline_state, "score_render_plan")
-                        && is_struct(global.timeline_state.score_render_plan)) {
-                        global.timeline_state.score_render_plan.valid = false;
-                        global.timeline_state.score_render_plan.status = "pending";
-                        global.timeline_state.score_render_plan.reason = "segment_change_step_hidden";
-                    }
-                    if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
-                        && is_struct(global.timeline_state.score_render_plan_stats)) {
-                        global.timeline_state.score_render_plan_stats.invalidations += 1;
-                        global.timeline_state.score_render_plan_stats.last_reason = "segment_change_step_hidden";
-                    }
+                var _cache_start_us = get_timer();
+                var _cache_hit = gv_apply_cached_segment_runtime(_ac_cur);
+                var _cache_ms = (get_timer() - _cache_start_us) * 0.001;
+                if (!_cache_hit) {
+                    show_debug_message("[SET_BOUNDARY] Missing runtime cache for segment " + string(_ac_cur));
                 }
+
+                var _ui_start_us = get_timer();
+                tune_scheduler_enqueue_deferred({ kind: "set_segment_ui", segment_index: _ac_cur });
+                var _ui_ms = (get_timer() - _ui_start_us) * 0.001;
+                var _switch_total_ms = (get_timer() - _switch_start_us) * 0.001;
+                perf_report_record_segment_switch(
+                    _ac_cur,
+                    real(_new_seg[$ "start_ms"] ?? _ph),
+                    _cache_ms,
+                    _ui_ms,
+                    _switch_total_ms,
+                    _cache_hit
+                );
                 
                 // ───────────────────────────────────────────────────────────────
                 // PHASE 3: Recalculate measure_ms from new segment's BPM/meter
@@ -5555,28 +5745,8 @@ function gv_sync_now_line_display() {
                     var prev = real(global.playback_context[$ "active_segment"] ?? 0);
                     if (prev != i) {
                         global.playback_context[$ "active_segment"] = i;
-                        gv_rebuild_measure_nav_for_segment(i);
+                        gv_apply_cached_segment_runtime(i);
                         scr_gameinfo_update_title(i);
-                        
-                        // Restore score sprites from preloaded segment cache.
-                        gv_restore_score_segment_cache(i, true);
-                        var _seg_filename = string(seg[$ "filename"] ?? "");
-                        if (_seg_filename != "") scr_score_override_groups_load_for_current_segment(_seg_filename);
-
-                        global.timeline_state.score_render_plan_needs_rebuild = true;
-                        global.timeline_state.score_render_plan_pending_reason = "segment_change_sync";
-                        if (variable_struct_exists(global.timeline_state, "score_render_plan")
-                            && is_struct(global.timeline_state.score_render_plan)) {
-                            global.timeline_state.score_render_plan.valid = false;
-                            global.timeline_state.score_render_plan.status = "pending";
-                            global.timeline_state.score_render_plan.reason = "segment_change_sync";
-                        }
-                        if (variable_struct_exists(global.timeline_state, "score_render_plan_stats")
-                            && is_struct(global.timeline_state.score_render_plan_stats)) {
-                            global.timeline_state.score_render_plan_stats.invalidations += 1;
-                            global.timeline_state.score_render_plan_stats.last_reason = "segment_change_sync";
-                        }
-                        global.timeline_state.score_lane_layout_cache_single = {};
                     }
                     break;
                 }
@@ -7416,13 +7586,7 @@ function gv_measure_nav_handle_click(_mx, _my) {
             _pc_new = clamp(_pc_new, 0, _pc_n - 1);
             if (_pc_new == _pc_cur) return false;
             global.playback_context[$ "active_segment"] = _pc_new;
-            gv_rebuild_measure_nav_for_segment(_pc_new);
-            
-            // Restore score sprites from preloaded segment cache.
-            gv_restore_score_segment_cache(_pc_new, true);
-            var _new_seg = _pc_segs[_pc_new];
-            var _seg_filename = string(_new_seg[$ "filename"] ?? "");
-            if (_seg_filename != "") scr_score_override_groups_load_for_current_segment(_seg_filename);
+            gv_apply_cached_segment_runtime(_pc_new);
             return true;
     }
 
@@ -8846,6 +9010,18 @@ function gv_handle_notebeam_scoring_panel_click(_mx, _my, _x1, _y1, _x2, _y2) {
         var perf_popup_state = global.timeline_state.perf_summary_popup;
         var perf_popup_rect = gv_perf_summary_struct_get(perf_popup_state, "popup_rect", []);
         var perf_close_rect = gv_perf_summary_struct_get(perf_popup_state, "close_rect", []);
+        var perf_tune_rect = gv_perf_summary_struct_get(perf_popup_state, "scope_tune_rect", []);
+        var perf_overall_rect = gv_perf_summary_struct_get(perf_popup_state, "scope_overall_rect", []);
+        if (gv_gameviz_point_in_rect(_mx, _my, perf_tune_rect)) {
+            variable_struct_set(perf_popup_state, "scope", "tune");
+            global.timeline_state.perf_summary_popup = perf_popup_state;
+            return true;
+        }
+        if (gv_gameviz_point_in_rect(_mx, _my, perf_overall_rect)) {
+            variable_struct_set(perf_popup_state, "scope", "overall");
+            global.timeline_state.perf_summary_popup = perf_popup_state;
+            return true;
+        }
         if (gv_gameviz_point_in_rect(_mx, _my, perf_close_rect)) {
             global.timeline_state.perf_summary_popup = { visible: false };
             return true;

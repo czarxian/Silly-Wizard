@@ -26,7 +26,7 @@ if (!variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED")) {
     global.EVENT_RUNTIME_CAPTURE_ENABLED = true;
 }
 if (!variable_global_exists("EVENT_HISTORY_AUTO_EXPORT")) {
-    global.EVENT_HISTORY_AUTO_EXPORT = true;
+    global.EVENT_HISTORY_AUTO_EXPORT = false;
 }
 if (!variable_global_exists("EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS")) {
     global.EVENT_HISTORY_EXPORT_INCLUDE_GAME_EVENTS = true;

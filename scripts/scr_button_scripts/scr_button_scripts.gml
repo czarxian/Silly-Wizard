@@ -1808,7 +1808,7 @@
 	/// @function scr_goto_playroom()
 	/// @description Preprocess tune/set, merge metronome events, build global.playback_events, then go to Room_play.
 	/// @reads global.tune, global.current_set, global.current_set_item_index, global.count_in_measures, global.pending_auto_start_play
-	/// @writes global.playback_events, global.enable_current_note_layer, global.pending_layer_mode, global.pending_layer_room, global.pending_auto_start_play
+	/// @writes global.playback_events, global.score_segments_sprites, global.SET_PREP_LAST_TOTAL_MS, global.SET_PREP_LAST_SCORE_MS, global.SET_PREP_LAST_NAV_MS, global.enable_current_note_layer, global.pending_layer_mode, global.pending_layer_room, global.pending_auto_start_play
 	/// @objects obj_tune (loaded tune instance)
 	/// @callers scr_handle_button_click (button 1)
 	function scr_goto_playroom(){
@@ -1825,11 +1825,14 @@
 				global.playback_events = [];
 			} else {
 				scr_playback_context_build_for_set();
+				var _set_prepare_start_us = get_timer();
 				// Pre-load score sprites for ALL segments into global.score_segments_sprites.
 				// This lets future segments display in the score lane before the now line,
 				// and avoids disk re-reads on segment changes.
 				var _pc_segs_init = global.playback_context[$ "segments"];
 				var _pc_seg_n = is_array(_pc_segs_init) ? array_length(_pc_segs_init) : 0;
+				var _pc_active_before_preload = floor(real(global.playback_context[$ "active_segment"] ?? 0));
+				scr_score_segment_runtime_cache_clear();
 				global.score_segments_sprites = array_create(_pc_seg_n, undefined);
 				for (var _si = 0; _si < _pc_seg_n; _si++) {
 					var _pc_seg_i = _pc_segs_init[_si];
@@ -1839,6 +1842,8 @@
 						global.score_lane_sprites = [];
 						global.score_playback_map = [];
 						if (variable_global_exists("score_lane_meta")) global.score_lane_meta = [];
+						global.score_override_groups = {};
+						global.playback_context[$ "active_segment"] = _si;
 						scr_score_sprites_load(_pc_fn_i, undefined);
 						global.score_segments_sprites[_si] = {
 							sprites: global.score_lane_sprites,
@@ -1846,10 +1851,12 @@
 							meta:    variable_global_exists("score_lane_meta") ? global.score_lane_meta : [],
 							durations: variable_global_exists("score_snippet_durations") ? global.score_snippet_durations : [],
 							units_per_measure: variable_global_exists("score_units_per_measure") ? real(global.score_units_per_measure) : 0,
-							has_pickup: variable_global_exists("score_has_pickup") ? global.score_has_pickup : false
+							has_pickup: variable_global_exists("score_has_pickup") ? global.score_has_pickup : false,
+							override_groups: variable_global_exists("score_override_groups") ? global.score_override_groups : {}
 						};
 					}
 				}
+				global.playback_context[$ "active_segment"] = clamp(_pc_active_before_preload, 0, max(0, _pc_seg_n - 1));
 				// Restore segment 0 as the active sprite set and reload its override groups.
 				if (_pc_seg_n > 0 && is_struct(global.score_segments_sprites[0])) {
 					var _s0 = global.score_segments_sprites[0];
@@ -1859,13 +1866,16 @@
 					if (variable_global_exists("score_snippet_durations")) global.score_snippet_durations = _s0.durations;
 					if (variable_global_exists("score_units_per_measure")) global.score_units_per_measure = real(_s0.units_per_measure ?? 0);
 					if (variable_global_exists("score_has_pickup")) global.score_has_pickup = bool(_s0[$ "has_pickup"] ?? false);
-					var _fn0 = string(_pc_segs_init[0][$ "filename"] ?? "");
-					if (_fn0 != "") scr_score_override_groups_load_for_current_segment(_fn0);
+					global.score_override_groups = _s0[$ "override_groups"] ?? {};
 				}
 				// Build the flat prebuilt measure-nav table now that all segment caches are populated.
 				// gv_get_current_planned_measure() will use this in set mode, avoiding stale measure
 				// numbers during segment transitions.
+				var _set_nav_prepare_start_us = get_timer();
 				gv_build_set_measure_nav_all();
+				global.SET_PREP_LAST_NAV_MS = (get_timer() - _set_nav_prepare_start_us) * 0.001;
+				global.SET_PREP_LAST_TOTAL_MS = (get_timer() - _set_prepare_start_us) * 0.001;
+				global.SET_PREP_LAST_SCORE_MS = max(0, global.SET_PREP_LAST_TOTAL_MS - global.SET_PREP_LAST_NAV_MS);
 			}
 		} else {
 		// ── SINGLE TUNE PATH ────────────────────────────────────────────────
@@ -3849,7 +3859,7 @@
 							&& is_struct(global.playback_context)
 							&& string(global.playback_context[$ "mode"] ?? "") == "set";
 						if (_pc_is_set) {
-							gv_rebuild_measure_nav_for_segment(
+							gv_apply_cached_segment_runtime(
 								floor(real(global.playback_context[$ "active_segment"] ?? 0))
 							);
 						}

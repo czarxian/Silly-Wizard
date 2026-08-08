@@ -1796,6 +1796,757 @@ function timing_calibration_summarize_ring_buffer(_buf, _count) {
     };
 }
 
+/// @function perf_report_metric_buffer_create(_capacity)
+/// @description Create a fixed-capacity metric ring buffer for one report scope.
+/// @param {real} _capacity Maximum retained samples.
+/// @returns {struct} Metric buffer state.
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers perf_report_metrics_create
+function perf_report_metric_buffer_create(_capacity) {
+    var capacity = max(8, floor(real(_capacity)));
+    return { values: array_create(capacity, 0), head: 0, count: 0 };
+}
+
+/// @function perf_report_metrics_create()
+/// @description Create all fixed metric buffers used by one report scope.
+/// @returns {struct} Metric-keyed buffer set.
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers perf_report_scope_create
+function perf_report_metrics_create() {
+    return {
+        scheduler_late_ms: perf_report_metric_buffer_create(128),
+        controller_step_interval_ms: perf_report_metric_buffer_create(256),
+        controller_step_ms: perf_report_metric_buffer_create(256),
+        midi_process_ms: perf_report_metric_buffer_create(256),
+        game_viz_draw_ms: perf_report_metric_buffer_create(256),
+        scheduler_group_proc_ms: perf_report_metric_buffer_create(128),
+        midi_send_ms: perf_report_metric_buffer_create(128),
+        deferred_work_ms: perf_report_metric_buffer_create(256),
+        render_total_ms: perf_report_metric_buffer_create(256),
+        timeline_draw_ms: perf_report_metric_buffer_create(128),
+        tunestructure_draw_ms: perf_report_metric_buffer_create(128),
+        gameviz_controls_draw_ms: perf_report_metric_buffer_create(128),
+        gameviz_structure_draw_ms: perf_report_metric_buffer_create(128),
+        notebeam_anchor_draw_ms: perf_report_metric_buffer_create(128)
+    };
+}
+
+/// @function perf_report_scheduler_accuracy_create()
+/// @description Create fixed whole-run scheduler accuracy counters and histograms for one report scope.
+/// @returns {struct} Scheduler accuracy accumulator.
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers perf_report_scope_create
+function perf_report_scheduler_accuracy_create() {
+    return {
+        n: 0,
+        startup_n: 0,
+        signed_sum_ms: 0,
+        signed_min_ms: 1000000000,
+        signed_max_ms: -1000000000,
+        abs_sum_ms: 0,
+        abs_max_ms: 0,
+        startup_abs_max_ms: 0,
+        early_count: 0,
+        within_0_5_count: 0,
+        within_1_count: 0,
+        within_2_count: 0,
+        within_5_count: 0,
+        within_10_count: 0,
+        within_20_count: 0,
+        signed_hist_min_ms: -20,
+        signed_hist_bin_width_ms: 0.5,
+        signed_hist_counts: array_create(82, 0),
+        abs_hist_bin_width_ms: 0.5,
+        abs_hist_counts: array_create(42, 0)
+    };
+}
+
+/// @function perf_report_scope_create(_index, _title, _filename, _start_ms, _content_end_ms, _end_ms)
+/// @description Create one preallocated overall, tune-segment, or transition reporting scope.
+/// @returns {struct} Report scope state.
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers perf_report_begin_run
+function perf_report_scope_create(_index, _title, _filename, _start_ms, _content_end_ms, _end_ms) {
+    return {
+        segment_index: floor(real(_index)),
+        title: string(_title),
+        filename: string(_filename),
+        start_ms: real(_start_ms),
+        content_end_ms: real(_content_end_ms),
+        end_ms: real(_end_ms),
+        spike_count: 0,
+        startup_spike_count: 0,
+        boundary_spike_count: 0,
+        scheduler_accuracy: perf_report_scheduler_accuracy_create(),
+        worst_incidents: array_create(12, undefined),
+        worst_incident_count: 0,
+        metrics: perf_report_metrics_create()
+    };
+}
+
+/// @function perf_report_begin_run(_play_id)
+/// @description Initialize one authoritative report state for the accepted playback plan.
+/// @param {real} _play_id Playback run identifier.
+/// @returns {struct} Initialized report state.
+/// @reads global.playback_context, playback/runtime configuration, MIDI devices, benchmark power label
+/// @writes global.perf_report_state, global.PERF_REPORT_LATEST
+/// @objects none
+/// @callers tune_start
+function perf_report_begin_run(_play_id) {
+    var mode = "tune";
+    var title = variable_global_exists("current_tune_name") ? string(global.current_tune_name) : "unknown";
+    var source_segments = [];
+    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
+        mode = variable_struct_exists(global.playback_context, "mode")
+            ? string(variable_struct_get(global.playback_context, "mode"))
+            : "tune";
+        title = variable_struct_exists(global.playback_context, "display_title")
+            ? string(variable_struct_get(global.playback_context, "display_title"))
+            : title;
+        var context_segments = variable_struct_exists(global.playback_context, "segments")
+            ? variable_struct_get(global.playback_context, "segments")
+            : [];
+        if (is_array(context_segments)) source_segments = context_segments;
+    }
+
+    var segments = array_create(array_length(source_segments), undefined);
+    for (var i = 0; i < array_length(source_segments); i++) {
+        var source = source_segments[i];
+        if (!is_struct(source)) continue;
+        var start_ms = real(source[$ "start_ms"] ?? 0);
+        var end_ms = real(source[$ "end_ms"] ?? start_ms);
+        var content_end_ms = variable_struct_exists(source, "content_end_ms")
+            ? real(source[$ "content_end_ms"])
+            : end_ms;
+        segments[i] = perf_report_scope_create(
+            i,
+            string(source[$ "title"] ?? ("Tune " + string(i + 1))),
+            string(source[$ "filename"] ?? ""),
+            start_ms,
+            content_end_ms,
+            end_ms
+        );
+    }
+
+    var score_visible = true;
+    if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)
+        && variable_struct_exists(global.timeline_cfg, "timeline_score_visibility_mode")) {
+        score_visible = floor(real(variable_struct_get(global.timeline_cfg, "timeline_score_visibility_mode"))) == 0;
+    }
+
+    global.perf_report_state = {
+        schema_version: 3,
+        active: true,
+        play_id: floor(real(_play_id)),
+        mode: mode,
+        title: title,
+        overall: perf_report_scope_create(-1, title, "", 0, 0, 0),
+        segments: segments,
+        transition: perf_report_scope_create(-2, "Transitions", "", 0, 0, 0),
+        scheduler_startup_backlog_active: true,
+        segment_switches: [],
+        render_frame_accum_ms: 0,
+        context: {
+            scheduler_mode: string(variable_global_exists("PLAYBACK_SCHEDULER_MODE") ? global.PLAYBACK_SCHEDULER_MODE : "timesource"),
+            game_step_fps: real(variable_global_exists("GAME_STEP_FPS") ? global.GAME_STEP_FPS : game_get_speed(gamespeed_fps)),
+            audio_backend: playback_audio_backend_get(),
+            score_visible: score_visible,
+            midi_input_device: string(variable_global_exists("midi_input_device") ? global.midi_input_device : "unavailable"),
+            midi_output_device: string(variable_global_exists("midi_output_device") ? global.midi_output_device : "unavailable"),
+            visual_cache_enabled: bool(variable_global_exists("GV_VISUAL_CACHE_ENABLED") ? global.GV_VISUAL_CACHE_ENABLED : false),
+            anchor_render_only: bool(variable_global_exists("GV_ANCHOR_RENDER_ONLY") ? global.GV_ANCHOR_RENDER_ONLY : false),
+            set_prepare_total_ms: real(variable_global_exists("SET_PREP_LAST_TOTAL_MS") ? global.SET_PREP_LAST_TOTAL_MS : 0),
+            set_prepare_score_ms: real(variable_global_exists("SET_PREP_LAST_SCORE_MS") ? global.SET_PREP_LAST_SCORE_MS : 0),
+            set_prepare_nav_ms: real(variable_global_exists("SET_PREP_LAST_NAV_MS") ? global.SET_PREP_LAST_NAV_MS : 0),
+            build_identifier: "unavailable",
+            power_plan: string(variable_global_exists("PERF_BENCHMARK_POWER_MODE_LABEL")
+                ? global.PERF_BENCHMARK_POWER_MODE_LABEL
+                : "unavailable")
+        },
+        completed_summary: undefined
+    };
+    global.PERF_REPORT_LATEST = undefined;
+    return global.perf_report_state;
+}
+
+/// @function perf_report_scheduler_incident_category(_scheduled_ms)
+/// @description Categorize a scheduled group as startup, segment boundary, tune content, or transition.
+/// @param {real} _scheduled_ms Playback-relative scheduled time.
+/// @returns {string} Incident category.
+/// @reads global.perf_report_state, global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS
+/// @writes none
+/// @objects none
+/// @callers perf_report_record_scheduler_accuracy, perf_report_record_spike
+function perf_report_scheduler_incident_category(_scheduled_ms) {
+    var scheduled_ms = real(_scheduled_ms);
+    var startup_ms = variable_global_exists("PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS")
+        ? max(0, real(global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS))
+        : 200;
+    if (scheduled_ms <= startup_ms) return "startup";
+    var segment_index = perf_report_resolve_segment_index(scheduled_ms);
+    if (segment_index < 0) return "transition";
+    var scope = global.perf_report_state.segments[segment_index];
+    if (is_struct(scope) && abs(scheduled_ms - real(scope.start_ms)) <= 100) return "segment_start";
+    return "tune_content";
+}
+
+/// @function perf_report_scope_store_worst_incident(_scope, _incident)
+/// @description Retain a bounded top-12 list of worst scheduler incidents for one scope.
+/// @param {struct} _scope Target report scope.
+/// @param {struct} _incident Immutable incident record.
+/// @returns none
+/// @reads none
+/// @writes _scope.worst_incidents, _scope.worst_incident_count
+/// @objects none
+/// @callers perf_report_scope_record_scheduler_accuracy
+function perf_report_scope_store_worst_incident(_scope, _incident) {
+    if (!is_struct(_scope) || !is_struct(_incident) || !is_array(_scope.worst_incidents)) return;
+    var incidents = _scope.worst_incidents;
+    var capacity = array_length(incidents);
+    if (capacity <= 0) return;
+    var count = clamp(floor(real(_scope.worst_incident_count)), 0, capacity);
+    if (count < capacity) {
+        incidents[count] = _incident;
+        _scope.worst_incident_count = count + 1;
+        _scope.worst_incidents = incidents;
+        return;
+    }
+    var smallest_index = 0;
+    var smallest_abs_ms = real(variable_struct_get(incidents[0], "abs_error_ms"));
+    for (var i = 1; i < capacity; i++) {
+        var incident_abs_ms = real(variable_struct_get(incidents[i], "abs_error_ms"));
+        if (incident_abs_ms < smallest_abs_ms) {
+            smallest_abs_ms = incident_abs_ms;
+            smallest_index = i;
+        }
+    }
+    if (real(variable_struct_get(_incident, "abs_error_ms")) > smallest_abs_ms) incidents[smallest_index] = _incident;
+    _scope.worst_incidents = incidents;
+}
+
+/// @function perf_report_scope_record_scheduler_accuracy(_scope, _signed_error_ms, _category, _incident)
+/// @description Update exact whole-run scheduler counters and fixed histograms for one scope.
+/// @param {struct} _scope Target report scope.
+/// @param {real} _signed_error_ms Actual minus scheduled time.
+/// @param {string} _category Startup/boundary/content category.
+/// @param {struct|undefined} _incident Optional bounded incident record.
+/// @returns none
+/// @reads none
+/// @writes _scope.scheduler_accuracy, _scope.worst_incidents
+/// @objects none
+/// @callers perf_report_record_scheduler_accuracy
+function perf_report_scope_record_scheduler_accuracy(_scope, _signed_error_ms, _category, _incident = undefined) {
+    if (!is_struct(_scope) || !is_struct(_scope.scheduler_accuracy)) return;
+    var accuracy = _scope.scheduler_accuracy;
+    var signed_ms = real(_signed_error_ms);
+    var abs_ms = abs(signed_ms);
+    if (string(_category) == "startup") {
+        accuracy.startup_n += 1;
+        accuracy.startup_abs_max_ms = max(real(accuracy.startup_abs_max_ms), abs_ms);
+        _scope.scheduler_accuracy = accuracy;
+        if (is_struct(_incident)) perf_report_scope_store_worst_incident(_scope, _incident);
+        return;
+    }
+
+    accuracy.n += 1;
+    accuracy.signed_sum_ms += signed_ms;
+    accuracy.signed_min_ms = min(real(accuracy.signed_min_ms), signed_ms);
+    accuracy.signed_max_ms = max(real(accuracy.signed_max_ms), signed_ms);
+    accuracy.abs_sum_ms += abs_ms;
+    accuracy.abs_max_ms = max(real(accuracy.abs_max_ms), abs_ms);
+    if (signed_ms < 0) accuracy.early_count += 1;
+    if (abs_ms <= 0.5) accuracy.within_0_5_count += 1;
+    if (abs_ms <= 1) accuracy.within_1_count += 1;
+    if (abs_ms <= 2) accuracy.within_2_count += 1;
+    if (abs_ms <= 5) accuracy.within_5_count += 1;
+    if (abs_ms <= 10) accuracy.within_10_count += 1;
+    if (abs_ms <= 20) accuracy.within_20_count += 1;
+
+    var signed_counts = accuracy.signed_hist_counts;
+    var signed_index = floor((signed_ms - real(accuracy.signed_hist_min_ms)) / real(accuracy.signed_hist_bin_width_ms)) + 1;
+    signed_index = clamp(signed_index, 0, array_length(signed_counts) - 1);
+    signed_counts[signed_index] += 1;
+    accuracy.signed_hist_counts = signed_counts;
+
+    var abs_counts = accuracy.abs_hist_counts;
+    var abs_index = floor(abs_ms / real(accuracy.abs_hist_bin_width_ms));
+    abs_index = clamp(abs_index, 0, array_length(abs_counts) - 1);
+    abs_counts[abs_index] += 1;
+    accuracy.abs_hist_counts = abs_counts;
+    _scope.scheduler_accuracy = accuracy;
+    if (is_struct(_incident)) perf_report_scope_store_worst_incident(_scope, _incident);
+}
+
+/// @function perf_report_record_scheduler_accuracy(_signed_error_ms, _actual_ms, _scheduled_ms)
+/// @description Record one scheduler dispatch into whole-run overall and attributed scope accuracy data.
+/// @param {real} _signed_error_ms Actual minus scheduled time.
+/// @param {real} _actual_ms Actual playback-relative dispatch time.
+/// @param {real} _scheduled_ms Scheduled playback-relative dispatch time.
+/// @returns none
+/// @reads global.perf_report_state, scheduler/timeline context
+/// @writes report scheduler accuracy and bounded incidents
+/// @objects none
+/// @callers script_tune_callback_batched
+function perf_report_record_scheduler_accuracy(_signed_error_ms, _actual_ms, _scheduled_ms) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return;
+    var signed_ms = real(_signed_error_ms);
+    var abs_ms = abs(signed_ms);
+    var scheduled_ms = real(_scheduled_ms);
+    var category = perf_report_scheduler_incident_category(scheduled_ms);
+    if (bool(global.perf_report_state.scheduler_startup_backlog_active)) {
+        if (category == "startup" || abs_ms >= 20) {
+            category = "startup";
+        } else {
+            global.perf_report_state.scheduler_startup_backlog_active = false;
+        }
+    }
+    var segment_index = perf_report_resolve_segment_index(scheduled_ms);
+    var incident = undefined;
+    if (abs_ms >= 5 || category == "startup") {
+        var measure = -1;
+        if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
+            && variable_struct_exists(global.timeline_state, "current_measure")) {
+            measure = floor(real(global.timeline_state.current_measure));
+        }
+        incident = {
+            signed_error_ms: signed_ms,
+            abs_error_ms: abs_ms,
+            actual_ms: real(_actual_ms),
+            scheduled_ms: scheduled_ms,
+            category: category,
+            segment_index: segment_index,
+            group_index: variable_global_exists("tune_group_index") ? floor(real(global.tune_group_index)) : -1,
+            measure: measure
+        };
+    }
+    perf_report_scope_record_scheduler_accuracy(global.perf_report_state.overall, signed_ms, category, incident);
+    if (segment_index >= 0 && segment_index < array_length(global.perf_report_state.segments)) {
+        perf_report_scope_record_scheduler_accuracy(global.perf_report_state.segments[segment_index], signed_ms, category, incident);
+    } else if (string(global.perf_report_state.mode) == "set") {
+        perf_report_scope_record_scheduler_accuracy(global.perf_report_state.transition, signed_ms, category, incident);
+    }
+}
+
+/// @function perf_report_histogram_percentile(_counts, _bin_width_ms, _percentile)
+/// @description Estimate an absolute-error percentile from a fixed nonnegative histogram.
+/// @returns {real} Upper edge of the percentile bin in milliseconds.
+/// @reads none
+/// @writes none
+/// @objects none
+/// @callers perf_report_scheduler_accuracy_summarize
+function perf_report_histogram_percentile(_counts, _bin_width_ms, _percentile) {
+    if (!is_array(_counts) || array_length(_counts) <= 0) return 0;
+    var total = 0;
+    for (var i = 0; i < array_length(_counts); i++) total += max(0, floor(real(_counts[i])));
+    if (total <= 0) return 0;
+    var target = max(1, ceil(total * clamp(real(_percentile), 0, 1)));
+    var running = 0;
+    for (var j = 0; j < array_length(_counts); j++) {
+        running += max(0, floor(real(_counts[j])));
+        if (running >= target) return (j + 1) * real(_bin_width_ms);
+    }
+    return array_length(_counts) * real(_bin_width_ms);
+}
+
+/// @function perf_report_scheduler_accuracy_summarize(_scope)
+/// @description Build persisted whole-run scheduler accuracy bands, histograms, and sorted worst incidents.
+/// @returns {struct} Completed scheduler accuracy summary.
+/// @reads _scope.scheduler_accuracy, _scope.worst_incidents
+/// @writes none
+/// @objects none
+/// @callers perf_report_scope_summarize
+function perf_report_scheduler_accuracy_summarize(_scope) {
+    var accuracy = _scope.scheduler_accuracy;
+    var n = max(0, floor(real(accuracy.n)));
+    var denominator = max(1, n);
+    var incident_count = clamp(floor(real(_scope.worst_incident_count)), 0, array_length(_scope.worst_incidents));
+    var incidents = array_create(incident_count, undefined);
+    for (var i = 0; i < incident_count; i++) incidents[i] = _scope.worst_incidents[i];
+    array_sort(incidents, function(a, b) { return real(b.abs_error_ms) - real(a.abs_error_ms); });
+    return {
+        n: n,
+        startup_n: floor(real(accuracy.startup_n)),
+        signed_mean_ms: n > 0 ? real(accuracy.signed_sum_ms) / denominator : 0,
+        signed_min_ms: n > 0 ? real(accuracy.signed_min_ms) : 0,
+        signed_max_ms: n > 0 ? real(accuracy.signed_max_ms) : 0,
+        abs_mean_ms: n > 0 ? real(accuracy.abs_sum_ms) / denominator : 0,
+        abs_p50_ms: perf_report_histogram_percentile(accuracy.abs_hist_counts, accuracy.abs_hist_bin_width_ms, 0.50),
+        abs_p95_ms: perf_report_histogram_percentile(accuracy.abs_hist_counts, accuracy.abs_hist_bin_width_ms, 0.95),
+        abs_p99_ms: perf_report_histogram_percentile(accuracy.abs_hist_counts, accuracy.abs_hist_bin_width_ms, 0.99),
+        abs_max_ms: real(accuracy.abs_max_ms),
+        startup_abs_max_ms: real(accuracy.startup_abs_max_ms),
+        early_count: floor(real(accuracy.early_count)),
+        within_0_5_count: floor(real(accuracy.within_0_5_count)),
+        within_0_5_pct: n > 0 ? real(accuracy.within_0_5_count) * 100 / denominator : 0,
+        within_1_count: floor(real(accuracy.within_1_count)),
+        within_1_pct: n > 0 ? real(accuracy.within_1_count) * 100 / denominator : 0,
+        within_2_count: floor(real(accuracy.within_2_count)),
+        within_2_pct: n > 0 ? real(accuracy.within_2_count) * 100 / denominator : 0,
+        within_5_count: floor(real(accuracy.within_5_count)),
+        within_5_pct: n > 0 ? real(accuracy.within_5_count) * 100 / denominator : 0,
+        within_10_count: floor(real(accuracy.within_10_count)),
+        within_10_pct: n > 0 ? real(accuracy.within_10_count) * 100 / denominator : 0,
+        within_20_count: floor(real(accuracy.within_20_count)),
+        within_20_pct: n > 0 ? real(accuracy.within_20_count) * 100 / denominator : 0,
+        signed_hist_min_ms: real(accuracy.signed_hist_min_ms),
+        signed_hist_bin_width_ms: real(accuracy.signed_hist_bin_width_ms),
+        signed_hist_counts: accuracy.signed_hist_counts,
+        abs_hist_bin_width_ms: real(accuracy.abs_hist_bin_width_ms),
+        abs_hist_counts: accuracy.abs_hist_counts,
+        worst_incidents: incidents
+    };
+}
+
+/// @function perf_report_scope_record(_scope, _metric_key, _value)
+/// @description Append one numeric sample to a preallocated scope metric buffer.
+/// @returns {bool} True when recorded.
+/// @reads none
+/// @writes _scope metric state
+/// @objects none
+/// @callers perf_report_record_sample
+function perf_report_scope_record(_scope, _metric_key, _value) {
+    if (!is_struct(_scope) || !variable_struct_exists(_scope, "metrics") || !is_struct(_scope.metrics)) return false;
+    var key = string(_metric_key);
+    if (!variable_struct_exists(_scope.metrics, key)) return false;
+    var metric = _scope.metrics[$ key];
+    if (!is_struct(metric) || !is_array(metric.values) || array_length(metric.values) <= 0) return false;
+    var values = metric.values;
+    var capacity = array_length(values);
+    var head = ((floor(real(metric.head)) mod capacity) + capacity) mod capacity;
+    values[head] = max(0, real(_value));
+    metric.values = values;
+    metric.head = (head + 1) mod capacity;
+    metric.count = min(capacity, floor(real(metric.count)) + 1);
+    _scope.metrics[$ key] = metric;
+    return true;
+}
+
+/// @function perf_report_resolve_segment_index(_time_ms)
+/// @description Resolve a playback time to tune-content segment index; returns -1 for transition/unowned time.
+/// @returns {real} Segment index or -1.
+/// @reads global.perf_report_state
+/// @writes none
+/// @objects none
+/// @callers perf_report_record_sample, perf_report_record_spike
+function perf_report_resolve_segment_index(_time_ms) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)) return -1;
+    var segments = global.perf_report_state.segments;
+    if (!is_array(segments)) return -1;
+    var time_ms = real(_time_ms);
+    for (var i = 0; i < array_length(segments); i++) {
+        var scope = segments[i];
+        if (!is_struct(scope)) continue;
+        if (time_ms >= real(scope.start_ms) && time_ms < real(scope.content_end_ms)) return i;
+    }
+    return -1;
+}
+
+/// @function perf_report_record_sample(_metric_key, _value, _time_ms)
+/// @description Record one sample into overall and the matching tune or transition scope without allocation or logging.
+/// @param {string} _metric_key Metric field name.
+/// @param {real} _value Sample value in milliseconds.
+/// @param {real|undefined} _time_ms Playback-relative attribution time; defaults to current elapsed time.
+/// @returns {bool} True when overall sample was recorded.
+/// @reads global.perf_report_state, global.tune_start_real
+/// @writes global.perf_report_state metric buffers
+/// @objects none
+/// @callers RT budget metric recorders, obj_game_controller Step
+function perf_report_record_sample(_metric_key, _value, _time_ms = undefined) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return false;
+    var time_ms = is_undefined(_time_ms)
+        ? timing_get_engine_now_ms() - real(global.tune_start_real ?? 0)
+        : real(_time_ms);
+    var recorded = perf_report_scope_record(global.perf_report_state.overall, _metric_key, _value);
+    var segment_index = perf_report_resolve_segment_index(time_ms);
+    if (segment_index >= 0 && segment_index < array_length(global.perf_report_state.segments)) {
+        perf_report_scope_record(global.perf_report_state.segments[segment_index], _metric_key, _value);
+    } else if (string(global.perf_report_state.mode) == "set") {
+        perf_report_scope_record(global.perf_report_state.transition, _metric_key, _value);
+    }
+    return recorded;
+}
+
+/// @function perf_report_record_segment_switch(_segment_index, _scheduled_ms, _cache_ms, _ui_ms, _total_ms, _cache_hit)
+/// @description Persist one bounded set-boundary timing record; normal Step/cadence accounting remains unchanged.
+/// @param {real} _segment_index Activated segment index.
+/// @param {real} _scheduled_ms Segment start time.
+/// @param {real} _cache_ms Cached runtime-state swap duration.
+/// @param {real} _ui_ms UI enqueue duration.
+/// @param {real} _total_ms Total synchronous boundary duration.
+/// @param {bool} _cache_hit Whether the prebuilt runtime cache was available.
+/// @returns none
+/// @reads global.perf_report_state
+/// @writes global.perf_report_state.segment_switches
+/// @callers gv_timeline_step_tick
+function perf_report_record_segment_switch(_segment_index, _scheduled_ms, _cache_ms, _ui_ms, _total_ms, _cache_hit) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return;
+    if (!is_array(global.perf_report_state.segment_switches)) global.perf_report_state.segment_switches = [];
+    if (array_length(global.perf_report_state.segment_switches) >= 64) return;
+    array_push(global.perf_report_state.segment_switches, {
+        segment_index: floor(real(_segment_index)),
+        scheduled_ms: real(_scheduled_ms),
+        cache_ms: max(0, real(_cache_ms)),
+        ui_ms: max(0, real(_ui_ms)),
+        total_ms: max(0, real(_total_ms)),
+        cache_hit: bool(_cache_hit)
+    });
+}
+
+/// @function perf_report_render_component_add(_metric_key, _value)
+/// @description Add one instrumented visual owner cost to the current render-cycle total and its component buffer.
+/// @param {string} _metric_key Component metric field name.
+/// @param {real} _value Component duration in milliseconds.
+/// @returns none
+/// @reads global.perf_report_state
+/// @writes global.perf_report_state.render_frame_accum_ms and metric buffers
+/// @objects obj_field_base
+/// @callers tune_rt_budget_diag_record_anchor_draw_ms
+function perf_report_render_component_add(_metric_key, _value) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return;
+    var value_ms = max(0, real(_value));
+    global.perf_report_state.render_frame_accum_ms += value_ms;
+    perf_report_record_sample(_metric_key, value_ms);
+}
+
+/// @function perf_report_render_frame_complete(_draw_gui_ms)
+/// @description Finalize the current instrumented render total at the Draw GUI boundary and reset its accumulator.
+/// @param {real} _draw_gui_ms Duration of the Game Viz Draw GUI pass in milliseconds.
+/// @returns none
+/// @reads global.perf_report_state
+/// @writes global.perf_report_state.render_frame_accum_ms and render_total_ms buffers
+/// @objects obj_game_viz
+/// @callers obj_game_viz Draw GUI event
+function perf_report_render_frame_complete(_draw_gui_ms) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return;
+    var gui_ms = max(0, real(_draw_gui_ms));
+    var total_ms = max(0, real(global.perf_report_state.render_frame_accum_ms)) + gui_ms;
+    global.perf_report_state.render_frame_accum_ms = 0;
+    perf_report_record_sample("notebeam_anchor_draw_ms", gui_ms);
+    perf_report_record_sample("render_total_ms", total_ms);
+}
+
+/// @function perf_report_record_spike(_time_ms)
+/// @description Increment overall and attributed segment/transition severe-incident counters.
+/// @param {real} _time_ms Playback-relative incident time.
+/// @returns none
+/// @reads global.perf_report_state
+/// @writes global.perf_report_state spike counts
+/// @objects none
+/// @callers tune_rt_budget_diag_trace_scheduler_spike
+function perf_report_record_spike(_time_ms) {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)
+        || !bool(global.perf_report_state.active)) return;
+    var category = perf_report_scheduler_incident_category(_time_ms);
+    if (bool(global.perf_report_state.scheduler_startup_backlog_active)) category = "startup";
+    if (category == "startup") {
+        global.perf_report_state.overall.startup_spike_count += 1;
+    } else {
+        global.perf_report_state.overall.spike_count += 1;
+        if (category == "segment_start") global.perf_report_state.overall.boundary_spike_count += 1;
+    }
+    var segment_index = perf_report_resolve_segment_index(_time_ms);
+    if (segment_index >= 0 && segment_index < array_length(global.perf_report_state.segments)) {
+        if (category == "startup") global.perf_report_state.segments[segment_index].startup_spike_count += 1;
+        else {
+            global.perf_report_state.segments[segment_index].spike_count += 1;
+            if (category == "segment_start") global.perf_report_state.segments[segment_index].boundary_spike_count += 1;
+        }
+    } else if (string(global.perf_report_state.mode) == "set") {
+        if (category == "startup") global.perf_report_state.transition.startup_spike_count += 1;
+        else global.perf_report_state.transition.spike_count += 1;
+    }
+}
+
+/// @function perf_report_classify_scope(_summary)
+/// @description Classify one completed scope as n/a, ok, caution, or warn using centralized thresholds.
+/// @returns {struct} {status, reasons, primary_metric, primary_value}
+/// @reads summary metrics
+/// @writes none
+/// @objects none
+/// @callers perf_report_scope_summarize
+function perf_report_classify_scope(_summary) {
+    var cadence = _summary[$ "controller_step_interval_ms"];
+    var scheduler = _summary[$ "scheduler_late_ms"];
+    var scheduler_accuracy = _summary[$ "scheduler_accuracy"];
+    var cadence_n = is_struct(cadence) ? floor(real(cadence.n)) : 0;
+    var scheduler_n = is_struct(scheduler_accuracy)
+        ? floor(real(scheduler_accuracy.n))
+        : (is_struct(scheduler) ? floor(real(scheduler.n)) : 0);
+    if (cadence_n < 64 || scheduler_n < 32) {
+        return { status: "n/a", reasons: ["Insufficient active-play samples"], primary_metric: "sample_count", primary_value: min(cadence_n, scheduler_n) };
+    }
+
+    var reasons = [];
+    var status = "ok";
+    var primary_metric = "";
+    var primary_value = 0;
+    var cadence_p95 = real(cadence.p95);
+    var cadence_p99 = real(cadence.p99);
+    var cadence_max = real(cadence.max);
+    var scheduler_p95 = is_struct(scheduler_accuracy) ? real(scheduler_accuracy.abs_p95_ms) : real(scheduler.p95);
+    var scheduler_p99 = is_struct(scheduler_accuracy) ? real(scheduler_accuracy.abs_p99_ms) : real(scheduler.p99);
+    var scheduler_max = is_struct(scheduler_accuracy) ? real(scheduler_accuracy.abs_max_ms) : real(scheduler.max);
+    var spikes = floor(real(_summary[$ "spike_count"] ?? 0));
+    var boundary_spikes = floor(real(_summary[$ "boundary_spike_count"] ?? 0));
+    var content_spikes = max(0, spikes - boundary_spikes);
+
+    if (cadence_p95 >= 6 || cadence_p99 >= 10) {
+        status = "warn";
+        array_push(reasons, "Controller cadence exceeded the hard target");
+        primary_metric = "controller_step_interval_ms";
+        primary_value = max(cadence_p95, cadence_p99);
+    } else if (cadence_p95 > 4.5 || cadence_p99 > 6) {
+        status = "caution";
+        array_push(reasons, "Controller cadence exceeded the preferred target");
+        primary_metric = "controller_step_interval_ms";
+        primary_value = max(cadence_p95, cadence_p99);
+    }
+
+    if (scheduler_p95 >= 6 || scheduler_p99 >= 15) {
+        status = "warn";
+        array_push(reasons, "Scheduler lateness exceeded the hard target");
+        primary_metric = "scheduler_late_ms";
+        primary_value = max(scheduler_p95, scheduler_p99);
+    } else if (scheduler_p95 > 4 || scheduler_p99 > 8) {
+        if (status == "ok") status = "caution";
+        array_push(reasons, "Scheduler lateness exceeded the preferred target");
+        if (primary_metric == "") {
+            primary_metric = "scheduler_late_ms";
+            primary_value = max(scheduler_p95, scheduler_p99);
+        }
+    }
+
+    if (cadence_max >= 100 || scheduler_max >= 100) {
+        status = "warn";
+        array_push(reasons, "Extreme steady-state runtime stall detected");
+        primary_metric = "scheduler_accuracy.abs_max_ms";
+        primary_value = max(cadence_max, scheduler_max);
+    } else if (content_spikes >= 2) {
+        status = "warn";
+        array_push(reasons, "Repeated tune-content scheduler stalls detected");
+        primary_metric = "content_spike_count";
+        primary_value = content_spikes;
+    } else if (boundary_spikes >= 2) {
+        status = "warn";
+        array_push(reasons, "Repeated segment-boundary scheduler stalls detected");
+        primary_metric = "boundary_spike_count";
+        primary_value = boundary_spikes;
+    } else if (content_spikes == 1) {
+        if (status == "ok") status = "caution";
+        array_push(reasons, "One isolated tune-content scheduler stall detected");
+        if (primary_metric == "") {
+            primary_metric = "content_spike_count";
+            primary_value = 1;
+        }
+    } else if (boundary_spikes == 1) {
+        if (status == "ok") status = "caution";
+        array_push(reasons, "One isolated segment-boundary scheduler stall detected");
+        if (primary_metric == "") {
+            primary_metric = "boundary_spike_count";
+            primary_value = 1;
+        }
+    }
+
+    return { status: status, reasons: reasons, primary_metric: primary_metric, primary_value: primary_value };
+}
+
+/// @function perf_report_scope_summarize(_scope)
+/// @description Convert one live report scope into immutable percentile summaries and classification.
+/// @returns {struct} Completed scope summary.
+/// @reads _scope metric buffers
+/// @writes none
+/// @objects none
+/// @callers perf_report_complete
+function perf_report_scope_summarize(_scope) {
+    var out = {
+        segment_index: floor(real(_scope.segment_index)),
+        title: string(_scope.title),
+        filename: string(_scope.filename),
+        start_ms: real(_scope.start_ms),
+        content_end_ms: real(_scope.content_end_ms),
+        end_ms: real(_scope.end_ms),
+        spike_count: floor(real(_scope.spike_count)),
+        startup_spike_count: floor(real(_scope.startup_spike_count)),
+        boundary_spike_count: floor(real(_scope.boundary_spike_count)),
+        scheduler_accuracy: perf_report_scheduler_accuracy_summarize(_scope)
+    };
+    var metric_names = variable_struct_get_names(_scope.metrics);
+    for (var i = 0; i < array_length(metric_names); i++) {
+        var key = metric_names[i];
+        var metric = _scope.metrics[$ key];
+        out[$ key] = timing_calibration_summarize_ring_buffer(metric.values, metric.count);
+    }
+    out.status = perf_report_classify_scope(out);
+    return out;
+}
+
+/// @function perf_report_complete()
+/// @description Finalize overall, per-tune, and transition summaries and publish them for immediate UI use.
+/// @returns {struct|undefined} Completed schema-v3 report.
+/// @reads global.perf_report_state and playback totals/settings
+/// @writes global.perf_report_state.completed_summary, global.PERF_REPORT_LATEST
+/// @objects none
+/// @callers final scheduler callbacks, tune_cleanup_after_finish
+function perf_report_complete() {
+    if (!variable_global_exists("perf_report_state") || !is_struct(global.perf_report_state)) return undefined;
+    var state = global.perf_report_state;
+    if (!bool(state.active) && variable_struct_exists(state, "completed_summary") && is_struct(state.completed_summary)) {
+        return state.completed_summary;
+    }
+    var segment_summaries = array_create(array_length(state.segments), undefined);
+    for (var i = 0; i < array_length(state.segments); i++) {
+        if (is_struct(state.segments[i])) segment_summaries[i] = perf_report_scope_summarize(state.segments[i]);
+    }
+    var out = {
+        schema_version: 3,
+        ts_local: date_datetime_string(date_current_datetime()),
+        play_id: floor(real(state.play_id)),
+        metric_clock: "mixed_hires_controller_engine_scheduler",
+        mode: string(state.mode),
+        title: string(state.title),
+        bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 0,
+        swing: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
+        grace_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
+        elapsed_ms: variable_global_exists("perf_run_last_elapsed_ms") ? real(global.perf_run_last_elapsed_ms) : 0,
+        groups_total: variable_global_exists("perf_run_last_groups_total") ? floor(real(global.perf_run_last_groups_total)) : 0,
+        events_total: variable_global_exists("perf_run_last_events_total") ? floor(real(global.perf_run_last_events_total)) : 0,
+        context: state.context,
+        segment_switches: is_array(state.segment_switches) ? state.segment_switches : [],
+        overall: perf_report_scope_summarize(state.overall),
+        segments: segment_summaries,
+        transition: perf_report_scope_summarize(state.transition)
+    };
+    var player_capture_enabled = !variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") || bool(global.EVENT_RUNTIME_CAPTURE_ENABLED);
+    var player_event_count = (variable_global_exists("EVENT_RUNTIME_PLAYER") && is_array(global.EVENT_RUNTIME_PLAYER))
+        ? array_length(global.EVENT_RUNTIME_PLAYER)
+        : 0;
+    variable_struct_set(out.context, "player_input_capture_enabled", player_capture_enabled);
+    variable_struct_set(out.context, "player_input_event_count", player_event_count);
+    variable_struct_set(out.context, "player_input_observed", player_capture_enabled && player_event_count > 0);
+    variable_struct_set(out.context, "workload_profile", player_capture_enabled
+        ? (player_event_count > 0 ? "player_input" : "play_only")
+        : "player_input_unknown");
+    variable_struct_set(out, "status", variable_struct_get(variable_struct_get(out, "overall"), "status"));
+    state.active = false;
+    state.completed_summary = out;
+    global.perf_report_state = state;
+    global.PERF_REPORT_LATEST = out;
+    return out;
+}
+
 /// @function timing_calibration_capture_jitter_summary()
 /// @description Snapshot current RT jitter diagnostics into global.timing_calibration.jitter_summary.
 /// @returns Struct jitter summary
@@ -1847,17 +2598,51 @@ function perf_run_summary_get_performances_root() {
     return root;
 }
 
+/// @function perf_run_summary_prune(_path, _max_records)
+/// @description Keep only the newest completed report records in the compact JSONL ledger.
+/// @param {string} _path Absolute or sandbox-relative JSONL path.
+/// @param {real} _max_records Maximum records to retain.
+/// @returns {bool} True when the file was already within bounds or was pruned successfully.
+/// @reads none
+/// @writes datafiles/performances/run_summaries.jsonl
+/// @objects none
+/// @callers perf_run_summary_append_latest
+function perf_run_summary_prune(_path, _max_records) {
+    var max_records = max(1, floor(real(_max_records)));
+    if (!file_exists(_path)) return true;
+
+    var read_file = file_text_open_read(_path);
+    if (read_file < 0) return false;
+
+    var records = [];
+    while (!file_text_eof(read_file)) {
+        var line = string_trim(file_text_readln(read_file));
+        if (line != "") array_push(records, line);
+    }
+    file_text_close(read_file);
+
+    var record_count = array_length(records);
+    if (record_count <= max_records) return true;
+
+    var write_file = file_text_open_write(_path);
+    if (write_file < 0) return false;
+    for (var record_index = record_count - max_records; record_index < record_count; record_index++) {
+        file_text_write_string(write_file, records[record_index]);
+        file_text_writeln(write_file);
+    }
+    file_text_close(write_file);
+    return true;
+}
+
 /// @function perf_run_summary_append_latest(_jitter_summary)
-/// @description Append one compact JSONL summary line for the latest run to performances/run_summaries.jsonl.
-/// @param {struct} _jitter_summary Optional jitter summary; falls back to global.timing_calibration.jitter_summary
+/// @description Append one schema-v3 report per play ID and retain only the newest 200 reports.
+/// @param {struct} _jitter_summary Completed schema-v3 report.
 /// @returns {bool} True when a summary line was appended
-/// @reads global.playback_context, global.current_tune_name, global.playback_run_id, global.tune_start_real, global.current_bpm, global.swing_mult, global.gracenote_override_ms, global.perf_run_last_elapsed_ms, global.perf_run_last_groups_total, global.perf_run_last_events_total, global.rt_budget_sched_spike_count, global.timing_calibration
+/// @reads global.playback_run_id, global.tune_start_real
 /// @writes datafiles/performances/run_summaries.jsonl, global.perf_run_summary_last_written_play_id
 /// @objects none
 /// @callers tune_cleanup_after_finish
 function perf_run_summary_append_latest(_jitter_summary = undefined) {
-    var now_dt = date_current_datetime();
-
     var play_id = -1;
     if (variable_global_exists("playback_run_id")) {
         play_id = floor(real(global.playback_run_id));
@@ -1872,69 +2657,12 @@ function perf_run_summary_append_latest(_jitter_summary = undefined) {
         return false;
     }
 
-    var mode = "single";
-    var display_title = variable_global_exists("current_tune_name")
-        ? string(global.current_tune_name)
-        : "unknown";
-    var segment_count = 0;
-    if (variable_global_exists("playback_context") && is_struct(global.playback_context)) {
-        mode = string(global.playback_context[$ "mode"] ?? "single");
-        display_title = string(global.playback_context[$ "display_title"] ?? display_title);
-        var segs = global.playback_context[$ "segments"];
-        if (is_array(segs)) {
-            segment_count = array_length(segs);
-        }
+    if (!is_struct(_jitter_summary)
+        || !variable_struct_exists(_jitter_summary, "schema_version")
+        || floor(real(variable_struct_get(_jitter_summary, "schema_version"))) != 3) {
+        show_debug_message("[PERF_SUMMARY] Refused non-schema-v3 report.");
+        return false;
     }
-
-    var jitter = _jitter_summary;
-    if (!is_struct(jitter)
-        && variable_global_exists("timing_calibration")
-        && is_struct(global.timing_calibration)
-        && variable_struct_exists(global.timing_calibration, "jitter_summary")
-        && is_struct(global.timing_calibration.jitter_summary)) {
-        jitter = global.timing_calibration.jitter_summary;
-    }
-    if (!is_struct(jitter)) {
-        jitter = {
-            scheduler_late_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
-            controller_step_interval_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
-            midi_process_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 },
-            draw_ms: { p50: 0, p95: 0, p99: 0, max: 0, n: 0 }
-        };
-    }
-
-    var elapsed_ms = variable_global_exists("perf_run_last_elapsed_ms")
-        ? real(global.perf_run_last_elapsed_ms)
-        : 0;
-    var groups_total = variable_global_exists("perf_run_last_groups_total")
-        ? floor(real(global.perf_run_last_groups_total))
-        : 0;
-    var events_total = variable_global_exists("perf_run_last_events_total")
-        ? floor(real(global.perf_run_last_events_total))
-        : 0;
-    var spike_count = variable_global_exists("rt_budget_sched_spike_count")
-        ? floor(real(global.rt_budget_sched_spike_count))
-        : 0;
-
-    var out = {
-        ts_local: date_datetime_string(now_dt),
-        play_id: play_id,
-        metric_clock: "mixed_hires_controller_engine_scheduler",
-        mode: mode,
-        title: display_title,
-        segments: segment_count,
-        bpm: variable_global_exists("current_bpm") ? real(global.current_bpm) : 0,
-        swing: variable_global_exists("swing_mult") ? real(global.swing_mult) : 0,
-        grace_ms: variable_global_exists("gracenote_override_ms") ? real(global.gracenote_override_ms) : 0,
-        elapsed_ms: elapsed_ms,
-        groups_total: groups_total,
-        events_total: events_total,
-        spike_count: spike_count,
-        scheduler_late_ms: jitter.scheduler_late_ms,
-        controller_step_interval_ms: jitter.controller_step_interval_ms,
-        midi_process_ms: jitter.midi_process_ms,
-        draw_ms: jitter.draw_ms
-    };
 
     var path = perf_run_summary_get_performances_root() + "run_summaries.jsonl";
     var f = file_text_open_append(path);
@@ -1943,12 +2671,16 @@ function perf_run_summary_append_latest(_jitter_summary = undefined) {
         return false;
     }
 
-    file_text_write_string(f, json_stringify(out));
+    file_text_write_string(f, json_stringify(_jitter_summary));
     file_text_writeln(f);
     file_text_close(f);
 
     if (play_id >= 0) {
         global.perf_run_summary_last_written_play_id = play_id;
+    }
+
+    if (!perf_run_summary_prune(path, 200)) {
+        show_debug_message("[PERF_SUMMARY] Could not prune run summaries file: " + path);
     }
 
     return true;
@@ -2395,7 +3127,8 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
     var startup_spike_grace_ms = max(0, real(global.PLAYBACK_SCHEDULER_STARTUP_SPIKE_GRACE_MS ?? 0));
-    if (real(_real_elapsed) <= startup_spike_grace_ms) return;
+    var incident_category = perf_report_scheduler_incident_category(_scheduled_elapsed);
+    if (real(_real_elapsed) <= startup_spike_grace_ms && incident_category != "startup") return;
 
     var late_ms = real(_late_ms);
     var spike_threshold_ms = 20;
@@ -2437,6 +3170,7 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
         global.rt_budget_sched_spike_count = 0;
     }
     global.rt_budget_sched_spike_count = floor(real(global.rt_budget_sched_spike_count)) + 1;
+    perf_report_record_spike(_scheduled_elapsed);
 
     perf_diag_emit("[SCHED_SPIKE] late_ms=" + string_format(late_ms, 0, 3)
         + " real_ms=" + string_format(real(_real_elapsed), 0, 3)
@@ -2453,11 +3187,11 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
     global.rt_budget_sched_spike_last_log_ms = now_ms;
 }
 
-/// @function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms)
+/// @function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms, _sample_time_ms)
 /// @description Record a scheduler-late sample to the ring buffer; logs a summary every RT_BUDGET_DIAG_LOG_INTERVAL_MS.
 /// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
 /// @writes global.rt_budget_sched_late_buf, global.rt_budget_sched_late_head, global.rt_budget_sched_late_count, global.rt_budget_diag_last_log_ms
-function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
+function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms, _sample_time_ms = undefined) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
     var now_ms = timing_get_engine_now_ms();
@@ -2487,6 +3221,7 @@ function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
     global.rt_budget_sched_late_buf = buf;
     global.rt_budget_sched_late_head = (head + 1) mod n_buf;
     global.rt_budget_sched_late_count = min(n_buf, floor(real(global.rt_budget_sched_late_count ?? 0)) + 1);
+    perf_report_record_sample("scheduler_late_ms", _late_ms, _sample_time_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_diag_last_log_ms ?? 0)) < interval_ms) return;
@@ -2515,11 +3250,11 @@ function tune_rt_budget_diag_record_scheduler_late_ms(_late_ms) {
     global.rt_budget_diag_last_log_ms = now_ms;
 }
 
-/// @function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms, _midi_send_count)
+/// @function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms, _midi_send_count, _sample_time_ms)
 /// @description Record per-group CPU cost samples (proc_ms, midi_send_ms, event count).
 /// @reads global.RT_BUDGET_DIAG_ENABLED, global.RT_BUDGET_DIAG_LOG_INTERVAL_MS, global.RT_BUDGET_SCHED_WARMUP_MS, global.tune_start_real
 /// @writes global.rt_budget_sched_group_proc_buf/events_buf/send_ms_buf/send_count_buf/head/count/last_log_ms
-function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms = -1, _midi_send_count = -1) {
+function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _midi_send_ms = -1, _midi_send_count = -1, _sample_time_ms = undefined) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
 
     var now_ms = timing_get_engine_now_ms();
@@ -2561,6 +3296,8 @@ function tune_rt_budget_diag_record_scheduler_group(_group_events, _proc_ms, _mi
     global.rt_budget_sched_group_send_count_buf = send_count_buf;
     global.rt_budget_sched_group_head = (head + 1) mod n_buf;
     global.rt_budget_sched_group_count = min(n_buf, floor(real(global.rt_budget_sched_group_count ?? 0)) + 1);
+    perf_report_record_sample("scheduler_group_proc_ms", _proc_ms, _sample_time_ms);
+    if (real(_midi_send_ms) >= 0) perf_report_record_sample("midi_send_ms", _midi_send_ms, _sample_time_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_sched_group_last_log_ms ?? 0)) < interval_ms) return;
@@ -2661,6 +3398,7 @@ function tune_rt_budget_diag_record_controller_step_ms(_step_ms) {
     global.rt_budget_controller_step_buf = buf;
     global.rt_budget_controller_step_head = (head + 1) mod n_buf;
     global.rt_budget_controller_step_count = min(n_buf, floor(real(global.rt_budget_controller_step_count ?? 0)) + 1);
+    perf_report_record_sample("controller_step_ms", _step_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_controller_step_last_log_ms ?? 0)) < interval_ms) return;
@@ -2821,6 +3559,7 @@ function tune_rt_budget_diag_record_midi_step_ms(_step_ms) {
     global.rt_budget_midi_step_buf = buf;
     global.rt_budget_midi_step_head = (head + 1) mod n_buf;
     global.rt_budget_midi_step_count = min(n_buf, floor(real(global.rt_budget_midi_step_count ?? 0)) + 1);
+    perf_report_record_sample("midi_process_ms", _step_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_midi_step_last_log_ms ?? 0)) < interval_ms) return;
@@ -2883,6 +3622,7 @@ function tune_rt_budget_diag_record_draw_ms(_draw_ms) {
     global.rt_budget_draw_buf = buf;
     global.rt_budget_draw_head = (head + 1) mod n_buf;
     global.rt_budget_draw_count = min(n_buf, floor(real(global.rt_budget_draw_count ?? 0)) + 1);
+    perf_report_record_sample("game_viz_draw_ms", _draw_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_draw_last_log_ms ?? 0)) < interval_ms) return;
@@ -2994,6 +3734,14 @@ function tune_rt_budget_diag_record_draw_interval_ms(_draw_dt_ms) {
 /// @writes global.rt_budget_anchor_draw_stats (keyed by _anchor_kind string)
 function tune_rt_budget_diag_record_anchor_draw_ms(_anchor_kind, _draw_ms) {
     if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+    var report_kind = string(_anchor_kind ?? "unknown");
+    switch (report_kind) {
+        case "timeline": perf_report_render_component_add("timeline_draw_ms", _draw_ms); break;
+        case "tunestructure": perf_report_render_component_add("tunestructure_draw_ms", _draw_ms); break;
+        case "gameviz": perf_report_render_component_add("gameviz_controls_draw_ms", _draw_ms); break;
+        case "gameviz_structure": perf_report_render_component_add("gameviz_structure_draw_ms", _draw_ms); break;
+        case "notebeam": perf_report_render_component_add("notebeam_anchor_draw_ms", _draw_ms); break;
+    }
     if (variable_global_exists("RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW") && !global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW) return;
 
     var kind = string(_anchor_kind ?? "unknown");
@@ -3111,6 +3859,7 @@ function tune_rt_budget_diag_record_controller_step_interval_ms(_step_dt_ms) {
     global.rt_budget_controller_step_dt_buf = buf;
     global.rt_budget_controller_step_dt_head = (head + 1) mod n_buf;
     global.rt_budget_controller_step_dt_count = min(n_buf, floor(real(global.rt_budget_controller_step_dt_count ?? 0)) + 1);
+    perf_report_record_sample("controller_step_interval_ms", _step_dt_ms);
 
     var interval_ms = max(250, real(global.RT_BUDGET_DIAG_LOG_INTERVAL_MS ?? 1000));
     if ((now_ms - real(global.rt_budget_controller_step_dt_last_log_ms ?? 0)) < interval_ms) return;
@@ -3260,6 +4009,8 @@ function tune_rt_budget_diag_reset_for_new_run() {
     // Reinitialize keyed rolling stats so prior run windows do not bleed into current run.
     global.rt_budget_controller_phase_stats = {};
     global.rt_budget_anchor_draw_stats = {};
+    global.rt_budget_controller_step_prev_start_us = get_timer();
+    global.rt_budget_draw_prev_start_ms = timing_get_engine_now_ms();
 }
 
 /// @function tune_group_events_by_timestamp(_events)
@@ -3413,6 +4164,9 @@ function tune_scheduler_process_deferred(_max_items = 128, _max_budget_us = 1200
             var note_letter = midi_to_letter(real(item.note ?? 0), real(item.channel ?? 0));
             global.current_note_display = note_letter + " (delta: " + string(real(item.delta_ms ?? 0)) + "ms)";
         }
+        else if (kind == "set_segment_ui") {
+            scr_gameinfo_update_title(floor(real(item.segment_index ?? 0)));
+        }
         processed += 1;
     }
 
@@ -3470,6 +4224,8 @@ function tune_start(_tune_events) {
         show_debug_message("WARNING: No tune event groups to schedule.");
         return false;
     }
+
+    tune_rt_budget_diag_reset_for_new_run();
 
     // Reset compact run-summary state for this playback.
     global.perf_run_last_elapsed_ms = 0;
@@ -3531,6 +4287,8 @@ function tune_start(_tune_events) {
     // Anchor playback start with optional timesource startup delay to avoid first-group startup stalls.
     global.tune_start_real = timing_get_engine_now_ms() + startup_arm_delay_ms;
     var play_id_ms = floor(real(global.tune_start_real));
+    global.playback_run_id = play_id_ms;
+    perf_report_begin_run(play_id_ms);
 
     var tune_name = string(variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown");
     var cfg_bpm = variable_global_exists("current_bpm") ? real(global.current_bpm) : 0;
@@ -3618,7 +4376,8 @@ function script_tune_callback_batched() {
         }
     }
     var scheduled_elapsed = expected_elapsed + audio_sched_offset_ms;
-    tune_rt_budget_diag_record_scheduler_late_ms(real_elapsed - scheduled_elapsed);
+    perf_report_record_scheduler_accuracy(real_elapsed - scheduled_elapsed, real_elapsed, scheduled_elapsed);
+    tune_rt_budget_diag_record_scheduler_late_ms(real_elapsed - scheduled_elapsed, expected_elapsed);
     tune_rt_budget_diag_trace_scheduler_spike(real_elapsed - scheduled_elapsed, real_elapsed, scheduled_elapsed);
     if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)) {
         global.timeline_state.last_dispatched_expected_ms = real(expected_elapsed);
@@ -3845,7 +4604,7 @@ function script_tune_callback_batched() {
         MIDI_send_off();
         MIDI_disable_manual_polling();
         gv_on_tune_playback_finished(expected_elapsed);
-        tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count);
+        tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count, expected_elapsed);
         if (global.EVENT_HISTORY_AUTO_EXPORT && !global.EVENT_HISTORY_EXPORTED) {
             export_event_history();
             global.EVENT_HISTORY_EXPORTED = true;
@@ -3865,6 +4624,7 @@ function script_tune_callback_batched() {
             _ls_done.phase_end_ms = real(expected_elapsed);
             global.timeline_state.loop_session = _ls_done;
         }
+        perf_report_complete();
         // Schedule cleanup one beat later (600ms at moderate tempo)
         schedule_tune_cleanup(600);
         // show_debug_message("Tune finished.");
@@ -3873,7 +4633,7 @@ function script_tune_callback_batched() {
     
     // Step scheduler runs from Step event and does not arm a time_source timer.
     if (variable_global_exists("tune_scheduler_mode_step") && global.tune_scheduler_mode_step) {
-        tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count);
+        tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count, expected_elapsed);
         return;
     }
 
@@ -3898,7 +4658,7 @@ function script_tune_callback_batched() {
     );
     
     time_source_start(global.tune_timer);
-    tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count);
+    tune_rt_budget_diag_record_scheduler_group(n_group_events, (get_timer() - callback_start_us) * 0.001, midi_send_accum_us * 0.001, midi_send_count, expected_elapsed);
 }
 
 /// @function tune_scheduler_step_tick()
@@ -4052,6 +4812,7 @@ event_history_add({
         MIDI_send_off();
         MIDI_disable_manual_polling();
         gv_on_tune_playback_finished(expected_elapsed);
+        perf_report_complete();
         // Schedule cleanup one beat later (600ms at moderate tempo)
         schedule_tune_cleanup(600);
         // show_debug_message("Tune finished.");
@@ -4101,9 +4862,9 @@ function schedule_tune_cleanup(_delay_ms) {
 }
 
 /// @function tune_cleanup_after_finish(_scheduled_play_id)
-/// @description Cleanup callback: finalize run stats for the completed run only.
-/// @reads global.rt_budget_sched_late_buf/count, global.rt_budget_controller_step_dt_buf/count, global.rt_budget_midi_step_buf/count, global.rt_budget_draw_buf/count
-/// @writes global.timing_calibration.jitter_summary
+/// @description Stale-safe cleanup callback: preserve legacy calibration summary and persist the immutable completed report once.
+/// @reads current play ID, RT diagnostic buffers, global.perf_report_state
+/// @writes global.timing_calibration.jitter_summary, run_summaries.jsonl
 
 function tune_cleanup_after_finish(_scheduled_play_id = -1) {
     var current_play_id = variable_global_exists("tune_start_real") ? floor(real(global.tune_start_real)) : -1;
@@ -4113,8 +4874,9 @@ function tune_cleanup_after_finish(_scheduled_play_id = -1) {
         return;
     }
 
-    var jitter_summary = timing_calibration_capture_jitter_summary();
-    perf_run_summary_append_latest(jitter_summary);
+    timing_calibration_capture_jitter_summary();
+    var completed_report = perf_report_complete();
+    perf_run_summary_append_latest(completed_report);
     show_debug_message("âœ“ Tune cleanup complete");
 }
 

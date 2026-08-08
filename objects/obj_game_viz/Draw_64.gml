@@ -1,5 +1,7 @@
 /// @description Draw GUI overlay hooks
 
+var _perf_draw_gui_start_us = get_timer();
+
 // Draw notebeam in GUI-space composition order:
 // chanter graphics (world/UI layer) < notebeam < now-line/labels/popup.
 var _nb_anchor = gv_find_anchor_id_by_name("notebeam_canvas_anchor");
@@ -84,3 +86,5 @@ if (_nb_anchor != noone && instance_exists(_nb_anchor)) {
 	gv_draw_notebeam_scoring_panel(_x1, _y1, _x2, _y2);
 	gv_draw_notebeam_note_popup(_x1, _y1, _x2, _y2);
 }
+
+perf_report_render_frame_complete((get_timer() - _perf_draw_gui_start_us) * 0.001);

@@ -767,6 +767,43 @@ function scr_score_override_groups_clear() {
     global.score_override_groups = {};
 }
 
+/// @function scr_score_segment_runtime_cache_clear()
+/// @description Delete dynamic score and override sprites retained by every preloaded set-segment cache entry.
+/// @returns none
+/// @reads global.score_segments_sprites
+/// @writes global.score_segments_sprites, global.score_override_groups
+/// @callers scr_goto_playroom
+function scr_score_segment_runtime_cache_clear() {
+    var caches = variable_global_exists("score_segments_sprites") ? global.score_segments_sprites : [];
+    if (is_array(caches)) {
+        for (var cache_index = 0; cache_index < array_length(caches); cache_index++) {
+            var cache_entry = caches[cache_index];
+            if (!is_struct(cache_entry)) continue;
+            var sprites = cache_entry[$ "sprites"] ?? [];
+            for (var cache_sprite_index = 0; cache_sprite_index < array_length(sprites); cache_sprite_index++) {
+                var sprite_id = sprites[cache_sprite_index];
+                if (sprite_exists(sprite_id)) sprite_delete(sprite_id);
+            }
+            var override_groups = cache_entry[$ "override_groups"] ?? {};
+            if (!is_struct(override_groups)) continue;
+            var group_names = ["tail", "head"];
+            for (var group_index = 0; group_index < array_length(group_names); group_index++) {
+                var group_name = group_names[group_index];
+                if (!variable_struct_exists(override_groups, group_name)) continue;
+                var bundle = override_groups[$ group_name];
+                if (!is_struct(bundle)) continue;
+                var bundle_sprites = bundle[$ "sprites"] ?? [];
+                for (var bundle_index = 0; bundle_index < array_length(bundle_sprites); bundle_index++) {
+                    var bundle_sprite = bundle_sprites[bundle_index];
+                    if (sprite_exists(bundle_sprite)) sprite_delete(bundle_sprite);
+                }
+            }
+        }
+    }
+    global.score_segments_sprites = [];
+    global.score_override_groups = {};
+}
+
 /// @function scr_score_override_groups_load_for_current_segment(_filename)
 /// @description Load tail/head override sprite bundles for the currently active set segment, if any.
 /// @param {string} _filename Base segment filename currently being loaded

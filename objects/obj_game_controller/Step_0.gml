@@ -61,8 +61,10 @@ if (_scheduler_active && _deferred_queue_has_items) {
 		_deferred_budget_us
 	);
 }
+var _deferred_elapsed_ms = (get_timer() - _phase_t0_us) * 0.001;
+perf_report_record_sample("deferred_work_ms", _deferred_elapsed_ms);
 if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
-	tune_rt_budget_diag_record_controller_phase_ms("deferred_tick", (get_timer() - _phase_t0_us) * 0.001);
+	tune_rt_budget_diag_record_controller_phase_ms("deferred_tick", _deferred_elapsed_ms);
 }
 
 // Apply deferred UI layer visibility after room switches.

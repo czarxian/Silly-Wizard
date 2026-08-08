@@ -32,6 +32,24 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+## Post-Play Runtime Reporting Implementation
+
+Code-complete, pending live GameMaker validation:
+
+- Added one schema-v3 report owner with fixed overall, per-tune, and transition ring buffers plus whole-run dispatch histograms.
+- Reset report/legacy sampling once per accepted playback and publish an explicit play ID.
+- Added centralized `N/A` / `OK` / `CAUTION` / `WARN` classification and persisted reasons.
+- Added controller duration, scheduler callback, MIDI send/process, deferred work, and instrumented render-total sampling.
+- Publish the completed report to runtime memory at the final event group; persist JSONL after stale-cleanup validation.
+- Updated the compact tile and existing detail popup; set Tune scope follows `playback_context.active_segment`, with Set Overall available independently.
+- Runtime report persistence and UI now accept schema v3 only; the compact JSONL ledger retains the newest 200 reports.
+- Added dry-run-first `cleanup_runtime_history.ps1` for explicit LocalAppData performance/debug cleanup without touching tune content, configuration, or player settings.
+- Disabled detailed event-history auto-export by default; runtime capture/scoring and manual export are unchanged.
+- Set playback now preloads transition override sprites and per-segment nav/canonical-model caches before Play; live boundaries swap cached references, defer title UI refresh, and persist component timings/cache misses while remaining in normal Step/cadence accounting.
+- Schema v3 now records complete-run signed/absolute dispatch histograms, exact 0.5/1/2/5/10/20 ms bands, exact maximum, bounded worst incidents, startup/segment-boundary categories, and player-input workload profile.
+
+Validation still required: long and short single tunes, direct and transition sets, set review navigation, score on/off, loops, immediate replay, report persistence, and matched instrumentation-overhead runs.
+
 ## Loop Completion Runbook (2026-08-02)
 
 Objective for today:

@@ -19,6 +19,10 @@ if (!variable_global_exists("GAME_STEP_FPS")) {
 var _game_step_fps = max(30, floor(real(global.GAME_STEP_FPS)));
 game_set_speed(_game_step_fps, gamespeed_fps);
 
+// Authoritative post-play runtime report state. scr_tune_scripts owns each run's contents.
+global.perf_report_state = undefined;
+global.PERF_REPORT_LATEST = undefined;
+
 if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
 	// Small lookahead lets the step scheduler dispatch near-due groups before
 	// they become visibly late under occasional frame stalls.
