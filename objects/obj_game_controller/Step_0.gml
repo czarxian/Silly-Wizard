@@ -2,25 +2,49 @@
 // You can write your code in this editor
 
 var _controller_step_start_us = get_timer();
-var _controller_step_start_ms = timing_get_engine_now_ms();
+var _is_live_playback = false;
+if (script_exists(asset_get_index("gv_is_live_playback"))) {
+	_is_live_playback = gv_is_live_playback();
+}
 if ((!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL") || global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL)
-	&& variable_global_exists("rt_budget_controller_step_prev_start_ms")) {
+	&& variable_global_exists("rt_budget_controller_step_prev_start_us")) {
 	tune_rt_budget_diag_record_controller_step_interval_ms(
-		_controller_step_start_ms - real(global.rt_budget_controller_step_prev_start_ms)
+		(_controller_step_start_us - real(global.rt_budget_controller_step_prev_start_us)) * 0.001
 	);
 }
-global.rt_budget_controller_step_prev_start_ms = _controller_step_start_ms;
+global.rt_budget_controller_step_prev_start_us = _controller_step_start_us;
 
 // Step-driven playback scheduler mode dispatches all due tune event groups here.
+var _scheduler_active = variable_global_exists("tune_scheduler_active") && bool(global.tune_scheduler_active);
+var _timeline_active = variable_global_exists("timeline_state")
+	&& is_struct(global.timeline_state)
+	&& variable_struct_exists(global.timeline_state, "active")
+	&& bool(global.timeline_state.active);
+var _deferred_queue_has_items = variable_global_exists("tune_deferred_queue")
+	&& is_array(global.tune_deferred_queue)
+	&& array_length(global.tune_deferred_queue) > 0;
+
 var _phase_t0_us = get_timer();
-tune_scheduler_step_tick();
+if (_scheduler_active && variable_global_exists("tune_scheduler_mode_step") && bool(global.tune_scheduler_mode_step)) {
+	tune_scheduler_step_tick();
+}
 if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
 	tune_rt_budget_diag_record_controller_phase_ms("scheduler_tick", (get_timer() - _phase_t0_us) * 0.001);
 }
 // Keep timeline/playhead maintenance owned by the controller step so it does
 // not depend on any specific UI anchor instance being active.
 _phase_t0_us = get_timer();
-gv_timeline_step_tick();
+if (_timeline_active) {
+	var _timeline_tick_idx = variable_global_exists("gv_timeline_step_tick_idx")
+		? real(global.gv_timeline_step_tick_idx)
+		: asset_get_index("gv_timeline_step_tick");
+	if (!variable_global_exists("gv_timeline_step_tick_idx")) {
+		global.gv_timeline_step_tick_idx = _timeline_tick_idx;
+	}
+	if (script_exists(_timeline_tick_idx)) {
+		script_execute(_timeline_tick_idx);
+	}
+}
 if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
 	tune_rt_budget_diag_record_controller_phase_ms("timeline_tick", (get_timer() - _phase_t0_us) * 0.001);
 }
@@ -31,10 +55,12 @@ var _deferred_budget_us = variable_global_exists("PLAYBACK_DEFERRED_MAX_BUDGET_U
 	? max(0, real(global.PLAYBACK_DEFERRED_MAX_BUDGET_US))
 	: 1200;
 _phase_t0_us = get_timer();
-tune_scheduler_process_deferred(
-	_deferred_max_items,
-	_deferred_budget_us
-);
+if (_scheduler_active && _deferred_queue_has_items) {
+	tune_scheduler_process_deferred(
+		_deferred_max_items,
+		_deferred_budget_us
+	);
+}
 if (!variable_global_exists("RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES") || global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES) {
 	tune_rt_budget_diag_record_controller_phase_ms("deferred_tick", (get_timer() - _phase_t0_us) * 0.001);
 }
@@ -127,7 +153,8 @@ if (variable_global_exists("pending_layer_mode")) {
 	}
 }
 
-if (variable_global_exists("pending_auto_start_play")
+if (!_is_live_playback
+	&& variable_global_exists("pending_auto_start_play")
 	&& global.pending_auto_start_play
 	&& room == Room_play
 	&& (!variable_global_exists("pending_layer_mode") || string(global.pending_layer_mode) == "")) {

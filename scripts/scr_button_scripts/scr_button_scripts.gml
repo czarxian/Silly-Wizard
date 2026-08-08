@@ -2369,9 +2369,9 @@
 
 	//CASE 30 - Logs toggle in settings (OFF/ON)
 	/// @function scr_settings_logs_toggle(_ctx)
-	/// @description Toggle settings Logs control and sync score-lane debug flags plus runtime performance diagnostics.
-	/// @reads global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.RT_BUDGET_DIAG_ENABLED, global.MIDI_TIMING_DIAG_ENABLED
-	/// @writes global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.RT_BUDGET_DIAG_ENABLED, global.MIDI_TIMING_DIAG_ENABLED, global.PLAYBACK_DEBUG_GROUP_TIMING
+	/// @description Toggle settings Logs control and sync score-lane debug flags plus optional verbose runtime diagnostics.
+	/// @reads global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.MIDI_TIMING_DIAG_ENABLED
+	/// @writes global.timeline_cfg.score_lane_debug_log, global.timeline_cfg.score_lane_debug_file_log, global.MIDI_TIMING_DIAG_ENABLED, global.PLAYBACK_DEBUG_GROUP_TIMING
 	/// @callers scr_handle_button_click (button 30)
 	function scr_settings_logs_toggle(_ctx = noone) {
 		var ctx = scr_button_get_ctx(_ctx);
@@ -2407,7 +2407,6 @@
 		global.timeline_cfg.score_lane_debug_log = logs_enabled;
 		global.timeline_cfg.score_lane_debug_file_log = logs_enabled;
 		global.timeline_cfg.score_render_plan_debug_log = logs_enabled;
-		global.RT_BUDGET_DIAG_ENABLED = logs_enabled;
 		global.MIDI_TIMING_DIAG_ENABLED = logs_enabled;
 		global.PLAYBACK_DEBUG_GROUP_TIMING = logs_enabled;
 
@@ -2593,9 +2592,20 @@
 		var running = timing_calibration_start_preview_click();
 		if (running) {
 			var offsets = timing_calibration_get_current_offsets();
-			var audio_ms = real(offsets.audio_output_offset_ms ?? 0);
-			var visual_ms = real(offsets.visual_alignment_offset_ms ?? 0);
-			var input_ms = real(offsets.input_capture_offset_ms ?? 0);
+			var audio_ms = 0;
+			var visual_ms = 0;
+			var input_ms = 0;
+			if (is_struct(offsets)) {
+				if (variable_struct_exists(offsets, "audio_output_offset_ms")) {
+					audio_ms = real(variable_struct_get(offsets, "audio_output_offset_ms"));
+				}
+				if (variable_struct_exists(offsets, "visual_alignment_offset_ms")) {
+					visual_ms = real(variable_struct_get(offsets, "visual_alignment_offset_ms"));
+				}
+				if (variable_struct_exists(offsets, "input_capture_offset_ms")) {
+					input_ms = real(variable_struct_get(offsets, "input_capture_offset_ms"));
+				}
+			}
 			state.last_message = "Calibration test running in " + timing_calibration_get_mode_label(timing_calibration_get_current_mode_index())
 				+ " (audio " + string_format(audio_ms, 0, 1)
 				+ " ms, visual " + string_format(visual_ms, 0, 1)
@@ -3565,8 +3575,8 @@
 	
 	//CASE 11
 	/// @function scr_button_prepare_single_tune_playback_events()
-	/// @description Rebuild global.playback_events for single-tune mode using current BPM/swing/grace/count-in settings.
-	/// @returns {bool} true when events were rebuilt; false when tune is unavailable
+	/// @description Rebuild global.playback_events from canonical tune_data using current BPM/swing/grace/count-in settings; fail fast when preprocessing yields no tune events.
+	/// @returns {bool} true when non-empty events were rebuilt; false when the tune is unavailable or preprocessing fails
 	/// @reads global.tune, global.current_set, global.current_set_item_index, global.current_bpm, global.swing_mult, global.gracenote_override_ms
 	/// @writes global.playback_events
 	/// @objects obj_tune
@@ -3598,7 +3608,12 @@
 			+ " count_in=" + string(scr_button_struct_get(effective, "count_in_measures", 0))
 			+ " mode=" + (_single_is_set_mode ? "set" : "single_virtual_set"));
 
-		var tune_events = scr_preprocess_tune(tune, overrides);
+		var tune_events = scr_preprocess_tune(tune_data, overrides);
+		if (!is_array(tune_events) || array_length(tune_events) <= 0) {
+			global.playback_events = [];
+			show_debug_message("ERROR: Playback preparation produced no tune events.");
+			return false;
+		}
 
 		var metronome_settings = {
 			bpm: bpm_override,
@@ -3692,6 +3707,11 @@
 			+ " marker_relabeled=" + string(scr_button_struct_get(_relabel_stats, "marker_relabeled", 0)));
 
 		global.playback_events = merged;
+		show_debug_message("[PLAYBACK-PREP] raw=" + string(array_length(scr_button_struct_get(tune_data, "events", [])))
+			+ " tune=" + string(array_length(tune_events))
+			+ " metronome=" + string(array_length(metronome_events))
+			+ " countin=" + string(array_length(countin_events))
+			+ " merged=" + string(array_length(merged)));
 		
 		// Sync playback_context to the rebuilt BPM so timeline reads current value
 		// (in single-tune mode, context was built from JSON tempo_default at room entry, never refreshed)
@@ -3733,7 +3753,10 @@
 			scr_button_bpm_debug_log("[START-PLAY-EFFECTIVE] bpm=" + string(scr_button_struct_get(_start_effective, "bpm", global.current_bpm))
 				+ " swing=" + string(scr_button_struct_get(_start_effective, "swing_mult", global.swing_mult))
 				+ " grace_ms=" + string(scr_button_struct_get(_start_effective, "gracenote_override_ms", global.gracenote_override_ms)));
-			scr_button_prepare_single_tune_playback_events();
+			if (!scr_button_prepare_single_tune_playback_events()) {
+				show_debug_message("ERROR: Single-tune playback preparation failed; start aborted.");
+				return;
+			}
 		}
 		var tune_data = scr_button_tune_data_get(tune);
 		var tune_events = scr_button_struct_get(tune_data, "events", array_create(0));

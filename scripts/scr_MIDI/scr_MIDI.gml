@@ -241,7 +241,9 @@ function MIDI_process_messages()
 		var _tune_start_real = _has_tune_start_real ? real(global.tune_start_real) : 0;
 		var _suppress_midi_thru = _suppress_has ? bool(script_execute(_suppress_idx)) : false;
 		var _event_history_enabled = variable_global_exists("EVENT_HISTORY_ENABLED") && global.EVENT_HISTORY_ENABLED;
-		var _use_legacy_history = !variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") || !global.EVENT_RUNTIME_CAPTURE_ENABLED;
+		var _runtime_capture_enabled = variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") && global.EVENT_RUNTIME_CAPTURE_ENABLED;
+		var _use_legacy_history = !_runtime_capture_enabled;
+		var _midi_timing_diag_enabled = variable_global_exists("MIDI_TIMING_DIAG_ENABLED") && global.MIDI_TIMING_DIAG_ENABLED;
 		var _audio_offset_ms = 0;
 		var _visual_offset_ms = 0;
 		var _input_offset_ms = 0;
@@ -303,6 +305,17 @@ function MIDI_process_messages()
 		_MIDI_input_device = global.midi_input_device;
 		_MIDI_output_device = global.midi_output_device;
 		_chanter_channel = global.chanter_channel;
+		var _midi_chanter_name = (variable_global_exists("MIDI_chanter") && !is_undefined(global.MIDI_chanter))
+			? global.MIDI_chanter
+			: "default";
+		var _playback_complete = false;
+		var _timeline_state = undefined;
+		if (variable_global_exists("timeline_state")) {
+			_timeline_state = global.timeline_state;
+			if (is_struct(_timeline_state) && variable_struct_exists(_timeline_state, "playback_complete")) {
+				_playback_complete = bool(variable_struct_get(_timeline_state, "playback_complete"));
+			}
+		}
 		// Prefer MIDI device message timestamp when available; fallback to realtime.
 		
 //		```
@@ -336,7 +349,9 @@ function MIDI_process_messages()
 		time = raw_abs_time;
 		var raw_poll_skew_ms = wall_now - raw_abs_time;
 		var processing_delay_ms = max(0, raw_poll_skew_ms);
-		MIDI_timing_diag_record_poll_delay(processing_delay_ms, raw_poll_skew_ms, clock_source);
+		if (_midi_timing_diag_enabled) {
+			MIDI_timing_diag_record_poll_delay(processing_delay_ms, raw_poll_skew_ms, clock_source);
+		}
 		
 //		```
 		_MIDI_event_number = global.Midi_event_number;
@@ -386,9 +401,9 @@ function MIDI_process_messages()
 		var canonical_note = "";
 		var is_note_message = (status_type == 144 || status_type == 128);
 		if (is_note_message) {
-			canonical_note = chanter_midi_to_canonical(raw_note_midi, global.MIDI_chanter ?? "default", log_channel);
+			canonical_note = chanter_midi_to_canonical(raw_note_midi, _midi_chanter_name, log_channel);
 			if (string_length(canonical_note) > 0) {
-				var mapped_note = chanter_canonical_to_midi(canonical_note, global.MIDI_chanter ?? "default");
+				var mapped_note = chanter_canonical_to_midi(canonical_note, _midi_chanter_name);
 				if (!is_undefined(mapped_note)) {
 					normalized_note_midi = mapped_note;
 				}
@@ -426,7 +441,9 @@ function MIDI_process_messages()
 			ev_type = "note_off";
 		}
 
-		event_runtime_capture_player(ev_type, normalized_time, normalized_note_midi, log_channel, byte3);
+		if (_runtime_capture_enabled) {
+			event_runtime_capture_player(ev_type, normalized_time, normalized_note_midi, log_channel, byte3);
+		}
 
 		if (_event_history_enabled) {
 			if (_use_legacy_history) {
@@ -471,11 +488,6 @@ function MIDI_process_messages()
 		var out_data1 = byte2;
 		if (is_note_message) {
 			out_data1 = normalized_note_midi;
-		}
-		var _playback_complete = false;
-		if (variable_global_exists("timeline_state") && is_struct(global.timeline_state)
-			&& variable_struct_exists(global.timeline_state, "playback_complete")) {
-			_playback_complete = bool(global.timeline_state.playback_complete);
 		}
 		if (!_suppress_midi_thru && !_playback_complete) {
 			midi_output_message_send_short(_MIDI_output_device, out_status, out_data1, byte3);  //Sends the MIDI Message to the MIDI Output Device

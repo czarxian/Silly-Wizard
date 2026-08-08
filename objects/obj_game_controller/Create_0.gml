@@ -5,23 +5,20 @@
 //  - Initializes MIDI device lists and MIDI event counters used by scr_MIDI and scr_button_scripts.
 // Related scripts: scripts/scr_tune_library/, scripts/scr_MIDI/, scripts/scr_button_scripts/
 
-show_debug_message("=== RUNTIME PATHS ===");
-show_debug_message("working_directory: " + working_directory);
-show_debug_message("Export tunes to: " + working_directory + "tunes/");
-show_debug_message("=====================");
-
-// Set step rate for gameplay/update loop.
-// Higher FPS lowers frame-quantized scheduler jitter (at CPU cost).
-if (!variable_global_exists("GAME_STEP_FPS")) {
-	global.GAME_STEP_FPS = 500;
-}
-var _game_step_fps = max(30, floor(real(global.GAME_STEP_FPS)));
-game_set_speed(_game_step_fps, gamespeed_fps);
-
 // Playback scheduler mode: "step" (per-step due-group pump) or "timesource".
 if (!variable_global_exists("PLAYBACK_SCHEDULER_MODE")) {
 	global.PLAYBACK_SCHEDULER_MODE = "timesource";
 }
+
+// Set step rate for gameplay/update loop.
+// Step mode benefits from higher FPS to reduce frame-quantized dispatch jitter.
+// Timesource mode can run lower FPS while keeping timing precision in the scheduler.
+if (!variable_global_exists("GAME_STEP_FPS")) {
+	global.GAME_STEP_FPS = (string(global.PLAYBACK_SCHEDULER_MODE) == "step") ? 500 : 333;
+}
+var _game_step_fps = max(30, floor(real(global.GAME_STEP_FPS)));
+game_set_speed(_game_step_fps, gamespeed_fps);
+
 if (!variable_global_exists("PLAYBACK_SCHEDULER_STEP_LOOKAHEAD_MS")) {
 	// Small lookahead lets the step scheduler dispatch near-due groups before
 	// they become visibly late under occasional frame stalls.
@@ -184,6 +181,9 @@ if (!variable_global_exists("METRONOME_SAMPLE_PRIORITY")) {
 
 //Game State
 	global.game_state="menu";
+	if (!variable_global_exists("gv_timeline_step_tick_idx")) {
+		global.gv_timeline_step_tick_idx = asset_get_index("gv_timeline_step_tick");
+	}
 	if (!variable_global_exists("pending_layer_mode")) {
 		global.pending_layer_mode = "";
 	}

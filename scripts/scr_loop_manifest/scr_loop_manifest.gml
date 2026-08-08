@@ -103,6 +103,10 @@ function loop_build_manifest(_start_ref, _end_ref, _options) {
 
     var window_events = [];
     var active_notes = {};
+    // Treat the end boundary as strictly exclusive with a small epsilon so
+    // boundary-timestamp events cannot leak into the loop payload due to
+    // floating-point jitter from duration accumulation.
+    var end_exclusive_ms = end_ms - 0.001;
 
     for (var i = 0; i < array_length(events); i++) {
         var ev = events[i];
@@ -120,16 +124,16 @@ function loop_build_manifest(_start_ref, _end_ref, _options) {
                     ? floor(real(active_notes[$ note_key]))
                     : 0;
                 if (ev_type == "note_on") {
-                    if (ev_time < end_ms) active_notes[$ note_key] = count + 1;
+                    if (ev_time < end_exclusive_ms) active_notes[$ note_key] = count + 1;
                 } else {
-                    if (ev_time < end_ms) {
+                    if (ev_time < end_exclusive_ms) {
                         if (count > 0) active_notes[$ note_key] = count - 1;
                     }
                 }
             }
         }
 
-        if (ev_time < start_ms || ev_time >= end_ms) continue;
+        if (ev_time < start_ms || ev_time >= end_exclusive_ms) continue;
 
         var cp = loop_manifest_clone_struct(ev);
         cp.canonical_event_id = i;

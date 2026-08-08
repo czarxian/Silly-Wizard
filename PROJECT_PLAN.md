@@ -32,6 +32,131 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+## Loop Completion Runbook (2026-08-02)
+
+Objective for today:
+- Finish loop behavior end-to-end so next-week work can branch from a stable loop baseline.
+
+Execution states:
+- Done = implemented and runtime-verified.
+- Code done, unverified = implemented but not yet validated in live/post-play.
+- In progress = active fix or active validation.
+- Not started = queued for today.
+
+Current status snapshot:
+1. Time -> musical identity contract (`part`, `measure`, `beat`, `iteration`, ownership): Code done, unverified end-to-end.
+2. Loop selection + endpoint refinement flow in play window: Code done, partially verified.
+3. Loop boundary semantics (start inclusive, end exclusive cutoff at selected boundary): Done in live runtime for tested cases.
+4. Live loop parity (audio/notebeam/score/current marker agree): Partially verified. Audio, score lane, and notebeam are correct in tested cases; tune-structure panel and current marker remain mismatched to pickup-aware structure.
+5. Post-play loop parity (audio history/notebeam/score/current marker in review): Not started.
+6. Loop judge iteration click-through sync (iteration -> structure + score + notebeam projection): Not started.
+7. Tune-structure panel / current-marker alignment with pickup-aware canonical model: In progress.
+
+### Acceptance Criteria (must all pass)
+
+A. Measure-only selection semantics
+- Selecting M1-M8 may display as `M1 B1 - M9 B1`.
+- Actual payload must include all of M8 and exclude M9 B1 content.
+- Audio, score lane, notebeam, and current marker must agree on the same cutoff.
+
+B. Beat-refined selection semantics
+- Start boundary: include content at and after selected start beat.
+- End boundary: exclude content at and after the selected end boundary timestamp.
+- No duplicate or dropped boundary notes.
+
+C. Iteration integrity
+- Loop passes 2+ must preserve per-measure ownership labels (no collapse to one terminal measure).
+- Timeline/tune-structure labels remain musician-facing and stable during loop iterations.
+
+### Test Matrix (today)
+
+Primary tune: Jig of Slurs
+
+Live tests:
+1. Case L1: M1-M8, no beat refinement.
+2. Case L2: M1-M8, end beat adjusted at boundary UI.
+3. Case L3: Internal range sample (M17-M24).
+4. Case L4: Second-part sample selected from tune-structure panel (M17-M25 in current display, validating pickup-aware offset behavior).
+
+For each live case, verify all of:
+- L-audio: audible loop cutoff.
+- L-score: score lane cutoff frame.
+- L-notebeam: note stream cutoff.
+- L-marker: current measure/label behavior.
+
+Post-play tests:
+4. Case P1: Review mode projection for selected loop range.
+5. Case P2: Loop judge iteration list present and accurate.
+6. Case P3: Clicking iteration N reprojects tune structure + score + notebeam to iteration N.
+
+### Work Sequence (today)
+
+1. Boundary correctness first (blocker for everything else). Status: live pass in Jig of Slurs measure-only tests.
+2. Live parity validation (all channels must agree). Status: payload/score/notebeam/audio mostly green; tune-structure panel + current marker still failing.
+3. Align tune-structure panel selection/display with pickup-aware canonical model.
+4. Align live current-measure marker with the same panel/display model.
+5. Post-play projection fixes.
+6. Loop judge iteration click-through fixes.
+7. Final regression pass on one additional straightforward tune and one pickup/partial-structure tune.
+
+### Stop/Go Gate
+
+Do not proceed to post-play and loop-judge fixes until Case L1-L4 are green for live runtime, including tune-structure panel and current-marker agreement.
+
+### Confirmed Requirements Lock (2026-08-02)
+
+These requirements are now locked for implementation unless explicitly changed:
+
+1. Canonical identity
+- Add/keep one stable canonical segment identity key for every structural segment (including pickups/partials).
+- Existing part/measure/nav fields remain usable as attributes, but canonical identity is authoritative for mapping and selection.
+
+2. fp_tune_structure layout
+- Keep fixed-size tiles.
+- Keep 4 tiles per row, 2 rows per group line.
+- For pickup/partial-only rows, only the first tile is occupied; remaining tiles in that row are spacer/unused.
+
+3. Labels
+- Keep existing musician-facing label style for non-pickup rows.
+- Pickup/partial tiles are unlabeled.
+- In Jig of Slurs, major labels remain musician-style (`1`, `9`, `17`, `25`).
+
+4. Single labeling strategy across views
+- Use one shared mapping strategy for panel labels, timeline labels, current marker, review, and judge.
+- Preferred strategy: musician-friendly labels for non-pickup tiles, no labels on pickup/partial tiles.
+- Canonical index values stay internal unless a future explicit UX decision changes this.
+
+5. Range selection behavior
+- Range selection is canonical-contiguous between clicked start and end tiles.
+- Mixed full/pickup selection is valid.
+- Example target behavior: selecting displayed `9` then pickup tile before `17` captures the full intended 48-beat span in Jig of Slurs second pass through part 1.
+
+6. Review/judge projection rule
+- Loop iteration selection in review/judge must project through the same canonical->display mapping contract used by live play.
+- No separate interpretation path in review mode.
+
+### Implementation Update (2026-08-02, fp_tune_structure mapping pass 1)
+
+- Added canonical tile identity metadata to panel projection/hitboxes (`segment_id`, `display_row`, `display_col`, `display_kind`) in `scr_game_viz`.
+- Updated pickup-row projection to fixed-grid behavior: pickup rows render as one occupied tile plus spacer tiles in the remaining 3 columns.
+- Updated panel current-tile highlighting and overlay matching to prefer canonical `segment_id` first, then fall back to nav index/measure matching.
+- Updated hit-test return payload to include canonical segment/display metadata for downstream click and review routing.
+- Next validation target: Jig of Slurs live cases L3/L4 to confirm panel selection and current-marker parity with already-correct payload/audio/notebeam/score behavior.
+
+### Implementation Update (2026-08-03, fp_tune_structure authority reset)
+
+- Replaced single-tune snippet-authoritative segmentation in `gv_build_measure_nav_map` with event-bar boundary authority (`marker` bar anchors / beat-1 boundary fallback).
+- Canonical structural ordering is now explicit and monotonic via `struct_idx` on `measure_nav.entries` (including loop-runtime entries).
+- Canonical model build now propagates `struct_idx` (`canonical_measure_idx = struct_idx`) and treats `partial` segments as pickup-row display kind to render internal short bars as single-tile rows.
+- Resolver/hit-test payloads now carry `struct_idx` (`gv_tune_structure_model_resolve_context_at_time`, `gv_resolve_measure_context`, `gv_measure_nav_hit_test`) so downstream selection/jump logic can consume canonical segment identity.
+
+### Validation Notes (2026-08-02 runtime)
+
+- Jig of Slurs, Case L1 (`M1-M8`): live runtime passed. Loop covered all of measures 1-8 and excluded measure 9 content.
+- Jig of Slurs, internal range selected from tune-structure (`M17-M24` display): actual payload covered source measures 17-23 and excluded 24, indicating panel/display mismatch rather than loop payload regression.
+- Jig of Slurs, panel-selected `M17-M25`: audio, score image, and notebeams matched the intended first 8 measures of part 2 under pickup-aware structure assumptions; remaining disconnect was tune-structure panel and current measure.
+- Working conclusion: live loop payload semantics are currently correct; remaining issue is that `fp_tune_structure` / current-measure UI have not yet been updated to the new pickup-aware canonical structure presentation.
+
 ### Structure-Time Unification Review (2026-07-30)
 
 Goal:
@@ -392,8 +517,8 @@ Implementation update (2026-08-01, Stage 0/1 scaffold):
   - `gv_tune_structure_model_build_panel_entries(_fallback_entries)`
   - `gv_draw_tune_structure_panel(...)` now sources tile rows from canonical model segments when enabled, preserving legacy fallback and source nav identity mapping.
  - Activated `display_row_kind` consumption in panel row policy:
-  - new cfg `timeline_cfg.tune_structure_show_pickup_rows` (default `false`)
-  - pickup rows (`display_row_kind=pickup_row` or measure<1) remain hidden by default for compatibility.
+  - new cfg `timeline_cfg.tune_structure_show_pickup_rows` (default now `true` in current direction)
+  - pickup rows (`display_row_kind=pickup_row` or measure<1) are now shown by default so panel display matches the pickup-aware canonical model.
  - Branch-testing switch: `timeline_cfg.use_canonical_tune_structure_model` default changed to `true` because there is currently no UI control for toggling; fallback-safe read paths remain in place.
  - Highlight consistency update (loop/repeat-safe):
   - tune-structure current-tile detection now prefers source-nav identity by normalized panel time window (with measure fallback), instead of measure-number-only matching.
@@ -1003,6 +1128,7 @@ Constraints:
 - Preserve existing judge/export behavior during the transition.
 - Do not add a new lightweight checkpoint system in this pass; streamline existing runtime work first.
 - Prefer compatibility layers over judge rewrites.
+- Keep the default runtime posture lightweight for active playback: preserve in-memory summary sampling for post-play score/benchmark exports, but keep longform perf logging disabled by default unless a manual run specifically needs file/output traces.
 
 Observed current-state issues:
 - Runtime perf logging is not post-play only; multiple `[RT_BUDGET]` and `[SCHED_SPIKE]` writes happen during playback.

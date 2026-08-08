@@ -275,9 +275,9 @@ function timing_calibration_begin_session() {
     var session = state.calibration_session;
     if (!bool(session.active ?? false)) {
         var cur_offsets = timing_calibration_get_current_offsets();
-        session.snapshot_audio_ms = real(cur_offsets.audio_output_offset_ms ?? 0);
-        session.snapshot_visual_ms = real(cur_offsets.visual_alignment_offset_ms ?? 0);
-        session.snapshot_input_ms = real(cur_offsets.input_capture_offset_ms ?? 0);
+        session.snapshot_audio_ms = real(variable_struct_exists(cur_offsets, "audio_output_offset_ms") ? variable_struct_get(cur_offsets, "audio_output_offset_ms") : 0);
+        session.snapshot_visual_ms = real(variable_struct_exists(cur_offsets, "visual_alignment_offset_ms") ? variable_struct_get(cur_offsets, "visual_alignment_offset_ms") : 0);
+        session.snapshot_input_ms = real(variable_struct_exists(cur_offsets, "input_capture_offset_ms") ? variable_struct_get(cur_offsets, "input_capture_offset_ms") : 0);
         session.active = true;
     }
     session.commit_on_close = false;
@@ -499,7 +499,7 @@ function timing_calibration_start_preview_click() {
     preview.interval_ms = max(350, real(preview.interval_ms ?? 900));
     preview.pulse_ms = clamp(real(preview.pulse_ms ?? 35), 15, preview.interval_ms - 60);
     var offsets = timing_calibration_get_current_offsets();
-    var audio_sched_offset_ms = real(offsets.audio_output_offset_ms ?? 0);
+    var audio_sched_offset_ms = real(variable_struct_exists(offsets, "audio_output_offset_ms") ? variable_struct_get(offsets, "audio_output_offset_ms") : 0);
     var now_engine_ms = timing_get_engine_now_ms();
     var now_audio_ms = now_engine_ms + audio_sched_offset_ms;
     preview.note_off_due_ms = 0;
@@ -545,7 +545,7 @@ function timing_calibration_step_preview_click() {
     output_idx = clamp(output_idx, 0, output_count - 1);
 
     var offsets = timing_calibration_get_current_offsets();
-    var audio_sched_offset_ms = real(offsets.audio_output_offset_ms ?? 0);
+    var audio_sched_offset_ms = real(variable_struct_exists(offsets, "audio_output_offset_ms") ? variable_struct_get(offsets, "audio_output_offset_ms") : 0);
     var now_engine_ms = timing_get_engine_now_ms();
     var now_audio_ms = now_engine_ms + audio_sched_offset_ms;
 
@@ -1825,11 +1825,6 @@ function timing_calibration_capture_jitter_summary() {
         draw_ms: draw
     };
 
-    show_debug_message("[CALIBRATION] jitter snapshot sched_p95=" + string_format(real(sched.p95 ?? 0), 0, 3)
-        + " ctrl_dt_p95=" + string_format(real(ctrl_dt.p95 ?? 0), 0, 3)
-        + " midi_p95=" + string_format(real(midi.p95 ?? 0), 0, 3)
-        + " draw_p95=" + string_format(real(draw.p95 ?? 0), 0, 3));
-
     return state.jitter_summary;
 }
 
@@ -1924,6 +1919,7 @@ function perf_run_summary_append_latest(_jitter_summary = undefined) {
     var out = {
         ts_local: date_datetime_string(now_dt),
         play_id: play_id,
+        metric_clock: "mixed_hires_controller_engine_scheduler",
         mode: mode,
         title: display_title,
         segments: segment_count,
@@ -1954,11 +1950,6 @@ function perf_run_summary_append_latest(_jitter_summary = undefined) {
     if (play_id >= 0) {
         global.perf_run_summary_last_written_play_id = play_id;
     }
-
-    show_debug_message("[PERF_SUMMARY] Appended play_id=" + string(play_id)
-        + " mode=" + mode
-        + " elapsed_ms=" + string_format(elapsed_ms, 0, 3)
-        + " spikes=" + string(spike_count));
 
     return true;
 }
@@ -2318,6 +2309,7 @@ function perf_diag_emit(_line) {
     if (msg == "") return;
     if (variable_global_exists("RT_BUDGET_DIAG_ENABLED") && !global.RT_BUDGET_DIAG_ENABLED) return;
 
+
     var mirror_output = variable_global_exists("PERF_DIAG_OUTPUT_WINDOW_ENABLED")
         && bool(global.PERF_DIAG_OUTPUT_WINDOW_ENABLED);
 
@@ -2367,6 +2359,28 @@ function tune_rt_budget_diag_should_record_runtime_sample() {
 
     // Runtime samples should represent active playback only.
     return _scheduler_active && _events_active;
+}
+
+/// @function tune_rt_budget_diag_now_ms()
+/// @description Return a high-resolution monotonic timestamp in milliseconds for diagnostics.
+/// @returns {real} Monotonic milliseconds from get_timer().
+/// @reads none
+/// @writes none
+function tune_rt_budget_diag_now_ms() {
+    return get_timer() * 0.001;
+}
+
+/// @function tune_rt_budget_diag_since_start_ms(_now_ms)
+/// @description Return elapsed runtime since tune start using high-resolution anchor when available.
+/// @param _now_ms Current high-resolution timestamp in ms.
+/// @returns {real} Elapsed milliseconds since playback start.
+/// @reads global.tune_start_real_hi_ms, global.tune_start_real
+/// @writes none
+function tune_rt_budget_diag_since_start_ms(_now_ms) {
+    var _start_ms = variable_global_exists("tune_start_real_hi_ms")
+        ? real(global.tune_start_real_hi_ms)
+        : real(global.tune_start_real ?? 0);
+    return real(_now_ms) - _start_ms;
 }
 
 /// @function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _scheduled_elapsed)
@@ -2419,6 +2433,11 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
         measure = floor(real(global.timeline_state.current_measure ?? -1));
     }
 
+    if (!variable_global_exists("rt_budget_sched_spike_count")) {
+        global.rt_budget_sched_spike_count = 0;
+    }
+    global.rt_budget_sched_spike_count = floor(real(global.rt_budget_sched_spike_count)) + 1;
+
     perf_diag_emit("[SCHED_SPIKE] late_ms=" + string_format(late_ms, 0, 3)
         + " real_ms=" + string_format(real(_real_elapsed), 0, 3)
         + " sched_ms=" + string_format(real(_scheduled_elapsed), 0, 3)
@@ -2431,10 +2450,6 @@ function tune_rt_budget_diag_trace_scheduler_spike(_late_ms, _real_elapsed, _sch
         + " active_seg=" + string(active_seg)
         + " measure=" + string(measure));
 
-    if (!variable_global_exists("rt_budget_sched_spike_count")) {
-        global.rt_budget_sched_spike_count = 0;
-    }
-    global.rt_budget_sched_spike_count = floor(real(global.rt_budget_sched_spike_count)) + 1;
     global.rt_budget_sched_spike_last_log_ms = now_ms;
 }
 
@@ -3209,6 +3224,44 @@ function tune_rt_budget_diag_record_scheduler_step_pump(_dispatched, _max_overdu
     global.rt_budget_sched_step_last_log_ms = now_ms;
 }
 
+/// @function tune_rt_budget_diag_reset_for_new_run()
+/// @description Reset RT budget rolling windows so each play run reports isolated metrics.
+/// @reads global.RT_BUDGET_DIAG_ENABLED
+/// @writes global.rt_budget_* buffer heads/counts and keyed stats
+/// @objects none
+/// @callers tune_start
+function tune_rt_budget_diag_reset_for_new_run() {
+    if (!variable_global_exists("RT_BUDGET_DIAG_ENABLED") || !global.RT_BUDGET_DIAG_ENABLED) return;
+
+    if (variable_global_exists("rt_budget_sched_late_head")) global.rt_budget_sched_late_head = 0;
+    if (variable_global_exists("rt_budget_sched_late_count")) global.rt_budget_sched_late_count = 0;
+
+    if (variable_global_exists("rt_budget_sched_group_head")) global.rt_budget_sched_group_head = 0;
+    if (variable_global_exists("rt_budget_sched_group_count")) global.rt_budget_sched_group_count = 0;
+
+    if (variable_global_exists("rt_budget_controller_step_head")) global.rt_budget_controller_step_head = 0;
+    if (variable_global_exists("rt_budget_controller_step_count")) global.rt_budget_controller_step_count = 0;
+
+    if (variable_global_exists("rt_budget_midi_step_head")) global.rt_budget_midi_step_head = 0;
+    if (variable_global_exists("rt_budget_midi_step_count")) global.rt_budget_midi_step_count = 0;
+
+    if (variable_global_exists("rt_budget_draw_head")) global.rt_budget_draw_head = 0;
+    if (variable_global_exists("rt_budget_draw_count")) global.rt_budget_draw_count = 0;
+
+    if (variable_global_exists("rt_budget_draw_dt_head")) global.rt_budget_draw_dt_head = 0;
+    if (variable_global_exists("rt_budget_draw_dt_count")) global.rt_budget_draw_dt_count = 0;
+
+    if (variable_global_exists("rt_budget_controller_step_dt_head")) global.rt_budget_controller_step_dt_head = 0;
+    if (variable_global_exists("rt_budget_controller_step_dt_count")) global.rt_budget_controller_step_dt_count = 0;
+
+    if (variable_global_exists("rt_budget_sched_step_head")) global.rt_budget_sched_step_head = 0;
+    if (variable_global_exists("rt_budget_sched_step_count")) global.rt_budget_sched_step_count = 0;
+
+    // Reinitialize keyed rolling stats so prior run windows do not bleed into current run.
+    global.rt_budget_controller_phase_stats = {};
+    global.rt_budget_anchor_draw_stats = {};
+}
+
 /// @function tune_group_events_by_timestamp(_events)
 /// @description Group events by timestamp to batch simultaneous events
 /// @param _events Array of event structs with .time property
@@ -3605,8 +3658,6 @@ function script_tune_callback_batched() {
             }
         }
     }
-    var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
-
     var callback_start_us = get_timer();
     var n_group_events = array_length(group.events);
     var ordered_events = variable_struct_exists(group, "ordered_events") && is_array(group.ordered_events)
@@ -3615,6 +3666,15 @@ function script_tune_callback_batched() {
         ? floor(real(group.ordered_count))
         : array_length(ordered_events);
     if (ordered_count > array_length(ordered_events)) ordered_count = array_length(ordered_events);
+
+    var use_current_note_panel = (!variable_global_exists("enable_current_note_layer") || global.enable_current_note_layer);
+    var met_channel = 9;
+    if (variable_global_exists("METRONOME_CONFIG") && is_struct(global.METRONOME_CONFIG)) {
+        if (variable_struct_exists(global.METRONOME_CONFIG, "channel")) {
+            met_channel = floor(real(variable_struct_get(global.METRONOME_CONFIG, "channel")));
+        }
+    }
+    var route_metronome_to_sample = playback_should_use_metronome_sample_sink();
     
     // Temp: log first and last few groups to verify delta calculation
     if (variable_global_exists("PLAYBACK_DEBUG_GROUP_TIMING")
@@ -3631,8 +3691,6 @@ function script_tune_callback_batched() {
     var latest_group_bar_measure = -1;
     var midi_send_accum_us = 0;
     var midi_send_count = 0;
-    var met_channel = global.METRONOME_CONFIG.channel;
-    var route_metronome_to_sample = playback_should_use_metronome_sample_sink();
     for (var i = 0; i < ordered_count; i++) {
         var ev = ordered_events[i];
         var ev_channel = struct_exists(ev, "channel") ? ev.channel : 0;
@@ -3722,72 +3780,6 @@ function script_tune_callback_batched() {
         if (!is_metronome_midi) {
             event_runtime_capture_planned(struct_exists(ev, "event_id") ? ev.event_id : 0, real_elapsed,
                 struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : undefined);
-
-            var use_legacy_history = !variable_global_exists("EVENT_RUNTIME_CAPTURE_ENABLED") || !global.EVENT_RUNTIME_CAPTURE_ENABLED;
-            if (use_legacy_history) {
-                var ev_type = ev.type;
-                var marker_type = "";
-                if (ev.type == "marker") {
-                    marker_type = struct_exists(ev, "marker_type") ? ev.marker_type : "";
-                    ev_type = "marker_" + string(marker_type);
-                }
-
-                var ev_note = struct_exists(ev, "note") ? ev.note : 0;
-                var ev_velocity = struct_exists(ev, "velocity") ? ev.velocity : 0;
-                var ev_note_canonical = "";
-                if ((ev.type == "note_on" || ev.type == "note_off") && real(ev_note) > 0) {
-                    ev_note_canonical = chanter_midi_to_canonical(ev_note, global.MIDI_chanter ?? "default", ev_channel);
-                }
-                var ev_measure = struct_exists(ev, "measure") ? ev.measure : 0;
-                var ev_beat = struct_exists(ev, "beat") ? ev.beat : 0;
-                var ev_beat_fraction = struct_exists(ev, "beat_fraction") ? ev.beat_fraction : 0;
-                if (ev_beat_fraction == 0 && struct_exists(ev, "division")) {
-                    ev_beat_fraction = ev.division;
-                }
-
-                var audio_offset_ms = 0;
-                var visual_offset_ms = 0;
-                var input_offset_ms = 0;
-                if (variable_global_exists("timeline_cfg") && is_struct(global.timeline_cfg)) {
-                    audio_offset_ms = variable_struct_exists(global.timeline_cfg, "audio_output_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "audio_output_offset_ms"))
-                        : 0;
-                    visual_offset_ms = variable_struct_exists(global.timeline_cfg, "visual_alignment_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "visual_alignment_offset_ms"))
-                        : 0;
-                    input_offset_ms = variable_struct_exists(global.timeline_cfg, "input_capture_offset_ms")
-                        ? real(variable_struct_get(global.timeline_cfg, "input_capture_offset_ms"))
-                        : 0;
-                }
-
-                event_history_add({
-                    timestamp_ms: real_elapsed,
-                    expected_time_ms: expected_elapsed,
-                    actual_time_ms: real_elapsed,
-                    delta_ms: real_elapsed - expected_elapsed,
-                    canonical_time_ms: expected_elapsed,
-                    audio_target_time_ms: expected_elapsed + audio_offset_ms,
-                    visual_target_time_ms: expected_elapsed + visual_offset_ms,
-                    input_aligned_time_ms: real_elapsed + input_offset_ms,
-                    event_type: ev_type,
-                    source: "game",
-                    note_midi: ev_note,
-                    note_midi_raw: ev_note,
-                    note_canonical: ev_note_canonical,
-                    velocity: ev_velocity,
-                    channel: ev_channel,
-                    tune_name: variable_global_exists("current_tune_name") ? global.current_tune_name : "unknown",
-                    event_id: struct_exists(ev, "event_id") ? ev.event_id : 0,
-                    marker_type: marker_type,
-                    measure: ev_measure,
-                    beat: ev_beat,
-                    beat_fraction: ev_beat_fraction,
-                    audio_output_offset_ms: audio_offset_ms,
-                    visual_alignment_offset_ms: visual_offset_ms,
-                    input_capture_offset_ms: input_offset_ms,
-                    loop_iteration: struct_exists(ev, "loop_iteration") ? real(ev.loop_iteration) : 0
-                });
-            }
         }
     }
 

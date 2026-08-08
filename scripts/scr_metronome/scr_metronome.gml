@@ -324,8 +324,8 @@ function metronome_get_effective_quarter_bpm(_bpm, _time_sig) {
 }
 
 /// @function metronome_generate_events(_tune, _settings)
-/// @description Generate metronome MIDI events for all beats in a tune. Settings override the current globals per-call.
-/// @param {struct} _tune  Tune struct (obj_tune instance or equivalent) with .tune_data.tune_metadata
+/// @description Generate metronome MIDI events for all beats in a tune. Resolves metadata from tune_data, a wrapper struct, or obj_tune; settings override current globals per call.
+/// @param {struct|Id.Instance} _tune  Playable-events wrapper, loaded tune_data/wrapper struct, or obj_tune instance
 /// @param {struct} _settings  Optional per-call overrides: {bpm, metronome_mode, metronome_pattern, metronome_volume}
 /// @returns {array}  Array of MIDI event structs for all metronome beats in the tune
 /// @reads   global.METRONOME_CONFIG, global.metronome_mode, global.metronome_mode_options, global.metronome_pattern_selection, global.metronome_pattern_options, global.metronome_volume
@@ -340,10 +340,18 @@ function metronome_generate_events(_tune, _settings) {
     var volume = global.metronome_volume;
     var bpm_override = undefined;
     if (argument_count > 1 && is_struct(_settings)) {
-        if (!is_undefined(_settings.metronome_mode)) mode_index = _settings.metronome_mode;
-        if (!is_undefined(_settings.metronome_pattern)) pattern_selection = _settings.metronome_pattern;
-        if (!is_undefined(_settings.metronome_volume)) volume = _settings.metronome_volume;
-        if (!is_undefined(_settings.bpm)) bpm_override = _settings.bpm;
+        if (variable_struct_exists(_settings, "metronome_mode") && !is_undefined(variable_struct_get(_settings, "metronome_mode"))) {
+            mode_index = variable_struct_get(_settings, "metronome_mode");
+        }
+        if (variable_struct_exists(_settings, "metronome_pattern") && !is_undefined(variable_struct_get(_settings, "metronome_pattern"))) {
+            pattern_selection = variable_struct_get(_settings, "metronome_pattern");
+        }
+        if (variable_struct_exists(_settings, "metronome_volume") && !is_undefined(variable_struct_get(_settings, "metronome_volume"))) {
+            volume = variable_struct_get(_settings, "metronome_volume");
+        }
+        if (variable_struct_exists(_settings, "bpm") && !is_undefined(variable_struct_get(_settings, "bpm"))) {
+            bpm_override = variable_struct_get(_settings, "bpm");
+        }
     }
 	
     var mode_count = array_length(global.metronome_mode_options);
@@ -373,11 +381,25 @@ function metronome_generate_events(_tune, _settings) {
     config.mode = mode;
     
     // Extract metadata the same way scr_preprocess_tune does
-    var meta = _tune.tune_data.tune_metadata;
+    var tune_data = undefined;
+    if (is_struct(_tune)) {
+        if (variable_struct_exists(_tune, "tune_data")) {
+            tune_data = variable_struct_get(_tune, "tune_data");
+        } else if (variable_struct_exists(_tune, "tune_metadata")
+            || variable_struct_exists(_tune, "performance")
+            || variable_struct_exists(_tune, "events")) {
+            tune_data = _tune;
+        }
+    } else if (instance_exists(_tune) && variable_instance_exists(_tune, "tune_data")) {
+        tune_data = variable_instance_get(_tune, "tune_data");
+    }
+    var meta = is_struct(tune_data) && variable_struct_exists(tune_data, "tune_metadata")
+        ? variable_struct_get(tune_data, "tune_metadata")
+        : {};
     
     // Get time signature and tempo with fallbacks
-    var time_sig = metronome_normalize_time_sig(meta.meter ?? "4/4");
-    var tempo_str = string(meta.tempo_default ?? "");
+    var time_sig = metronome_normalize_time_sig(is_struct(meta) && variable_struct_exists(meta, "meter") ? string(variable_struct_get(meta, "meter")) : "4/4");
+    var tempo_str = is_struct(meta) && variable_struct_exists(meta, "tempo_default") ? string(variable_struct_get(meta, "tempo_default")) : "";
     var bpm = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
     if (!is_undefined(bpm_override)) {
         bpm = real(bpm_override);
@@ -452,7 +474,9 @@ function metronome_generate_events(_tune, _settings) {
         }
     }
     
-    var preprocessed = _tune.events;  // These have the calculated .time field
+    var preprocessed = is_struct(_tune) && variable_struct_exists(_tune, "events")
+        ? variable_struct_get(_tune, "events")
+        : [];  // These have the calculated .time field
 
     // Calculate total tune duration
     var tune_length_ms = 0;
@@ -887,10 +911,18 @@ function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
     var volume = global.metronome_volume;
     var bpm_override = undefined;
     if (argument_count > 1 && is_struct(_settings)) {
-        if (!is_undefined(_settings.metronome_mode)) mode_index = _settings.metronome_mode;
-        if (!is_undefined(_settings.metronome_pattern)) pattern_selection = _settings.metronome_pattern;
-        if (!is_undefined(_settings.metronome_volume)) volume = _settings.metronome_volume;
-        if (!is_undefined(_settings.bpm)) bpm_override = _settings.bpm;
+        if (variable_struct_exists(_settings, "metronome_mode") && !is_undefined(variable_struct_get(_settings, "metronome_mode"))) {
+            mode_index = variable_struct_get(_settings, "metronome_mode");
+        }
+        if (variable_struct_exists(_settings, "metronome_pattern") && !is_undefined(variable_struct_get(_settings, "metronome_pattern"))) {
+            pattern_selection = variable_struct_get(_settings, "metronome_pattern");
+        }
+        if (variable_struct_exists(_settings, "metronome_volume") && !is_undefined(variable_struct_get(_settings, "metronome_volume"))) {
+            volume = variable_struct_get(_settings, "metronome_volume");
+        }
+        if (variable_struct_exists(_settings, "bpm") && !is_undefined(variable_struct_get(_settings, "bpm"))) {
+            bpm_override = variable_struct_get(_settings, "bpm");
+        }
     }
 	
     var mode_count = array_length(global.metronome_mode_options);
@@ -906,9 +938,14 @@ function metronome_generate_countin_events(_tune, _settings, _count_in_measures)
     var mode = global.metronome_mode_options[mode_index];
     config.mode = mode;
 	
-    var meta = _tune.tune_data.tune_metadata;
-    var time_sig = metronome_normalize_time_sig(meta.meter ?? "4/4");
-    var tempo_str = string(meta.tempo_default ?? "");
+    var tune_data = is_struct(_tune) && variable_struct_exists(_tune, "tune_data")
+        ? variable_struct_get(_tune, "tune_data")
+        : undefined;
+    var meta = is_struct(tune_data) && variable_struct_exists(tune_data, "tune_metadata")
+        ? variable_struct_get(tune_data, "tune_metadata")
+        : {};
+    var time_sig = metronome_normalize_time_sig(is_struct(meta) && variable_struct_exists(meta, "meter") ? string(variable_struct_get(meta, "meter")) : "4/4");
+    var tempo_str = is_struct(meta) && variable_struct_exists(meta, "tempo_default") ? string(variable_struct_get(meta, "tempo_default")) : "";
     var bpm = (string_length(tempo_str) > 0) ? real(tempo_str) : 120;
     if (!is_undefined(bpm_override)) bpm = real(bpm_override);
     var effective_quarter_bpm = metronome_get_effective_quarter_bpm(bpm, time_sig);

@@ -86,30 +86,31 @@ function find_embellishment(library, pattern, target_note, alt_anchor = 0, alt_t
 
 function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
     // Create a copy so we don't modify the library
-    var result = {
-        emb_id: emb.emb_id,
-        emb_name: emb.emb_name,
-        pattern: emb.pattern,
-        target_note: emb.target_note,
-        notes: emb.notes,
-        timing: emb.timing,
-        anchor_index: emb.anchor_index,
-        category: emb.category
-    };
+    var result = {};
+    if (is_struct(emb)) {
+        variable_struct_set(result, "emb_id", variable_struct_get(emb, "emb_id"));
+        variable_struct_set(result, "emb_name", variable_struct_get(emb, "emb_name"));
+        variable_struct_set(result, "pattern", variable_struct_get(emb, "pattern"));
+        variable_struct_set(result, "target_note", variable_struct_get(emb, "target_note"));
+        variable_struct_set(result, "notes", variable_struct_get(emb, "notes"));
+        variable_struct_set(result, "timing", variable_struct_get(emb, "timing"));
+        variable_struct_set(result, "anchor_index", variable_struct_get(emb, "anchor_index"));
+        variable_struct_set(result, "category", variable_struct_get(emb, "category"));
+    }
     
     // Apply anchor override if present
     if (alt_anchor > 0) {
-        result.anchor_index = alt_anchor;
+        variable_struct_set(result, "anchor_index", alt_anchor);
     }
     
     // Apply timing override if present and valid
     if (alt_timing != "" && alt_timing != undefined) {
-        var lib_timing_array = string_split(emb.timing, ",");
+        var lib_timing_array = is_struct(emb) ? string_split(string(variable_struct_get(emb, "timing")), ",") : [];
         var alt_timing_array = string_split(alt_timing, ",");
         
         // Only use override if element count matches
         if (array_length(alt_timing_array) == array_length(lib_timing_array)) {
-            result.timing = alt_timing;
+            variable_struct_set(result, "timing", alt_timing);
         }
         // Otherwise keep library default (silent fallback)
     }
@@ -132,9 +133,23 @@ function apply_embellishment_overrides(emb, alt_anchor, alt_timing) {
 
 function embellishment_to_notes(emb_def, target_duration_ms, preceding_duration_ms, bpm, grace_override_ms) {
     
-    var notes_array = string_split(emb_def.notes, ",");
-    var timing_array = string_split(emb_def.timing, ",");
-    var anchor_index = emb_def.anchor_index - 1;  // Convert to 0-based
+    var notes_text = "";
+    var timing_text = "";
+    var anchor_value = 0;
+    if (is_struct(emb_def)) {
+        if (variable_struct_exists(emb_def, "notes")) {
+            notes_text = string(variable_struct_get(emb_def, "notes"));
+        }
+        if (variable_struct_exists(emb_def, "timing")) {
+            timing_text = string(variable_struct_get(emb_def, "timing"));
+        }
+        if (variable_struct_exists(emb_def, "anchor_index")) {
+            anchor_value = real(variable_struct_get(emb_def, "anchor_index"));
+        }
+    }
+    var notes_array = string_split(notes_text, ",");
+    var timing_array = string_split(timing_text, ",");
+    var anchor_index = floor(anchor_value) - 1;  // Convert to 0-based
     
     // Semantics:
     // - anchor_index < 0  → all notes steal from target

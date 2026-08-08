@@ -166,20 +166,23 @@ global.timeline_cfg = {
 };
 
 // MIDI timing diagnostics (consumed by scr_MIDI)
-global.MIDI_TIMING_DIAG_ENABLED = true;
+global.MIDI_TIMING_DIAG_ENABLED = false;
 global.MIDI_TIMING_DIAG_LOG_INTERVAL_MS = 1000;
 
 // Realtime timing budget diagnostics (scheduler + visual alignment)
-global.RT_BUDGET_DIAG_ENABLED = true;
+// Keep summary sampling enabled for post-play scores, but disable longform file/output logging by default.
+variable_global_set("RT_BUDGET_DIAG_ENABLED", true);
+global.PERF_DIAG_FILE_LOG_ENABLED = false;
+global.PERF_DIAG_OUTPUT_WINDOW_ENABLED = false;
 global.RT_BUDGET_DIAG_LOG_INTERVAL_MS = 2000;
 global.RT_BUDGET_SCHED_WARMUP_MS = 1000;
-global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = true;
-global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = true;
+global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
+global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;
 global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;
 global.RT_BUDGET_DIAG_INCLUDE_DRAW_INTERVAL = false;
 global.RT_BUDGET_DIAG_INCLUDE_ANCHOR_DRAW = false;
 global.RT_BUDGET_DIAG_INCLUDE_CONTROLLER_PHASES = false;
-global.PLAYBACK_DEBUG_GROUP_TIMING = true;
+global.PLAYBACK_DEBUG_GROUP_TIMING = false;
 if (!variable_global_exists("DIAG_DISABLE_TIMELINE_DRAW")) {
     global.DIAG_DISABLE_TIMELINE_DRAW = false;
 }
@@ -222,6 +225,8 @@ if (global.DIAG_SCHEDULER_FOCUS_MODE) {
     // Keep scheduler-focused telemetry minimal to avoid instrumentation-induced jitter.
     global.timeline_cfg.notebeam_diag_enabled = false;
     global.MIDI_TIMING_DIAG_ENABLED = false;
+    global.PERF_DIAG_FILE_LOG_ENABLED = false;
+    global.PERF_DIAG_OUTPUT_WINDOW_ENABLED = false;
     global.RT_BUDGET_DIAG_INCLUDE_VISUAL_ALIGN = false;
     global.RT_BUDGET_DIAG_INCLUDE_STEP_RUNTIME = false;
     global.RT_BUDGET_DIAG_INCLUDE_STEP_INTERVAL = true;

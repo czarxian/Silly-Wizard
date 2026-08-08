@@ -8,8 +8,8 @@
 //   - tune_build_playable_events(_tune) — Filter and convert raw events to MIDI format
 
 /// @function scr_preprocess_tune(_tune, _overrides)
-/// @description Main preprocessing entry point. Builds a playable MIDI event array from a loaded tune struct. Applies tempo, BPM, gracenote, swing, and head/tail cut overrides; expands embellishments via the library; sorts output by time.
-/// @param {struct} _tune      Loaded tune struct (e.g. from scr_tune_load_json or scr_tune_load_to_struct)
+/// @description Main preprocessing entry point. Resolves a canonical tune_data struct from loaded tune data, a wrapper struct, or obj_tune; builds a sorted playable MIDI event array with tempo, gracenote, swing, and cut overrides.
+/// @param {struct|Id.Instance} _tune  Loaded tune_data struct, wrapper with tune_data, or obj_tune instance
 /// @param {struct|real|undefined} _overrides  Override struct ({bpm, swing_mult, gracenote_override_ms, head_cut_beats, tail_cut_beats}) or bare BPM real
 /// @returns {array}  Playable MIDI event array sorted by time (ms)
 /// @reads   global.emb_library, global.EMBELLISHMENT_CONFIG, global.MIDI_chanter (via chanter functions)
@@ -17,7 +17,19 @@
 /// @objects none
 /// @callers scr_tune_scripts (play path), scr_set_scripts (set play path)
 function scr_preprocess_tune(_tune, _overrides) {
-	if (!_tune.tune_data.is_loaded) {
+	var tune_data = undefined;
+	if (is_struct(_tune)) {
+		if (variable_struct_exists(_tune, "tune_data")) {
+			tune_data = variable_struct_get(_tune, "tune_data");
+		} else if (variable_struct_exists(_tune, "tune_metadata")
+			|| variable_struct_exists(_tune, "performance")
+			|| variable_struct_exists(_tune, "events")) {
+			tune_data = _tune;
+		}
+	} else if (instance_exists(_tune) && variable_instance_exists(_tune, "tune_data")) {
+		tune_data = variable_instance_get(_tune, "tune_data");
+	}
+	if (!is_struct(tune_data) || !variable_struct_exists(tune_data, "is_loaded") || !bool(variable_struct_get(tune_data, "is_loaded"))) {
 		show_debug_message("ERROR: scr_preprocess_tune called on unloaded tune");
 		return array_create(0);
 	}
@@ -26,29 +38,29 @@ function scr_preprocess_tune(_tune, _overrides) {
 	var override_swing = undefined;
 	var override_grace_ms = undefined;
 	if (is_struct(_overrides)) {
-		if (struct_exists(_overrides, "bpm") && !is_undefined(_overrides.bpm)) {
-			override_bpm = _overrides.bpm;
+		if (variable_struct_exists(_overrides, "bpm") && !is_undefined(variable_struct_get(_overrides, "bpm"))) {
+			override_bpm = variable_struct_get(_overrides, "bpm");
 		}
-		if (struct_exists(_overrides, "swing_mult") && !is_undefined(_overrides.swing_mult)) {
-			override_swing = _overrides.swing_mult;
-		} else if (struct_exists(_overrides, "swing") && !is_undefined(_overrides.swing)) {
-			override_swing = _overrides.swing;
+		if (variable_struct_exists(_overrides, "swing_mult") && !is_undefined(variable_struct_get(_overrides, "swing_mult"))) {
+			override_swing = variable_struct_get(_overrides, "swing_mult");
+		} else if (variable_struct_exists(_overrides, "swing") && !is_undefined(variable_struct_get(_overrides, "swing"))) {
+			override_swing = variable_struct_get(_overrides, "swing");
 		}
-		if (struct_exists(_overrides, "gracenote_override_ms") && !is_undefined(_overrides.gracenote_override_ms)) {
-			override_grace_ms = _overrides.gracenote_override_ms;
-		} else if (struct_exists(_overrides, "gracenote_ms") && !is_undefined(_overrides.gracenote_ms)) {
-			override_grace_ms = _overrides.gracenote_ms;
+		if (variable_struct_exists(_overrides, "gracenote_override_ms") && !is_undefined(variable_struct_get(_overrides, "gracenote_override_ms"))) {
+			override_grace_ms = variable_struct_get(_overrides, "gracenote_override_ms");
+		} else if (variable_struct_exists(_overrides, "gracenote_ms") && !is_undefined(variable_struct_get(_overrides, "gracenote_ms"))) {
+			override_grace_ms = variable_struct_get(_overrides, "gracenote_ms");
 		}
 	} else if (!is_undefined(_overrides)) {
 		override_bpm = _overrides;
 	}
 
-	show_debug_message("=== Preprocessing tune: " + string(_tune.tune_data.filename) + " ===");
+	show_debug_message("=== Preprocessing tune: " + string(variable_struct_get(tune_data, "filename")) + " ===");
 	
 	// Extract metadata and events from the struct
-	var meta = _tune.tune_data.tune_metadata;
-	var perf = _tune.tune_data.performance;
-	var events = _tune.tune_data.events;
+	var meta = variable_struct_get(tune_data, "tune_metadata");
+	var perf = variable_struct_get(tune_data, "performance");
+	var events = variable_struct_get(tune_data, "events");
 	events = tune_normalize_pickup_positions(events, meta);
 	
 	// Debug: Check what's in the tune object
@@ -56,8 +68,8 @@ function scr_preprocess_tune(_tune, _overrides) {
 	show_debug_message("    tune_metadata type: " + string(typeof(meta)));
 	show_debug_message("    events length: " + string(array_length(events)));
 	show_debug_message("    performance type: " + string(typeof(perf)));
-	show_debug_message("    is_loaded: " + string(_tune.tune_data.is_loaded));
-	show_debug_message("    filename: " + string(_tune.tune_data.filename));
+	show_debug_message("    is_loaded: " + string(variable_struct_get(tune_data, "is_loaded")));
+	show_debug_message("    filename: " + string(variable_struct_get(tune_data, "filename")));
 	
 	// Tempo & timing - handle empty strings with fallback defaults
 	var tempo_str = string(meta.tempo_default ?? "");
@@ -79,7 +91,7 @@ function scr_preprocess_tune(_tune, _overrides) {
 	show_debug_message("  Tempo: " + string(tempo_bpm) + " BPM (effective quarter BPM " + string(effective_quarter_bpm) + ") -> " + string(ms_per_quarter) + "ms per beat");
 	show_debug_message("  Calculated unit_ms: " + string(unit_ms) + " (for " + unit_note + " notes, multiplier=" + string(unit_multiplier) + ")");
 	
-	var base_str = string(perf.instrument_midi_note_base ?? "");
+	var base_str = string(is_struct(perf) && variable_struct_exists(perf, "instrument_midi_note_base") ? variable_struct_get(perf, "instrument_midi_note_base") : "");
 	var base_midi = (string_length(base_str) > 0) ? real(base_str) : 55;
 	
 	// Tune output channels (0-based): default tune pipes = 2; channel 1 reserved.
@@ -90,10 +102,13 @@ function scr_preprocess_tune(_tune, _overrides) {
 	show_debug_message("  Base MIDI: " + string(base_midi));
 	
 	// Apply swing overrides before building playable events
-	var perf_swing = perf[$ "swing"] ?? "";
-	var swing_value = !is_undefined(override_swing) ? override_swing : (meta[$ "swing"] ?? perf_swing ?? "");
+	var perf_swing = is_struct(perf) && variable_struct_exists(perf, "swing") ? variable_struct_get(perf, "swing") : "";
+	var meta_swing = is_struct(meta) && variable_struct_exists(meta, "swing") ? variable_struct_get(meta, "swing") : "";
+	var meta_grace_override = is_struct(meta) && variable_struct_exists(meta, "gracenote_override_ms") ? variable_struct_get(meta, "gracenote_override_ms") : undefined;
+	var meta_grace_ms = is_struct(meta) && variable_struct_exists(meta, "gracenote_ms") ? variable_struct_get(meta, "gracenote_ms") : undefined;
+	var swing_value = !is_undefined(override_swing) ? override_swing : (meta_swing ?? perf_swing ?? "");
 	var swing_mult = tune_parse_swing_multiplier(swing_value);
-	var grace_override_ms = !is_undefined(override_grace_ms) ? override_grace_ms : (meta[$ "gracenote_override_ms"] ?? meta[$ "gracenote_ms"] ?? undefined);
+	var grace_override_ms = !is_undefined(override_grace_ms) ? override_grace_ms : (meta_grace_override ?? meta_grace_ms ?? undefined);
 	if (swing_mult > 0) {
 		events = tune_apply_swing_to_events(events, tempo_bpm, unit_ms, swing_mult, grace_override_ms);
 	}
@@ -112,11 +127,11 @@ function scr_preprocess_tune(_tune, _overrides) {
 		tail_cut_beats = tune_parse_cut_measures_as_beats(meta[$ "tail_cut_measures"] ?? "", string(meta[$ "meter"] ?? "4/4"));
 	}
 	if (is_struct(_overrides)) {
-		if (struct_exists(_overrides, "head_cut_beats") && !is_undefined(_overrides.head_cut_beats)) {
-			head_cut_beats = tune_parse_cut_beats(_overrides.head_cut_beats);
+		if (variable_struct_exists(_overrides, "head_cut_beats") && !is_undefined(variable_struct_get(_overrides, "head_cut_beats"))) {
+			head_cut_beats = tune_parse_cut_beats(variable_struct_get(_overrides, "head_cut_beats"));
 		}
-		if (struct_exists(_overrides, "tail_cut_beats") && !is_undefined(_overrides.tail_cut_beats)) {
-			tail_cut_beats = tune_parse_cut_beats(_overrides.tail_cut_beats);
+		if (variable_struct_exists(_overrides, "tail_cut_beats") && !is_undefined(variable_struct_get(_overrides, "tail_cut_beats"))) {
+			tail_cut_beats = tune_parse_cut_beats(variable_struct_get(_overrides, "tail_cut_beats"));
 		}
 	}
 	if (head_cut_beats > 0 || tail_cut_beats > 0) {
@@ -126,7 +141,10 @@ function scr_preprocess_tune(_tune, _overrides) {
 	show_debug_message("  → Generated " + string(array_length(playable)) + " playable events");
 	
 	// Debug: Export playable events to CSV for inspection
-	tune_export_playable_events_csv(playable, _tune.tune_data.filename);
+	var tune_filename = is_struct(tune_data) && variable_struct_exists(tune_data, "filename")
+		? string(variable_struct_get(tune_data, "filename"))
+		: "";
+	tune_export_playable_events_csv(playable, tune_filename);
 	
 	return playable;
 }
@@ -542,7 +560,10 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 			var emb_found = find_embellishment(global.emb_library, pattern, target_note_letter, alt_anchor, alt_timing);
 			
 			if (emb_found != undefined) {
-				show_debug_message("    → Found embellishment: " + string(emb_found.emb_name) + " (pattern=" + pattern + ", target=" + target_note_letter + ")");
+				var emb_name = is_struct(emb_found) && variable_struct_exists(emb_found, "emb_name")
+					? string(variable_struct_get(emb_found, "emb_name"))
+					: "";
+				show_debug_message("    → Found embellishment: " + emb_name + " (pattern=" + pattern + ", target=" + target_note_letter + ")");
 				
 				// Find preceding note duration (previous note event)
 				var preceding_duration_ms = _unit_ms;  // Default fallback
@@ -557,7 +578,10 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				var expanded_notes = embellishment_to_notes(emb_found, target_duration_ms, preceding_duration_ms, _tempo, _grace_override_ms);
 				
 				// Calculate embellishment start time based on anchor semantics
-				var anchor_index = emb_found.anchor_index - 1;  // 0-based
+				var emb_anchor_index = is_struct(emb_found) && variable_struct_exists(emb_found, "anchor_index")
+					? real(variable_struct_get(emb_found, "anchor_index"))
+					: 0;
+				var anchor_index = emb_anchor_index - 1;  // 0-based
 				var count_notes = array_length(expanded_notes);
 				var current_emb_time = time_ms;
 				var time_stolen_from_preceding = 0;
@@ -588,8 +612,9 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 				if (time_stolen_from_preceding > 0) {
 					// Find the most recent note_off event and reduce its time
 					for (var k = array_length(playable) - 1; k >= 0; k--) {
-						if (playable[k].type == "note_off") {
-							playable[k].time -= time_stolen_from_preceding;
+						var note_off_ev = playable[k];
+						if (is_struct(note_off_ev) && string(variable_struct_get(note_off_ev, "type") ?? "") == "note_off") {
+							variable_struct_set(note_off_ev, "time", real(variable_struct_get(note_off_ev, "time") ?? 0) - time_stolen_from_preceding);
 							break;
 						}
 					}
@@ -705,18 +730,27 @@ function tune_build_playable_events(_tune, _tempo, _unit_ms, _base_midi, _channe
 	// Add all note-offs
 	for (var i = 0; i < array_length(note_off_queue); i++) {
 		var note_off = note_off_queue[i];
+		var note_off_time = is_struct(note_off) ? real(variable_struct_get(note_off, "time")) : 0;
+		var note_off_note = is_struct(note_off) ? variable_struct_get(note_off, "note") : 0;
+		var note_off_channel = is_struct(note_off) ? variable_struct_get(note_off, "channel") : 0;
+		var note_off_part = is_struct(note_off) ? variable_struct_get(note_off, "part") : 1;
+		var note_off_measure = is_struct(note_off) ? variable_struct_get(note_off, "measure") : 0;
+		var note_off_beat = is_struct(note_off) ? variable_struct_get(note_off, "beat") : 0;
+		var note_off_beat_fraction = is_struct(note_off) ? variable_struct_get(note_off, "beat_fraction") : 0;
+		var note_off_is_embellishment = is_struct(note_off) ? variable_struct_get(note_off, "is_embellishment") : false;
+		var note_off_event_id = is_struct(note_off) ? variable_struct_get(note_off, "event_id") : 0;
 		array_push(playable, {
-			time: note_off.time,
+			time: note_off_time,
 			type: "note_off",
-			note: note_off.note,
+			note: note_off_note,
 			velocity: 0,
-			channel: note_off.channel,
-			part: note_off.part ?? 1,
-			measure: note_off.measure ?? 0,
-			beat: note_off.beat ?? 0,
-			beat_fraction: note_off.beat_fraction ?? 0,
-			is_embellishment: note_off.is_embellishment ?? false,
-			event_id: note_off.event_id ?? 0
+			channel: note_off_channel,
+			part: note_off_part ?? 1,
+			measure: note_off_measure ?? 0,
+			beat: note_off_beat ?? 0,
+			beat_fraction: note_off_beat_fraction ?? 0,
+			is_embellishment: note_off_is_embellishment ?? false,
+			event_id: note_off_event_id ?? 0
 		});
 	}
 	
@@ -1046,7 +1080,10 @@ function chanter_midi_to_canonical(_midi_note, _chanter = undefined, _channel = 
 	if (midi < 0 || midi > 127) return "";
 
 	var profile = chanter_get_profile(_chanter);
-	var canonical = profile.input_midi_to_canonical[$ string(midi)];
+	var input_map = is_struct(profile) && variable_struct_exists(profile, "input_midi_to_canonical")
+		? variable_struct_get(profile, "input_midi_to_canonical")
+		: undefined;
+	var canonical = is_struct(input_map) ? string(input_map[$ string(midi)]) : "";
 	if (is_undefined(canonical)) return "";
 
 	return string(canonical);
@@ -1064,7 +1101,10 @@ function chanter_canonical_to_midi(_canonical_note, _chanter = undefined) {
 	if (canonical == "_fnat") canonical = "=f";
 
 	var profile = chanter_get_profile(_chanter);
-	var midi = profile.canonical_to_midi[$ canonical];
+	var midi_map = is_struct(profile) && variable_struct_exists(profile, "canonical_to_midi")
+		? variable_struct_get(profile, "canonical_to_midi")
+		: undefined;
+	var midi = is_struct(midi_map) ? midi_map[$ canonical] : undefined;
 	if (is_undefined(midi)) return undefined;
 
 	return floor(real(midi));
@@ -1109,11 +1149,14 @@ function chanter_midi_to_display(_midi_note, _channel = -1, _chanter = undefined
 function tune_get_note_map(_chanter, _base_midi = undefined) {
 	var profile = chanter_get_profile(_chanter);
 	var out = {};
-	var names = variable_struct_get_names(profile.canonical_to_midi);
+	var midi_map = is_struct(profile) && variable_struct_exists(profile, "canonical_to_midi")
+		? variable_struct_get(profile, "canonical_to_midi")
+		: undefined;
+	var names = is_struct(midi_map) ? variable_struct_get_names(midi_map) : [];
 
 	for (var i = 0; i < array_length(names); i++) {
 		var canonical = names[i];
-		var midi = profile.canonical_to_midi[$ canonical];
+		var midi = is_struct(midi_map) ? midi_map[$ canonical] : undefined;
 		var legacy_key = canonical;
 		if (canonical == "=c") legacy_key = "_cnat";
 		if (canonical == "=f") legacy_key = "_fnat";
@@ -1153,11 +1196,14 @@ function tune_build_midi_to_letter_map(_note_map) {
 function tune_get_midi_to_letter_alias_map(_chanter) {
 	var profile = chanter_get_profile(_chanter);
 	var aliases = {};
-	var names = variable_struct_get_names(profile.input_aliases);
+	var input_aliases = is_struct(profile) && variable_struct_exists(profile, "input_aliases")
+		? variable_struct_get(profile, "input_aliases")
+		: undefined;
+	var names = is_struct(input_aliases) ? variable_struct_get_names(input_aliases) : [];
 
 	for (var i = 0; i < array_length(names); i++) {
 		var midi_key = names[i];
-		var canonical = string(profile.input_aliases[$ midi_key]);
+		var canonical = string(is_struct(input_aliases) ? input_aliases[$ midi_key] : "");
 		aliases[$ midi_key] = chanter_canonical_to_display(canonical);
 	}
 
@@ -1212,7 +1258,7 @@ function tune_expand_embellishment(_emb_name, _base_midi) {
 /// @description Debug: Print summary of tune events and structure.
 
 function tune_get_event_info(_tune) {
-	var events = _tune.events;
+	var events = is_struct(_tune) && variable_struct_exists(_tune, "events") ? variable_struct_get(_tune, "events") : [];
 	var note_count = 0, emb_count = 0, struct_count = 0;
 	
 	for (var i = 0; i < array_length(events); i++) {
