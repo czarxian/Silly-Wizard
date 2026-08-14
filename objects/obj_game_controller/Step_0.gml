@@ -215,3 +215,8 @@ if (keyboard_check_pressed(ord("P"))) {
 if (keyboard_check_pressed(ord("N"))) {
 	tune_author_create_from_staged();
 }
+
+// ── DEV: I = write/refresh tune.meta.json manifests in every tune folder ─────────
+if (keyboard_check_pressed(ord("I"))) {
+	tune_manifest_backfill_all();
+}

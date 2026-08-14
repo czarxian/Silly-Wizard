@@ -33,22 +33,6 @@ function tune_author_write_text(_path, _text) {
 	return true;
 }
 
-/// @function tune_author_default_meta(_compiled)
-/// @description Build the starting <Tune>.meta.json — the things ABC cannot express.
-/// @param {struct} _compiled  Compiled tune
-/// @returns {struct}  Meta struct
-function tune_author_default_meta(_compiled) {
-	return {
-		schema_version: TUNE_PIPELINE_SCHEMA_VERSION,
-		tune_uid: string(_compiled[$ "tune_uid"]),
-		rhythm_rule_id: "",              // empty = resolve from rhythm_type + meter
-		embellishment_variant_set: "",   // empty = library defaults
-		pulse_profile_id: "",            // empty = no pulse
-		annotations: [],                 // L4
-		tags: []
-	};
-}
-
 /// @function tune_author_index_entry(_compiled, _diag)
 /// @description Build the tune_library index row for a compiled tune.
 /// @param {struct} _compiled  Compiled tune
@@ -124,12 +108,12 @@ function tune_author_log_summary(_compiled) {
 
 /// @function tune_author_create_from_abc(_abc_text, _title_override)
 /// @description Create a tune from ABC: make the folder, write the source, compile, write the
-///              compiled cache and meta, and report. Does not touch tune_library.json.
+///              compiled cache and the tune manifest, and report. Does not touch tune_library.json.
 /// @param {string} _abc_text        Raw ABC source
 /// @param {string} [_title_override] Folder name; defaults to the ABC T: title
 /// @returns {struct}  {ok, tune_uid, folder, compiled, diagnostics, index_entry}
 /// @reads   ABC text
-/// @writes  datafiles/tunes/<Tune>/<Tune>.abc, .compiled.json, .meta.json
+/// @writes  datafiles/tunes/<Tune>/<Tune>.abc, .compiled.json, tune.meta.json
 /// @objects none
 /// @callers manual (dev key N)
 function tune_author_create_from_abc(_abc_text, _title_override = "") {
@@ -167,8 +151,7 @@ function tune_author_create_from_abc(_abc_text, _title_override = "") {
 	_result.ok = _compile[$ "ok"];
 
 	tune_author_write_text(_dir + _folder + ".compiled.json", json_stringify(_compiled));
-	tune_author_write_text(_dir + _folder + ".meta.json",
-		json_stringify(tune_author_default_meta(_compiled)));
+	tune_manifest_write(_dir, tune_manifest_build(_dir, _folder, _compiled));
 
 	_result.index_entry = tune_author_index_entry(_compiled, _diag);
 
@@ -186,7 +169,7 @@ function tune_author_create_from_abc(_abc_text, _title_override = "") {
 ///              runtime keeps playing while the new path is built out.
 /// @returns {struct}  {total, created, updated, failed}
 /// @reads   datafiles/tunes/_incoming/*.abc
-/// @writes  datafiles/tunes/<Tune>/{.abc, .compiled.json, .meta.json}
+/// @writes  datafiles/tunes/<Tune>/{.abc, .compiled.json, tune.meta.json}
 /// @objects none
 /// @callers manual (dev key N)
 function tune_author_create_from_staged() {

@@ -587,6 +587,7 @@
     {"id":{"name":"scr_tune_diagnostics","path":"scripts/scr_tune_diagnostics/scr_tune_diagnostics.yy",},},
     {"id":{"name":"scr_tune_library","path":"scripts/scr_tune_library/scr_tune_library.yy",},},
     {"id":{"name":"scr_tune_load","path":"scripts/scr_tune_load/scr_tune_load.yy",},},
+    {"id":{"name":"scr_tune_manifest","path":"scripts/scr_tune_manifest/scr_tune_manifest.yy",},},
     {"id":{"name":"scr_tune_provenance","path":"scripts/scr_tune_provenance/scr_tune_provenance.yy",},},
     {"id":{"name":"scr_tune_scripts","path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},},
     {"id":{"name":"scr_tune_shadow_diff","path":"scripts/scr_tune_shadow_diff/scr_tune_shadow_diff.yy",},},

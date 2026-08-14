@@ -50,6 +50,7 @@
     {"name":"scr_tune_diagnostics","order":16,"path":"scripts/scr_tune_diagnostics/scr_tune_diagnostics.yy",},
     {"name":"scr_tune_library","order":6,"path":"scripts/scr_tune_library/scr_tune_library.yy",},
     {"name":"scr_tune_load","order":5,"path":"scripts/scr_tune_load/scr_tune_load.yy",},
+    {"name":"scr_tune_manifest","order":23,"path":"scripts/scr_tune_manifest/scr_tune_manifest.yy",},
     {"name":"scr_tune_provenance","order":17,"path":"scripts/scr_tune_provenance/scr_tune_provenance.yy",},
     {"name":"scr_tune_scripts","order":3,"path":"scripts/scr_tune_scripts/scr_tune_scripts.yy",},
     {"name":"scr_tune_shadow_diff","order":20,"path":"scripts/scr_tune_shadow_diff/scr_tune_shadow_diff.yy",},

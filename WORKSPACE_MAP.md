@@ -33,6 +33,11 @@ All stages below are no-op stubs; they define the ordering contract, not behavio
 | `scr_tune_abc_parse.gml` | `abc_populate_embellishment_targets` | Fill each embellishment's preceding and target note letters. | flat events | event emb fields | `abc_parse_to_flat_events` |
 | `scr_tune_abc_parse.gml` | `abc_parse_to_flat_events` | Full ABC -> unit-space event pipeline for one voice. | ABC source | none | `tune_shadow_diff_tune` |
 | `scr_tune_shadow_diff.gml` | `tune_shadow_diff_tune`, `tune_shadow_diff_all` | **Phase 2 validation only.** Diff parser output against exported `tune.json`. Bound to dev key **P** in `obj_game_controller` Step. Delete at cutover. | tune `.abc` + `.json` | debug output only | manual (key P) |
+| `scr_tune_manifest.gml` | `tune_manifest_exists`, `tune_manifest_read`, `tune_manifest_path` | **Tune discovery.** A folder is a tune iff it contains `tune.meta.json` (contract §7, invariant 15). Presence test, never a glob. | `<folder>/tune.meta.json` | none | library scan (future), authoring |
+| `scr_tune_manifest.gml` | `tune_manifest_build`, `tune_manifest_write`, `tune_manifest_detect_artifacts` | Build/refresh a manifest: identity + descriptive metadata + asset map. Authored fields (`tune_uid`, `authored`, `annotations`, `tags`) are preserved across rebuilds. | folder contents, ABC headers, legacy JSON | `<folder>/tune.meta.json` | `tune_author_create_from_abc`, `tune_manifest_backfill_all` |
+| `scr_tune_manifest.gml` | `tune_manifest_backfill_all` | One-shot: write a manifest into every tune folder, inventorying existing assets including `legacy_events`. Bound to dev key **I**. | tunes root | manifests | manual (key I) |
+| `scr_tune_authoring.gml` | `tune_author_create_from_abc`, `tune_author_create_from_staged` | **New-tune workflow.** ABC in -> folder with `.abc`, `.compiled.json`, `tune.meta.json`. Never writes legacy `.json` or `score/`. Bound to dev key **N**. | `datafiles/tunes/_incoming/*.abc` | tune folders | manual (key N) |
+| `scr_tune_authoring.gml` | `tune_author_index_entry`, `tune_author_log_summary` | Build a `tune_library` index row and print a structure summary. Index row is not yet persisted. | compiled tune, diagnostics | none | `tune_author_create_from_abc` |
 
 ### Structure-Time Unification Addendum (2026-07-30)
 

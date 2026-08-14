@@ -297,17 +297,39 @@ Note that `run_build` has **unit-space stages before its ms stages**. Order matt
 
 ## 7. Artifacts on disk
 
-Per tune, in `datafiles/tunes/<Tune>/`:
+Every tune folder contains a **manifest at a fixed filename**. Its presence is what makes the
+folder a tune:
+
+```
+datafiles/tunes/<any folder name>/
+    tune.meta.json          <- discovery is a presence test on this file
+    <Tune>.abc              <- named by the manifest
+    <Tune>.compiled.json
+    <Tune>.json             <- legacy events, during migration
+    score/
+```
 
 | File | Role | Authority |
 |---|---|---|
-| `<Tune>.abc` | Source | **Source of truth** |
-| `<Tune>.meta.json` | What ABC cannot hold: variant set, rhythm-rule override, annotations (L4), judging config | **Source of truth** |
+| `tune.meta.json` | Identity, descriptive metadata, authored settings, annotations (L4), and the asset map | **Source of truth** for identity and authored fields |
+| `<Tune>.abc` | Source | **Source of truth** for the music |
 | `<Tune>.compiled.json` | Compiled layers L0–L2 + provenance | **Cache** — safe to delete, rebuilt on hash mismatch |
 | `score/` + `*.score_snippets.json` | Rendered notation images | Derived, out of critical path |
 
-A tune is a **folder of files**, not a single file. That is accepted: grouping by folder keeps
-related artifacts together and each file has a single clear owner and authority.
+**Discovery is a presence test, never a glob.** A folder is a tune if and only if it contains
+`tune.meta.json`. Enumerating `*.json` and excluding known artifact suffixes is forbidden: it is a
+negative test, so every new artifact type becomes a new way to misidentify a tune.
+
+**Identity lives inside the manifest, not in the folder name.** `tune_uid` is captured once and
+never rederived, so renaming a folder — or a `T:` title that differs from it — cannot change a
+tune's identity or orphan its stored scores.
+
+The manifest mixes two kinds of field, with different authority:
+
+- **Authored** — `tune_uid`, `authored`, `annotations`, `tags`. Source of truth; preserved across
+  rebuilds.
+- **Derived** — `title`, `composer`, `rhythm_type`, `meter`, `tempo_default`, `source`,
+  `artifacts`. Rebuildable from the ABC and a folder listing; never trusted over the ABC.
 
 `datafiles/tunes/tune_library.json` is a **pure index** — derived, rebuildable, and containing only
 what the picker needs. Adding sort/filter features touches only the index, never the pipeline.
@@ -386,7 +408,7 @@ no-op stage. This is what makes §4.2's simplifications and the timing map free 
 3. `build_structure` — L0, incl. pickup beat budget and voice inventory
 4. `build_beat_grid` — L1 in units
 5. `build_events` — L2 per voice, unit space, embellishment attachments
-6. `attach_annotations` — L4 from `<Tune>.meta.json`, with re-key reporting
+6. `attach_annotations` — L4 from `tune.meta.json`, with re-key reporting
 7. `stamp_provenance` + `validate`
 
 ### run_build
@@ -449,6 +471,8 @@ Consequences, all binding:
     load; run building happens on Play, before the scheduler starts. Neither is in the frame loop.
 14. Ornament components do not exist before `run_build` stage 6. No compile-time consumer iterates
     them.
+15. A folder is a tune if and only if it contains `tune.meta.json`. Tune discovery never globs for
+    data files and never maintains a list of excluded suffixes.
 
 ---
 
@@ -473,7 +497,8 @@ The questions raised on 2026-08-14 are settled as follows and folded into the se
 
 1. **Pulse** — per-beat weight multipliers, selected by a named profile keyed on tune type + meter,
    normalised to beat count, applied during ms projection. See §4.1.
-2. **`<Tune>.meta.json`** — kept as a separate file. A tune is a folder of files. See §7.
+2. **`<Tune>.meta.json`** — superseded. Per-tune settings now live in the fixed-name manifest
+   `tune.meta.json`, which also carries identity and the asset map. See §7.
 3. **Compiled cache** — stored beside the source as `<Tune>.compiled.json`. Nothing compiles during
    playback; see invariant 13.
 4. **L5 Performance** — persisted in the same record shape as L2 planned events. See §3.
