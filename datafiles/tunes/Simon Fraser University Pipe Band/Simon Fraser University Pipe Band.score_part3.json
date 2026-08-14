@@ -1,0 +1,140 @@
+{
+      "tune": "Simon Fraser University Pipe Band",
+      "group": "part3",
+      "header": "X:1\nT:Simon Fraser University Pipe Band\nM:7/4\nL:1/8\nR:Retreat\nC:Robert MacNeil\nQ:75\nK:HP",
+      "beats_per_measure": 7,
+      "units_per_measure": 14,
+      "has_pickup": false,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "group": "part3",
+          "group_index": 0,
+          "body": "{g}A3/2B/2{g}f3e{g}fe{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 1,
+          "group": "part3",
+          "group_index": 1,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}f3/2e/2{g}d3A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 2,
+          "group": "part3",
+          "group_index": 2,
+          "body": "{GAG}A2{g}f3d{g}dc{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 3,
+          "group": "part3",
+          "group_index": 3,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 4,
+          "group": "part3",
+          "group_index": 4,
+          "body": "{g}A3/2B/2{g}f3e{g}fe{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 5,
+          "group": "part3",
+          "group_index": 5,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}f3/2e/2{g}d3A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 6,
+          "group": "part3",
+          "group_index": 6,
+          "body": "{GAG}A2{g}f3d{g}dc{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 7,
+          "group": "part3",
+          "group_index": 7,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 8,
+          "group": "part3",
+          "group_index": 8,
+          "body": "{g}c3/2d/2{g}e3A{g}ce{g}d3/2B/2{G}A3{GAG}A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 9,
+          "group": "part3",
+          "group_index": 9,
+          "body": "{g}f3/2g/2{ag}a3f{g}df{g}f3/2e/2{G}e3{g}A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
+          "group": "part3",
+          "group_index": 10,
+          "body": "{GAG}Af{ag}a3f{g}fe{g}d3/2c/2B4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 11,
+          "group": "part3",
+          "group_index": 11,
+          "body": "{g}A3/2B/2{GdG}c3{e}A{g}ce{g}(3d3/2c/2B{Gdc}d4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 12,
+          "group": "part3",
+          "group_index": 12,
+          "body": "{g}A3/2B/2{g}c3{G}c{g}Ac{g}f3/2e/2{g}d3{c}d",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 13,
+          "group": "part3",
+          "group_index": 13,
+          "body": "{g}d3/2e/2{g}f3d{g}Ad{g}d3/2A/2{g}c3{G}c",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 14,
+          "group": "part3",
+          "group_index": 14,
+          "body": "{g}f3/2e/2{g}d3e{g}fA{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 15,
+          "group": "part3",
+          "group_index": 15,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        }
+      ]
+    }

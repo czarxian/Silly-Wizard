@@ -5,7 +5,7 @@
       "units_per_measure": 14,
       "has_pickup": false,
       "unit_note_fraction": 0.125,
-      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
       "snippets": [
         {
           "measure_index": 0,
@@ -100,6 +100,102 @@
         {
           "measure_index": 15,
           "body": "{g}A3/2B/2{GdG}c3{e}A{g}ce{g}(3d3/2c/2B{Gdc}d4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 16,
+          "body": "{g}A3/2B/2{g}f3e{g}fe{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 17,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}f3/2e/2{g}d3A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 18,
+          "body": "{GAG}A2{g}f3d{g}dc{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 19,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 20,
+          "body": "{g}A3/2B/2{g}f3e{g}fe{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 21,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}f3/2e/2{g}d3A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 22,
+          "body": "{GAG}A2{g}f3d{g}dc{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 23,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 24,
+          "body": "{g}c3/2d/2{g}e3A{g}ce{g}d3/2B/2{G}A3{GAG}A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 25,
+          "body": "{g}f3/2g/2{ag}a3f{g}df{g}f3/2e/2{G}e3{g}A",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 26,
+          "body": "{GAG}Af{ag}a3f{g}fe{g}d3/2c/2B4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 27,
+          "body": "{g}A3/2B/2{GdG}c3{e}A{g}ce{g}(3d3/2c/2B{Gdc}d4",
+          "duration_units": 14.000000001,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 28,
+          "body": "{g}A3/2B/2{g}c3{G}c{g}Ac{g}f3/2e/2{g}d3{c}d",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 29,
+          "body": "{g}d3/2e/2{g}f3d{g}Ad{g}d3/2A/2{g}c3{G}c",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 30,
+          "body": "{g}f3/2e/2{g}d3e{g}fA{g}f3/2e/2d4",
+          "duration_units": 14,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 31,
+          "body": "{g}c3/2d/2{g}e3{G}e{g}ec{g}(3f3/2e/2d{g}f4",
           "duration_units": 14.000000001,
           "is_pickup": false
         }

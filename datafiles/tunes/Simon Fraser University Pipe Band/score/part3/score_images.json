@@ -1,0 +1,383 @@
+{
+  "tune": "Simon Fraser University Pipe Band",
+  "beats_per_measure": 7,
+  "units_per_measure": 14,
+  "images": [
+    "m000.png",
+    "m001.png",
+    "m002.png",
+    "m003.png",
+    "m004.png",
+    "m005.png",
+    "m006.png",
+    "m007.png",
+    "m008.png",
+    "m009.png",
+    "m010.png",
+    "m011.png",
+    "m012.png",
+    "m013.png",
+    "m014.png",
+    "m015.png"
+  ],
+  "image_meta": [
+    {
+      "file": "m000.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 406.96,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        59.66,
+        123.91,
+        181.51,
+        214.77,
+        281.29,
+        346.89,
+        null
+      ]
+    },
+    {
+      "file": "m001.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 399.73999999999995,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.94,
+        183.2,
+        249.72,
+        313.96,
+        371.57
+      ]
+    },
+    {
+      "file": "m002.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 378.16999999999996,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        95.12,
+        152.72,
+        185.98,
+        252.5,
+        318.1,
+        null
+      ]
+    },
+    {
+      "file": "m003.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 390.75,
+      "duration_units": 14.000000001,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.94,
+        183.2,
+        249.72,
+        302.17,
+        null
+      ]
+    },
+    {
+      "file": "m004.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 375.3900000000001,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.21,
+        249.72,
+        315.32,
+        null
+      ]
+    },
+    {
+      "file": "m005.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 399.74,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.2,
+        249.72,
+        313.97,
+        371.57
+      ]
+    },
+    {
+      "file": "m006.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 378.1700000000001,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        95.12,
+        152.73,
+        185.99,
+        252.5,
+        318.1,
+        null
+      ]
+    },
+    {
+      "file": "m007.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 390.75999999999976,
+      "duration_units": 14.000000001,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.2,
+        249.72,
+        302.18,
+        null
+      ]
+    },
+    {
+      "file": "m008.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 399.73,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.94,
+        183.2,
+        249.71,
+        313.96,
+        371.57
+      ]
+    },
+    {
+      "file": "m009.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 407.0300000000002,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        99.64,
+        157.24,
+        190.5,
+        257.01,
+        321.26,
+        378.87
+      ]
+    },
+    {
+      "file": "m010.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 397.65999999999985,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        48.09,
+        114.61,
+        172.21,
+        205.47,
+        271.99,
+        337.58,
+        null
+      ]
+    },
+    {
+      "file": "m011.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 421.6999999999998,
+      "duration_units": 14.000000001,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        109.63,
+        167.24,
+        200.49,
+        267.01,
+        319.47,
+        null
+      ]
+    },
+    {
+      "file": "m012.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 399.7400000000007,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.2,
+        249.72,
+        313.97,
+        371.57
+      ]
+    },
+    {
+      "file": "m013.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 399.72999999999956,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.94,
+        183.2,
+        249.71,
+        313.96,
+        371.57
+      ]
+    },
+    {
+      "file": "m014.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 375.3900000000003,
+      "duration_units": 14,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.2,
+        249.72,
+        315.32,
+        null
+      ]
+    },
+    {
+      "file": "m015.png",
+      "width_px": 740,
+      "height_px": 80,
+      "staff_top_px": 24,
+      "staff_bottom_px": 55.7,
+      "content_left_px": 0,
+      "content_right_px": 390.7599999999993,
+      "duration_units": 14.000000001,
+      "is_pickup": false,
+      "beat_anchors": [
+        28.09,
+        92.34,
+        149.95,
+        183.2,
+        249.72,
+        302.18,
+        null
+      ]
+    }
+  ],
+  "pickup_image_index": -1,
+  "group": "part3",
+  "playback_to_image": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "snippet_durations": [
+    14,
+    14,
+    14,
+    14.000000001,
+    14,
+    14,
+    14,
+    14.000000001,
+    14,
+    14,
+    14,
+    14.000000001,
+    14,
+    14,
+    14,
+    14.000000001
+  ]
+}
