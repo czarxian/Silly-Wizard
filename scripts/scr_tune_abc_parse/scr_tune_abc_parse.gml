@@ -138,6 +138,40 @@ function abc_parse_voice_id(_line) {
 	return _payload;
 }
 
+/// @function abc_voice_name(_abc_text, _voice_id, _index)
+/// @description Resolve the pipeline voice name for a declared ABC voice.
+///              Uses `name=` from the V: header when present, otherwise maps by declaration order.
+/// @param {string} _abc_text  Raw ABC source
+/// @param {string} _voice_id  Voice id from the V: header
+/// @param {real}   _index     0-based declaration order
+/// @returns {string}  Voice name, e.g. "pipes_melody"
+function abc_voice_name(_abc_text, _voice_id, _index) {
+	var _lines = abc_normalise_lines(_abc_text);
+	for (var _i = 0; _i < array_length(_lines); _i++) {
+		var _line = string_trim(_lines[_i]);
+		if (string_lower(string_copy(_line, 1, 2)) != "v:") continue;
+		if (abc_parse_voice_id(_line) != string(_voice_id)) continue;
+
+		var _pos = string_pos("name=", string_lower(_line));
+		if (_pos > 0) {
+			var _rest = string_trim(string_delete(_line, 1, _pos + 4));
+			_rest = string_replace_all(_rest, "\"", "");
+			var _sp = string_pos(" ", _rest);
+			if (_sp > 0) _rest = string_copy(_rest, 1, _sp - 1);
+			if (_rest != "") return string_lower(_rest);
+		}
+		break;
+	}
+
+	switch (_index) {
+		case 0:  return "pipes_melody";
+		case 1:  return "pipes_harmony1";
+		case 2:  return "pipes_harmony2";
+		case 3:  return "pipes_harmony3";
+		default: return "voice_" + tune_uid_sanitize_token(_voice_id);
+	}
+}
+
 /// @function abc_extract_body(_abc_text, _voice_id)
 /// @description Flatten ABC body lines into one string, optionally keeping a single voice.
 /// @param {string} _abc_text   Raw ABC source
@@ -264,6 +298,13 @@ function abc_tokenize(_body, _diag = undefined) {
 				_i += 2;
 				continue;
 			}
+			_i++;
+			continue;
+		}
+
+		// Decorations (drum rolls etc.) carry no duration and no grid position.
+		if (_ch == "~") {
+			array_push(_tokens, { type: "decoration", text: "~", pos: _i });
 			_i++;
 			continue;
 		}
@@ -557,6 +598,10 @@ function abc_build_flat_events(_tokens, _consts, _voice = "pipes_melody", _diag 
 		}
 
 		if (_type == "embellishment") {
+			// {null} is an explicit "no ornament here" placeholder in drum notation.
+			var _inner = string_lower(string_replace_all(string_replace_all(_t.text, "{", ""), "}", ""));
+			if (_inner == "null") { _i++; continue; }
+
 			array_push(_events, {
 				type: "embellishment",
 				structure: "",
@@ -856,5 +901,75 @@ function abc_parse_to_flat_events(_abc_text, _voice = "pipes_melody", _diag = un
 		expanded: _expanded,
 		events: _events,
 		phase: _phase
+	};
+}
+
+/// @function abc_parse_tune(_abc_text, _diag, _voice_filter)
+/// @description Parse every declared voice. Each voice is an independent stream: `total_units`
+///              and measure numbering restart at the top of each voice, matching how the legacy
+///              pipeline ran one pass per part.
+/// @param {string} _abc_text      Raw ABC source
+/// @param {struct} [_diag]        Diagnostics collector
+/// @param {array}  [_voice_filter] Voice names to keep; empty keeps every declared voice
+/// @returns {struct}  {headers, consts, voices, events}  where `events` is every voice concatenated
+function abc_parse_tune(_abc_text, _diag = undefined, _voice_filter = []) {
+	var _headers = abc_parse_headers(_abc_text);
+	var _consts = abc_rhythmic_constants(_headers);
+	var _voice_ids = abc_list_voices(_abc_text);
+
+	// No V: headers: the whole body is one implicit melody voice.
+	if (array_length(_voice_ids) == 0) {
+		var _single = abc_parse_to_flat_events(_abc_text, "pipes_melody", _diag);
+		return {
+			headers: _headers,
+			consts: _consts,
+			voices: [{
+				voice_id: "1",
+				voice_name: "pipes_melody",
+				events: _single[$ "events"],
+				phase: _single[$ "phase"]
+			}],
+			events: _single[$ "events"]
+		};
+	}
+
+	var _voices = [];
+	var _all = [];
+
+	for (var _v = 0; _v < array_length(_voice_ids); _v++) {
+		var _id = _voice_ids[_v];
+		var _name = abc_voice_name(_abc_text, _id, _v);
+
+		if (array_length(_voice_filter) > 0) {
+			var _keep = false;
+			for (var _f = 0; _f < array_length(_voice_filter); _f++) {
+				if (string(_voice_filter[_f]) == _name) { _keep = true; break; }
+			}
+			if (!_keep) continue;
+		}
+
+		var _body = abc_extract_body(_abc_text, _id);
+		var _tokens = abc_tokenize(_body, _diag);
+		var _expanded = abc_expand_repeats(_tokens);
+		var _events = abc_build_flat_events(_expanded, _consts, _name, _diag);
+		var _phase = abc_build_bar_phase_map(_events, _consts);
+
+		abc_annotate_positions(_events, _phase, _consts);
+		abc_populate_embellishment_targets(_events);
+
+		array_push(_voices, {
+			voice_id: _id,
+			voice_name: _name,
+			events: _events,
+			phase: _phase
+		});
+		_all = array_concat(_all, _events);
+	}
+
+	return {
+		headers: _headers,
+		consts: _consts,
+		voices: _voices,
+		events: _all
 	};
 }

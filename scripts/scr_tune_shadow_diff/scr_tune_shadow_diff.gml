@@ -95,6 +95,25 @@ function tune_shadow_diff_events(_legacy_events, _parsed_events, _report) {
 	return _report;
 }
 
+/// @function tune_shadow_legacy_voices(_legacy_events)
+/// @description Collect the distinct non-empty voice names present in an exported tune.json.
+/// @param {array} _legacy_events  Events from tune.json
+/// @returns {array}  Voice names in order of first appearance
+function tune_shadow_legacy_voices(_legacy_events) {
+	var _out = [];
+	for (var _i = 0; _i < array_length(_legacy_events); _i++) {
+		var _v = string(_legacy_events[_i][$ "voice"] ?? "");
+		if (_v == "") continue;
+
+		var _found = false;
+		for (var _j = 0; _j < array_length(_out); _j++) {
+			if (_out[_j] == _v) { _found = true; break; }
+		}
+		if (!_found) array_push(_out, _v);
+	}
+	return _out;
+}
+
 /// @function tune_shadow_diff_tune(_tune_dir, _tune_name)
 /// @description Parse one tune's ABC and diff it against the exported tune.json.
 /// @param {string} _tune_dir   Folder containing the tune files, ending with '/'
@@ -133,7 +152,19 @@ function tune_shadow_diff_tune(_tune_dir, _tune_name) {
 		return _report;
 	}
 
-	var _parsed = abc_parse_to_flat_events(_abc, "pipes_melody", _report.diagnostics);
+	// The exporter strips V: headers, so a multi-voice export cannot be reconstructed
+	// from its own .abc. Report rather than pretend to compare.
+	var _legacy_voices = tune_shadow_legacy_voices(_legacy_events);
+	var _abc_voices = abc_list_voices(_abc);
+	if (array_length(_legacy_voices) > 1 && array_length(_abc_voices) == 0) {
+		_report.status = "abc_missing_voices";
+		tune_diagnostics_add(_report.diagnostics, TUNE_DIAG_WARNING, "abc_missing_voice_headers",
+			"Export has " + string(array_length(_legacy_voices))
+			+ " voices but the .abc declares none; re-export with V: headers to compare.");
+		return _report;
+	}
+
+	var _parsed = abc_parse_tune(_abc, _report.diagnostics, _legacy_voices);
 	var _parsed_events = _parsed[$ "events"];
 
 	_report.legacy_count = array_length(_legacy_events);
@@ -209,7 +240,6 @@ function tune_shadow_diff_all() {
 		if (_status == "match")        _summary.matched += 1;
 		else if (_status == "differs") _summary.differed += 1;
 		else                           _summary.skipped += 1;
-
 		array_push(_summary.reports, _report);
 		tune_shadow_diff_log_report(_report);
 	}
