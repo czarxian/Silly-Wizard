@@ -25,6 +25,14 @@ All stages below are no-op stubs; they define the ordering contract, not behavio
 | `scr_tune_compile.gml` | `tune_compile_stages`, `tune_compile` | Ordered compile stage list and runner (§10). Pure and cacheable; never runs during playback (invariant 13). | ABC text, tune config | none | not yet wired; will be called from tune load |
 | `scr_tune_compile.gml` | `run_build_stages` + `run_build_stage_*` | Ordered run-build stage list. Rhythm rules act in unit space before ms; timing map after ms; embellishments last. | run context | none | not yet wired; will be called on Play |
 | `scr_tune_compile.gml` | `tune_compiled_validate` (+ `_measures`, `_events`, `_annotations`) | Acceptance gate for every later phase: UID uniqueness, pickup complement pairing, no stored ornament components, annotation targets resolve. | compiled tune | none | `tune_compile`, phase acceptance tests |
+| `scr_tune_abc_parse.gml` | `abc_tokenize`, `abc_expand_repeats` | ABC text -> tokens -> repeat-flattened tokens. Reproduces `TokenizeABC` / `ExpandRepeats` semantics. | ABC body text | none | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_parse_headers`, `abc_extract_body`, `abc_list_voices`, `abc_parse_voice_id` | ABC information fields, voice inventory, and body flattening per voice. | ABC source | none | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_rhythmic_constants`, `abc_parse_fraction`, `abc_meter_to_timesig` | Meter/unit-length maths: units per beat, beats per measure, units per measure. | header struct | none | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_build_flat_events` | Tokens -> unit-space events with running `total_units`, handling ties, tuplets and broken rhythm. | tokens, rhythmic constants | none | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_build_bar_phase_map`, `abc_position_from_units`, `abc_annotate_positions` | Downbeat anchors for initial and internal pickups; measure/beat/division from unit totals. Measure 0 means inside a pickup. | flat events, constants | event position fields | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_populate_embellishment_targets` | Fill each embellishment's preceding and target note letters. | flat events | event emb fields | `abc_parse_to_flat_events` |
+| `scr_tune_abc_parse.gml` | `abc_parse_to_flat_events` | Full ABC -> unit-space event pipeline for one voice. | ABC source | none | `tune_shadow_diff_tune` |
+| `scr_tune_shadow_diff.gml` | `tune_shadow_diff_tune`, `tune_shadow_diff_all` | **Phase 2 validation only.** Diff parser output against exported `tune.json`. Bound to dev key **P** in `obj_game_controller` Step. Delete at cutover. | tune `.abc` + `.json` | debug output only | manual (key P) |
 
 ### Structure-Time Unification Addendum (2026-07-30)
 

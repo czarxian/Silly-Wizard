@@ -205,3 +205,8 @@ if (keyboard_check_pressed(ord("O"))) {
 		show_debug_message("O: external audio loopback pulse stage triggered, ok=" + string(_ok_o));
 	}
 }
+
+// ── DEV: P = shadow-diff the GML ABC parser against exported tune.json ──────
+if (keyboard_check_pressed(ord("P"))) {
+	tune_shadow_diff_all();
+}
