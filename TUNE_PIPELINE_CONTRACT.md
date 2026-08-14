@@ -54,6 +54,43 @@ Scope of a source edit: editing a measure re-keys only that measure's events. Ed
 *counts* (adding/removing bars or repeats) re-keys everything after it — this is unavoidable and
 is why `tune_compile` reports a re-key diff (see §9).
 
+### 2.1.1 Ornament components
+
+A grid reference addresses a **musical position**, and one position commonly carries many sounded
+notes. "Measure 17, beat 1 is a heavy throw to D" is one musical statement; playing it produces
+several notes, one of which is a `c` that must sound fourth.
+
+These are **not** separate grid positions. Grace notes have no unit position of their own — they
+steal time from the neighbouring melody notes, and how many there are and how long they last
+depends on the variant, grace ms and tempo, none of which are known at compile time. So ornament
+components are addressed **relative to their anchor**:
+
+```
+<anchor_event_uid>/e<component_index>          // 1-based, in played order
+
+pipes_melody:m:A:17:b1:d0:1                    // the melody note D — one compiled event
+pipes_melody:m:A:17:b1:d0:1/e4                 // the c, fourth thing played
+```
+
+Consequences:
+
+- The anchor's own UID never changes because an ornament precedes it. The melody D is still at
+  `b1:d0` even though the throw delays when it actually sounds — the UID is a grid reference,
+  not a time. This is §2 restated.
+- Changing grace duration or tempo re-keys nothing. Changing the *variant* re-keys only the
+  components under that one anchor.
+- An annotation (§9.1) can target the anchor — "judge this throw" — or a single component.
+- One component is flagged `is_anchor`, matching the existing library `anchor_index` semantics.
+  Components before it steal from the preceding note; the anchor and those after steal from the
+  target.
+
+Note the division of labour: `ordinal` in the base UID disambiguates **simultaneous** events
+(chords, unisons, voices landing together), while `/eN` disambiguates **sequential** components of
+one ornament. Different problems, different mechanisms.
+
+Compiled files (L2) store the attachment, not the components. Components come into existence at
+`run_build` stage 6, and their UIDs are generated there.
+
 ### 2.2 Run-space references
 
 Set segments and loop iterations exist only at run time and are **never stored** in a tune file:
@@ -85,7 +122,7 @@ Notes:
   not deferrable.
 - **L4 is a layer, not metadata.** Judging criteria are annotations pinned to grid references,
   so they inherit UID stability, set composition, loop handling and provenance for free.
-  See §7 for the envelope.
+  See §9.1 for the envelope.
 - **L5 is a layer, and it shares L2's record shape.** A captured performance event carries the same
   fields as a planned one (grid reference, time, duration, voice) so visualisation, scoring and
   export code can treat planned and played uniformly, and so timing-map capture can consume L5
@@ -111,7 +148,7 @@ Constraints:
 3. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
    to the run's provenance (§8), so a stored score can be interpreted later.
 
-### 4.2 Pulse profiles
+### 4.1 Pulse profiles
 
 Pulse is represented as **per-beat weight multipliers**, selected by a **named profile keyed on
 tune type + time signature** — not hand-authored per tune. Example, a 4/4 march pulsing 1 and 3:
@@ -130,7 +167,7 @@ tempo and break loops, set timing and metronome alignment.
 Pulse therefore applies during **ms projection**, not in unit space — it moves beats in time while
 leaving the unit grid untouched (§10, `run_build` stage 4).
 
-### 4.1 Agreed initial simplifications
+### 4.2 Agreed initial simplifications
 
 These reduce scope without constraining the schema:
 
@@ -269,7 +306,7 @@ annotation = {
 ## 10. Stage registry and ordering
 
 `tune_compile` and `run_build` are each an **ordered list of stages**. A deferred feature is a
-no-op stage. This is what makes §4.1's simplifications and the timing map free to defer.
+no-op stage. This is what makes §4.2's simplifications and the timing map free to defer.
 
 ### tune_compile
 1. `parse_abc` — tokenise, validate, diagnostics
@@ -284,7 +321,7 @@ no-op stage. This is what makes §4.1's simplifications and the timing map free 
 1. `resolve_config` — rule chain: defaults → tune → player → set segment
 2. `apply_rhythm_rules` — **unit space**
 3. `compose_performance` — set segments, cuts, repeats, loop expansion
-4. `project_to_ms` — beat grid and events gain ms; **beat pulse weights applied here** (§4.2)
+4. `project_to_ms` — beat grid and events gain ms; **beat pulse weights applied here** (§4.1)
 5. `apply_timing_map` — L3 warp *(deferrable no-op)*
 6. `resolve_embellishments` — expand attachments relative to final anchor ms
 7. `assign_channels` + `emit_run_events`
@@ -349,7 +386,7 @@ Deferring these costs nothing provided §2, §6 and §10 are honoured.
 | Judging criteria library | Envelope defined in §9.1; contents are later work |
 | Score image rendering strategy (PNG vs sprite notation) | Off the critical path; drawing is currently disabled. L0 must retain ABC beam-grouping to keep sprite notation possible |
 | Tune authoring UI, diagnostics panel, library sort/filter | Index (§7) decouples these from the pipeline |
-| Per-measure and à-la-carte rhythm rules | §4.1 |
+| Per-measure and à-la-carte rhythm rules | §4.2 |
 | Porting Excel `modTuneLoader` offline analysis | Not on the runtime path |
 
 ---
@@ -359,7 +396,7 @@ Deferring these costs nothing provided §2, §6 and §10 are honoured.
 The questions raised on 2026-08-14 are settled as follows and folded into the sections above.
 
 1. **Pulse** — per-beat weight multipliers, selected by a named profile keyed on tune type + meter,
-   normalised to beat count, applied during ms projection. See §4.2.
+   normalised to beat count, applied during ms projection. See §4.1.
 2. **`<Tune>.meta.json`** — kept as a separate file. A tune is a folder of files. See §7.
 3. **Compiled cache** — stored beside the source as `<Tune>.compiled.json`. Nothing compiles during
    playback; see invariant 13.
