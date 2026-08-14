@@ -581,7 +581,6 @@
     {"id":{"name":"scr_scoring","path":"scripts/scr_scoring/scr_scoring.yy",},},
     {"id":{"name":"scr_set_scripts","path":"scripts/scr_set_scripts/scr_set_scripts.yy",},},
     {"id":{"name":"scr_timing_utils","path":"scripts/scr_timing_utils/scr_timing_utils.yy",},},
-    {"id":{"name":"scr_tune_abc_ingest","path":"scripts/scr_tune_abc_ingest/scr_tune_abc_ingest.yy",},},
     {"id":{"name":"scr_tune_abc_parse","path":"scripts/scr_tune_abc_parse/scr_tune_abc_parse.yy",},},
     {"id":{"name":"scr_tune_authoring","path":"scripts/scr_tune_authoring/scr_tune_authoring.yy",},},
     {"id":{"name":"scr_tune_compile","path":"scripts/scr_tune_compile/scr_tune_compile.yy",},},

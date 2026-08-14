@@ -1,14 +1,20 @@
-Drop raw source `.abc` files here (one per tune, named `<Whatever>.abc`).
+Drop raw source `.abc` files here (one per tune). Filenames don't matter — the tune folder
+is taken from the ABC `T:` title.
 
-Then in-game:
-  I         scan and report  — matches each file to a tune folder, changes nothing
-  Shift+I   apply            — copies matched files to datafiles/tunes/<Tune>/<Tune>.abc
+Then in-game press **N**.
 
-Matching normalises case, punctuation and a leading "The", and checks both the filename
-and the ABC `T:` title against existing tune folder names.
+For each file it writes, into `datafiles/tunes/<T: title>/`:
+    <Tune>.abc             your source, verbatim
+    <Tune>.compiled.json   compiled layers L0/L1/L2 + provenance
+    <Tune>.meta.json       defaults for rhythm rule, variant set, pulse, annotations
 
-Files reported as `new` or `ambiguous` are never copied — resolve those by renaming the
-file to match the intended tune folder.
+The folder is created if absent and updated if present. Legacy `<Tune>.json`, `score/` and
+snippet files are never written — those are what the current runtime plays, and they stay
+untouched until the new path can play a tune.
 
-This folder is a staging area only. The authoritative source for a tune is
-`datafiles/tunes/<Tune>/<Tune>.abc` — see TUNE_PIPELINE_CONTRACT.md §7.
+Because the folder name comes from the `T:` title, a title that differs from an existing folder
+produces a *new folder* rather than overwriting the wrong tune. If an unexpected folder appears,
+the `T:` title and the existing folder name disagree — fix the title, delete the stray folder,
+and press N again.
+
+See TUNE_PIPELINE_CONTRACT.md §7.

@@ -2,7 +2,10 @@
 // See TUNE_PIPELINE_CONTRACT.md §7. This is the authoring path that replaces the Excel export.
 //
 // Not yet wired to playback: run_build (ms projection, ornament expansion) is still stubbed,
-// so a tune created here compiles and validates but does not play.
+// so a tune created here compiles and validates but does not play. Legacy `<Tune>.json` and
+// `score/` are therefore left untouched — they are what the current runtime plays.
+
+#macro TUNE_STAGING_FOLDER "_incoming"
 
 /// @function tune_author_slug(_title)
 /// @description Turn a tune title into a folder-safe name.
@@ -177,17 +180,19 @@ function tune_author_create_from_abc(_abc_text, _title_override = "") {
 }
 
 /// @function tune_author_create_from_staged()
-/// @description Create a tune from each ABC in the staging folder that has no tune folder yet.
-///              This is the "new tune" path; existing tunes are left to the ingest flow.
-/// @returns {struct}  {created, skipped}
+/// @description Compile every ABC in the staging folder into its tune folder, creating the folder
+///              when absent and updating it when present. Only pipeline artifacts are written:
+///              legacy `<Tune>.json`, `score/` and snippet files are never touched, so the current
+///              runtime keeps playing while the new path is built out.
+/// @returns {struct}  {total, created, updated, failed}
 /// @reads   datafiles/tunes/_incoming/*.abc
-/// @writes  new tune folders
+/// @writes  datafiles/tunes/<Tune>/{.abc, .compiled.json, .meta.json}
 /// @objects none
 /// @callers manual (dev key N)
 function tune_author_create_from_staged() {
 	var _root = scr_data_paths_get_category_root("tunes");
-	var _stage = _root + TUNE_INGEST_FOLDER + "/";
-	var _summary = { created: 0, skipped: 0 };
+	var _stage = _root + TUNE_STAGING_FOLDER + "/";
+	var _summary = { total: 0, created: 0, updated: 0, failed: 0 };
 
 	if (!directory_exists(_stage)) {
 		show_debug_message("[TUNE] staging folder not found: " + _stage);
@@ -206,20 +211,26 @@ function tune_author_create_from_staged() {
 		var _abc = tune_shadow_read_text(_stage + _files[_i]);
 		if (_abc == "") continue;
 
+		_summary.total += 1;
+
 		var _headers = abc_parse_headers(_abc);
 		var _folder = tune_author_slug(string(_headers[$ "t"] ?? ""));
-
-		if (_folder != "" && directory_exists(_root + _folder + "/")) {
-			show_debug_message("[TUNE] skip (folder exists): " + _folder);
-			_summary.skipped += 1;
-			continue;
-		}
+		var _existed = (_folder != "") && directory_exists(_root + _folder + "/");
 
 		var _r = tune_author_create_from_abc(_abc);
-		if (_r[$ "ok"]) _summary.created += 1; else _summary.skipped += 1;
+		if (!_r[$ "ok"]) {
+			_summary.failed += 1;
+		} else if (_existed) {
+			_summary.updated += 1;
+		} else {
+			_summary.created += 1;
+		}
 	}
 
-	show_debug_message("[TUNE] SUMMARY created=" + string(_summary.created)
-		+ " skipped=" + string(_summary.skipped));
+	show_debug_message("[TUNE] SUMMARY total=" + string(_summary.total)
+		+ " created=" + string(_summary.created)
+		+ " updated=" + string(_summary.updated)
+		+ " failed=" + string(_summary.failed));
+	show_debug_message("[TUNE] legacy .json and score/ files were not modified.");
 	return _summary;
 }
