@@ -66,30 +66,49 @@ depends on the variant, grace ms and tempo, none of which are known at compile t
 components are addressed **relative to their anchor**:
 
 ```
-<anchor_event_uid>/e<component_index>          // 1-based, in played order
+<anchor_event_uid>/<placement>:e<component_index>     // placement = lead | trail; index 1-based, played order
 
-pipes_melody:m:A:17:b1:d0:1                    // the melody note D — one compiled event
-pipes_melody:m:A:17:b1:d0:1/e4                 // the c, fourth thing played
+pipes_melody:m:A:17:b1:d0:1                           // the melody note D — one compiled event
+pipes_melody:m:A:17:b1:d0:1/lead:e4                   // the c, fourth thing played in the throw
 ```
+
+**Placement.** Ornaments may precede the melody note (`lead` — the common pipe case) or follow it
+(`trail` — piobaireachd and similar). Placement is a property of the attachment, declared by the
+embellishment library, not inferred from position in the event list. A single anchor may carry
+both a leading and a trailing attachment.
+
+Placement is part of the component address so that adding a trailing ornament never renumbers the
+leading components, and vice versa. Annotations survive.
 
 Consequences:
 
-- The anchor's own UID never changes because an ornament precedes it. The melody D is still at
-  `b1:d0` even though the throw delays when it actually sounds — the UID is a grid reference,
-  not a time. This is §2 restated.
+- The anchor's own UID never changes because an ornament precedes or follows it. The melody D is
+  still at `b1:d0` even though a leading throw delays when it actually sounds — the UID is a grid
+  reference, not a time. This is §2 restated.
 - Changing grace duration or tempo re-keys nothing. Changing the *variant* re-keys only the
-  components under that one anchor.
+  components under that one anchor and placement.
 - An annotation (§9.1) can target the anchor — "judge this throw" — or a single component.
-- One component is flagged `is_anchor`, matching the existing library `anchor_index` semantics.
-  Components before it steal from the preceding note; the anchor and those after steal from the
-  target.
+- **Time is stolen from a different neighbour depending on placement.**
+  - `lead`: components before `anchor_index` steal from the *preceding* note; the anchor component
+    and those after steal from the *target* (the melody note). This is the existing library
+    `anchor_index` semantics, unchanged.
+  - `trail`: components steal from the *tail* of the melody note they follow. No component lands
+    on the beat — the melody note itself does — so `anchor_index` is not used.
 
 Note the division of labour: `ordinal` in the base UID disambiguates **simultaneous** events
-(chords, unisons, voices landing together), while `/eN` disambiguates **sequential** components of
-one ornament. Different problems, different mechanisms.
+(chords, unisons, voices landing together), while `/<placement>:eN` disambiguates **sequential**
+components of one ornament. Different problems, different mechanisms.
 
-Compiled files (L2) store the attachment, not the components. Components come into existence at
-`run_build` stage 6, and their UIDs are generated there.
+**When components exist.** Compiled files (L2) store the *attachment*, not the components. An
+ornament is a single opaque marker on one melody event until `run_build` stage 6, which is where
+components — and their UIDs — are generated. Therefore:
+
+- Compile-time consumers (structure panel, score images, library index) see one event carrying
+  `has_ornament` and a placement list. They never enumerate components and never need to.
+- Run-time consumers (scheduler, notebeam, scoring, MIDI) see the expanded components.
+
+Nothing upstream of stage 6 may iterate ornament components, because the component count is not
+known until the variant is resolved.
 
 ### 2.2 Run-space references
 
@@ -136,7 +155,7 @@ Notes:
 |---|---|---|---|
 | **Parser rules** | L0, L1, L2 from ABC source | global | code |
 | **Rhythm rules** | `note_pointing`: transforms L2 durations (unit space)<br>`beat_pulse`: per-beat weights applied to L1 during ms projection | tune type + meter → tune → player | `datafiles/config/rhythm_rules.json` |
-| **Embellishment library** | expands attachments in L2 into events | pattern + target note + **voice** + variant | `datafiles/embellishments.json` |
+| **Embellishment library** | expands attachments in L2 into events | pattern + target note + **voice** + **placement** + variant | `datafiles/embellishments.json` |
 | **Timing rules** | projects the grid onto ms | player → tune → set segment | player prefs + tune meta |
 
 Constraints:
@@ -144,8 +163,12 @@ Constraints:
 1. **Rules never rewrite the source.** Rhythm rules do not modify parsing — they transform the
    Events layer after it exists. The ABC remains a faithful, renderable score at all times.
 2. **The embellishment library is keyed by voice.** A drum flam and a pipe doubling are different
-   rulebooks sharing one mechanism. Lookup key is `pattern + target_note + voice + variant`.
-3. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
+   rulebooks sharing one mechanism. Lookup key is
+   `pattern + target_note + voice + placement + variant`.
+3. **Placement is declared, not inferred.** The library record says whether an ornament leads or
+   trails its melody note (§2.1.1). The parser binds an attachment to its anchor using that
+   declaration plus adjacency in the ABC — never by blindly scanning forward for the next note.
+4. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
    to the run's provenance (§8), so a stored score can be interpreted later.
 
 ### 4.1 Pulse profiles
@@ -373,6 +396,8 @@ Consequences, all binding:
 12. Pulse weights normalise to the beat count; pulse never changes measure duration.
 13. **No `tune_compile` or `run_build` work occurs during active playback.** Compilation happens at
     load; run building happens on Play, before the scheduler starts. Neither is in the frame loop.
+14. Ornament components do not exist before `run_build` stage 6. No compile-time consumer iterates
+    them.
 
 ---
 
