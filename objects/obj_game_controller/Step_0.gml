@@ -210,3 +210,8 @@ if (keyboard_check_pressed(ord("O"))) {
 if (keyboard_check_pressed(ord("P"))) {
 	tune_shadow_diff_all();
 }
+
+// ── DEV: I = report staged ABC ingest, Shift+I = copy matched files into tune folders ──
+if (keyboard_check_pressed(ord("I"))) {
+	tune_ingest_scan(keyboard_check(vk_shift));
+}
