@@ -133,6 +133,22 @@ model expresses all three cases; the ABC cannot.
 A `"trail"` ornament with no preceding note in the same voice (start of tune, start of a part
 after a cut) is a diagnostic warning, and falls back to `"lead"` on the following note.
 
+### 2.1.3 Provisional: piobaireachd
+
+Piobaireachd has not yet been authored in ABC in this project. The `anchor` model above is expected
+to cover most cases, but three assumptions are **provisional** and may need to flex:
+
+| Assumption | Why it may not hold | Likely accommodation |
+|---|---|---|
+| Ornament components are grace notes of near-constant ms | Taorluath, crunluath and cadences are rhythmically significant, not crushed | Add `timing_mode` to library records: `grace` (constant ms, current behaviour) vs `proportional` (fraction of host duration) |
+| A measure has a fixed beat count | The ùrlar is often unmetered or freely phrased | Allow `meter: free` in L0; L1 falls back to note-onset positions, and pulse profiles do not apply |
+| One `anchor` value describes the whole ornament | Long ornaments may need components on both sides of the host | Per-component placement, or a second attachment |
+
+**What must not flex** to accommodate any of this: the coordinate system (§2), the compile/run
+boundary (§6), and the stage ordering (§10). Those are what make the accommodations cheap. If a
+piobaireachd requirement appears to demand changing one of them, that is a signal the requirement
+has been modelled wrongly — revisit before changing the foundation.
+
 **When components exist.** Compiled files (L2) store the *attachment*, not the components. An
 ornament is a single opaque marker on one host event until `run_build` stage 6, which is where
 components — and their UIDs — are generated. Therefore:
