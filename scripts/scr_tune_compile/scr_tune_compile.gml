@@ -36,6 +36,7 @@ function tune_compile_context(_abc_text, _tune_config, _tune_uid = "") {
 		config: is_struct(_tune_config) ? _tune_config : {},
 		compiled: tune_compiled_create_empty(_tune_uid),
 		diagnostics: tune_diagnostics_create(),
+		parsed: undefined,
 		tokens: []
 	};
 }
@@ -45,34 +46,220 @@ function tune_compile_context(_abc_text, _tune_config, _tune_uid = "") {
 // ---------------------------------------------------------------------------
 
 /// @function tune_compile_stage_parse_abc(_ctx)
-/// @description Stage 1: tokenise and validate the ABC source. Not yet implemented.
+/// @description Stage 1: parse every voice into unit-space flat events.
+///              Repeat expansion happens inside this pass per voice, so stage 2 is a no-op.
 /// @param {struct} _ctx  Compile context
 /// @returns {undefined}
-function tune_compile_stage_parse_abc(_ctx) { }
+function tune_compile_stage_parse_abc(_ctx) {
+	var _parsed = abc_parse_tune(_ctx[$ "abc_text"], _ctx[$ "diagnostics"]);
+	_ctx[$ "parsed"] = _parsed;
+
+	var _compiled = _ctx[$ "compiled"];
+	var _consts = _parsed[$ "consts"];
+	var _headers = _parsed[$ "headers"];
+
+	_compiled[$ "meter"] = string(_consts[$ "meter"]);
+	_compiled[$ "title"] = string(_headers[$ "t"] ?? "");
+	_compiled[$ "composer"] = string(_headers[$ "c"] ?? "");
+	_compiled[$ "rhythm_type"] = string(_headers[$ "r"] ?? "");
+	_compiled[$ "unit_note_length"] = string(_consts[$ "unit_note_length"]);
+	_compiled[$ "tempo_default"] = real(_headers[$ "q"] ?? 0);
+
+	var _voices = _parsed[$ "voices"];
+	var _names = [];
+	for (var _i = 0; _i < array_length(_voices); _i++) {
+		array_push(_names, _voices[_i].voice_name);
+	}
+	_compiled[$ "voices"] = _names;
+
+	if (array_length(_voices) == 0) {
+		tune_diagnostics_add(_ctx[$ "diagnostics"], TUNE_DIAG_ERROR, "abc_no_voices",
+			"ABC produced no playable voices.");
+	}
+}
 
 /// @function tune_compile_stage_expand_repeats(_ctx)
-/// @description Stage 2: flatten repeats into the expanded measure sequence. Not yet implemented.
+/// @description Stage 2: repeats are already flattened per voice by stage 1.
 /// @param {struct} _ctx  Compile context
 /// @returns {undefined}
 function tune_compile_stage_expand_repeats(_ctx) { }
 
 /// @function tune_compile_stage_build_structure(_ctx)
-/// @description Stage 3: build L0, including pickup beat budget and voice inventory. Not yet implemented.
+/// @description Stage 3: build L0 from the first voice's bar positions. Measure 0 is a pickup;
+///              a pickup is paired with the short measure that completes its beat budget.
 /// @param {struct} _ctx  Compile context
 /// @returns {undefined}
-function tune_compile_stage_build_structure(_ctx) { }
+function tune_compile_stage_build_structure(_ctx) {
+	var _parsed = _ctx[$ "parsed"];
+	var _voices = _parsed[$ "voices"];
+	if (array_length(_voices) == 0) return;
+
+	var _consts = _parsed[$ "consts"];
+	var _units_per_beat = _consts[$ "units_per_beat"];
+	var _expected_beats = _consts[$ "beats_per_measure"];
+	var _events = _voices[0].events;
+
+	// Collect measure spans in the order they first appear.
+	var _measures = [];
+	var _seen = {};
+	for (var _i = 0; _i < array_length(_events); _i++) {
+		var _e = _events[_i];
+		var _m = _e.measure;
+		var _key = string(_m);
+
+		if (!variable_struct_exists(_seen, _key)) {
+			var _uid = tune_uid_measure("1", _m);
+			var _rec = {
+				measure_uid: _uid,
+				part_id: "1",
+				expanded_index: _m,
+				canonical_measure: _m,
+				start_units: _e.total_units,
+				end_units: _e.total_units,
+				expected_beats: _expected_beats,
+				actual_beats: 0,
+				pickup_role: (_m == 0) ? "pickup_head" : "none",
+				complement_uid: ""
+			};
+			variable_struct_set(_seen, _key, _rec);
+			array_push(_measures, _rec);
+		}
+
+		var _cur = variable_struct_get(_seen, _key);
+		_cur.end_units = max(_cur.end_units, _e.total_units + real(_e.written));
+	}
+
+	for (var _i = 0; _i < array_length(_measures); _i++) {
+		var _rec = _measures[_i];
+		_rec.actual_beats = (_rec.end_units - _rec.start_units) / _units_per_beat;
+	}
+
+	// A pickup is completed by the last short measure; pair them so loops stay whole.
+	if (array_length(_measures) > 0 && _measures[0].pickup_role == "pickup_head") {
+		var _head = _measures[0];
+		var _need = _head.expected_beats - _head.actual_beats;
+		for (var _i = array_length(_measures) - 1; _i >= 1; _i--) {
+			if (abs(_measures[_i].actual_beats - _need) < 0.01) {
+				_measures[_i].pickup_role = "pickup_complement";
+				_measures[_i].complement_uid = _head.measure_uid;
+				_head.complement_uid = _measures[_i].measure_uid;
+				break;
+			}
+		}
+		if (_head.complement_uid == "") {
+			tune_diagnostics_add(_ctx[$ "diagnostics"], TUNE_DIAG_WARNING, "pickup_no_complement",
+				"Pickup of " + string(_head.actual_beats)
+				+ " beats has no matching short measure.", { measure_uid: _head.measure_uid });
+		}
+	}
+
+	var _compiled = _ctx[$ "compiled"];
+	_compiled[$ "structure"] = {
+		parts: [{ part_id: "1", measure_count: array_length(_measures) }],
+		measures: _measures
+	};
+}
 
 /// @function tune_compile_stage_build_beat_grid(_ctx)
-/// @description Stage 4: build L1 in unit space. Not yet implemented.
+/// @description Stage 4: build L1 in unit space. Milliseconds are a run-time projection.
 /// @param {struct} _ctx  Compile context
 /// @returns {undefined}
-function tune_compile_stage_build_beat_grid(_ctx) { }
+function tune_compile_stage_build_beat_grid(_ctx) {
+	var _parsed = _ctx[$ "parsed"];
+	var _consts = _parsed[$ "consts"];
+	var _units_per_beat = _consts[$ "units_per_beat"];
+
+	var _compiled = _ctx[$ "compiled"];
+	var _structure = _compiled[$ "structure"];
+	var _measures = _structure[$ "measures"];
+
+	var _beats = [];
+	for (var _i = 0; _i < array_length(_measures); _i++) {
+		var _m = _measures[_i];
+		var _count = ceil((_m.end_units - _m.start_units) / _units_per_beat);
+		for (var _b = 1; _b <= _count; _b++) {
+			array_push(_beats, {
+				beat_uid: tune_uid_beat(_m.measure_uid, _b),
+				measure_uid: _m.measure_uid,
+				beat_index: _b,
+				units_from_start: _m.start_units + (_b - 1) * _units_per_beat,
+				weight: 1
+			});
+		}
+	}
+
+	_compiled[$ "beat_grid"] = {
+		units_per_beat: _units_per_beat,
+		beats_per_measure: _consts[$ "beats_per_measure"],
+		units_per_measure: _consts[$ "units_per_measure"],
+		beats: _beats
+	};
+}
 
 /// @function tune_compile_stage_build_events(_ctx)
-/// @description Stage 5: build L2 per voice with unexpanded embellishment attachments. Not yet implemented.
+/// @description Stage 5: build L2 per voice with grid-reference UIDs. Ornaments are stored as
+///              unexpanded attachments on their host note; components appear only at run time.
 /// @param {struct} _ctx  Compile context
 /// @returns {undefined}
-function tune_compile_stage_build_events(_ctx) { }
+function tune_compile_stage_build_events(_ctx) {
+	var _parsed = _ctx[$ "parsed"];
+	var _voices = _parsed[$ "voices"];
+	var _consts = _parsed[$ "consts"];
+	var _units_per_beat = _consts[$ "units_per_beat"];
+
+	var _out = {};
+
+	for (var _v = 0; _v < array_length(_voices); _v++) {
+		var _voice = _voices[_v];
+		var _name = _voice.voice_name;
+		var _events = _voice.events;
+
+		var _list = [];
+		var _tracker = tune_uid_ordinal_tracker();
+		var _pending = [];
+
+		for (var _i = 0; _i < array_length(_events); _i++) {
+			var _e = _events[_i];
+
+			if (_e.type == "embellishment") {
+				var _pattern = string_replace_all(string_replace_all(_e.emb_literal, "{", ""), "}", "");
+				array_push(_pending, { pattern: _pattern, anchor: 1 });
+				continue;
+			}
+			if (_e.type != "note") continue;
+
+			var _measure_uid = tune_uid_measure("1", _e.measure);
+			var _units_into_beat = round(_e.total_units
+				- (_e.total_units - (_e.division * _units_per_beat)));
+			var _pos_key = tune_uid_event_position_key(_name, _measure_uid, _e.beat, _units_into_beat);
+			var _ordinal = tune_uid_next_ordinal(_tracker, _pos_key);
+
+			array_push(_list, {
+				event_uid: tune_uid_event(_name, _measure_uid, _e.beat, _units_into_beat, _ordinal),
+				measure_uid: _measure_uid,
+				beat_index: _e.beat,
+				units_from_beat_start: _units_into_beat,
+				ordinal: _ordinal,
+				letter: _e.letter,
+				written_units: _e.written,
+				total_units: _e.total_units,
+				has_ornament: (array_length(_pending) > 0),
+				attachments: _pending
+			});
+			_pending = [];
+		}
+
+		if (array_length(_pending) > 0) {
+			tune_diagnostics_add(_ctx[$ "diagnostics"], TUNE_DIAG_WARNING, "ornament_no_host",
+				string(array_length(_pending)) + " ornament(s) in voice '" + _name
+				+ "' have no following note to attach to.");
+		}
+
+		variable_struct_set(_out, _name, _list);
+	}
+
+	_ctx[$ "compiled"][$ "events"] = _out;
+}
 
 /// @function tune_compile_stage_attach_annotations(_ctx)
 /// @description Stage 6: attach L4 from tune meta and report re-keyed targets. Not yet implemented.

@@ -583,6 +583,7 @@
     {"id":{"name":"scr_timing_utils","path":"scripts/scr_timing_utils/scr_timing_utils.yy",},},
     {"id":{"name":"scr_tune_abc_ingest","path":"scripts/scr_tune_abc_ingest/scr_tune_abc_ingest.yy",},},
     {"id":{"name":"scr_tune_abc_parse","path":"scripts/scr_tune_abc_parse/scr_tune_abc_parse.yy",},},
+    {"id":{"name":"scr_tune_authoring","path":"scripts/scr_tune_authoring/scr_tune_authoring.yy",},},
     {"id":{"name":"scr_tune_compile","path":"scripts/scr_tune_compile/scr_tune_compile.yy",},},
     {"id":{"name":"scr_tune_diagnostics","path":"scripts/scr_tune_diagnostics/scr_tune_diagnostics.yy",},},
     {"id":{"name":"scr_tune_library","path":"scripts/scr_tune_library/scr_tune_library.yy",},},

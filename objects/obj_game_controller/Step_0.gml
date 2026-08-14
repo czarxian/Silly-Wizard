@@ -215,3 +215,8 @@ if (keyboard_check_pressed(ord("P"))) {
 if (keyboard_check_pressed(ord("I"))) {
 	tune_ingest_scan(keyboard_check(vk_shift));
 }
+
+// ── DEV: N = create new tunes from staged ABC that have no tune folder yet ───────
+if (keyboard_check_pressed(ord("N"))) {
+	tune_author_create_from_staged();
+}
