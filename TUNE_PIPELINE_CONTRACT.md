@@ -65,7 +65,7 @@ several notes, one of which is a `c` that must sound fourth.
 - **Host note** — the melody (or principal) note the ornament decorates. In `{GdGc}D`, the host is
   the `D`. The host owns the grid reference.
 - **Anchor** — the note that actually lands *on the beat*. This may be a component of the ornament
-  or the host itself. See §2.1.2.
+  or the host itself. A single `anchor` field also determines which note is the host. See §2.1.2.
 
 Ornament components are **not** separate grid positions. Grace notes have no unit position of
 their own — they steal time from the neighbouring notes, and how many there are and how long they
@@ -73,19 +73,16 @@ last depends on the variant, grace ms and tempo, none of which are known at comp
 components are addressed **relative to their host**:
 
 ```
-<host_event_uid>/<placement>:e<component_index>       // placement = lead | trail; index 1-based, played order
+<host_event_uid>/<side>:e<component_index>            // side = lead | trail; index 1-based, played order
 
 pipes_melody:m:A:17:b1:d0:1                           // the host note D — one compiled event
 pipes_melody:m:A:17:b1:d0:1/lead:e4                   // the c, fourth thing played in the throw
 ```
 
-**Placement.** Ornaments may precede the host note (`lead` — the common pipe band case) or follow
-it (`trail` — piobaireachd and similar). Placement is a property of the attachment, declared by the
-embellishment library, not inferred from position in the event list. A single host may carry both
-a leading and a trailing attachment.
-
-Placement is part of the component address so that adding a trailing ornament never renumbers the
-leading components, and vice versa. Annotations survive.
+`side` is **derived from `anchor`**, not stored separately: `trail` when `anchor = "trail"`,
+otherwise `lead`. It appears in the address so that a host carrying both a leading and a trailing
+ornament keeps them in separate numbering spaces — adding one never renumbers the other, and
+annotations survive.
 
 Consequences:
 
@@ -93,45 +90,55 @@ Consequences:
   anchor moves. The D is still at `b1:d0` even when the ornament delays when it actually sounds —
   the UID is a grid reference, not a time. This is §2 restated.
 - Changing grace duration, tempo or anchor re-keys nothing. Changing the *variant* re-keys only
-  the components under that one host and placement.
+  the components under that one host and side.
 - An annotation (§9.1) can target the host — "judge this throw" — or a single component.
 
 Note the division of labour: `ordinal` in the base UID disambiguates **simultaneous** events
-(chords, unisons, voices landing together), while `/<placement>:eN` disambiguates **sequential**
+(chords, unisons, voices landing together), while `/<side>:eN` disambiguates **sequential**
 components of one ornament. Different problems, different mechanisms.
 
-### 2.1.2 Anchor — what lands on the beat
+### 2.1.2 Anchor — what lands on the beat, and which note is the host
 
-The **anchor** is the note that sounds on the beat. Everything before the anchor steals time from
-the end of the preceding note; the anchor and everything after it occupy the host note's time.
+`anchor` is a **single field** with three forms. It determines both where the beat falls and which
+note the ornament belongs to.
 
-The same written ornament can be played with different anchors. For `{GdGc}D`:
+| `anchor` | Host is | On the beat | Ornament sits | Steals from |
+|---|---|---|---|---|
+| `1..N` | the **following** note | component *N* | straddling the beat | preceding note (components before *N*) + host (component *N* onward) |
+| `"lead"` | the **following** note | the host | entirely before the beat | preceding note |
+| `"trail"` | the **preceding** note | the host | entirely after the beat | host's tail |
 
-| Anchor | Effect | Notes |
-|---|---|---|
-| `1` | The first `G` lands on the beat; the whole ornament sits inside the host's time | The common pipe band interpretation, and what current library data uses |
-| `4` | The `c` lands on the beat; `G d G` steal from the preceding note | |
-| `"host"` | The `D` lands on the beat; the entire ornament precedes it, stealing from the preceding note | |
+For `{GdGc}D`, the same written ornament played three ways:
 
-Encoding: `anchor` is either an integer `1..N` naming the component that lands on the beat, or the
-literal `"host"`. This replaces the current overloaded numeric encoding, where a negative
-`anchor_index` meant "all steal from target" and a value `>= count` meant "all steal from
-preceding" — both are now expressed directly.
+- `anchor: 1` — the first `G` lands on the beat; the whole ornament sits inside the D's time.
+  The common pipe band interpretation, and what current library data uses.
+- `anchor: 4` — the `c` lands on the beat; `G d G` steal from the preceding note.
+- `anchor: "lead"` — the `D` lands on the beat; the entire ornament precedes it.
 
-For `trail` placement the anchor is always the host: the host sounds on the beat and the ornament
-follows it, stealing from the host's tail. `anchor` is therefore not used for trailing ornaments.
+This replaces the current overloaded numeric encoding, where a negative `anchor_index` meant "all
+steal from target" and a value `>= count` meant "all steal from preceding". It also replaces the
+need for a separate placement field.
 
-**Where anchor comes from.** ABC has no standard notation for which component lands on the beat.
-So the anchor is declared by the embellishment library record (per pattern + variant), with the
-per-event override (`alt_anchor`) retained as the exception hatch. This is a known **notational**
-gap, not a data-model gap — the model expresses all three cases above; the ABC cannot.
+**Why `anchor` decides the host.** Standard ABC writes grace notes *before* a note, so a trailing
+ornament is physically written ahead of the **next** melody note even though it musically decorates
+the **previous** one. `anchor: "trail"` is what tells the parser to bind backwards. Without it, a
+naive forward scan for "the next note" attaches the ornament to the wrong host — which is exactly
+what `FindTargetNote` and the lookahead loop in `tune_build_playable_events` do today.
+
+**Where anchor comes from.** ABC has no notation for any of this. `anchor` is declared by the
+embellishment library record (per pattern + variant), with the per-event override (`alt_anchor`)
+retained as the exception hatch. This is a known **notational** gap, not a data-model gap — the
+model expresses all three cases; the ABC cannot.
+
+A `"trail"` ornament with no preceding note in the same voice (start of tune, start of a part
+after a cut) is a diagnostic warning, and falls back to `"lead"` on the following note.
 
 **When components exist.** Compiled files (L2) store the *attachment*, not the components. An
 ornament is a single opaque marker on one host event until `run_build` stage 6, which is where
 components — and their UIDs — are generated. Therefore:
 
 - Compile-time consumers (structure panel, score images, library index) see one event carrying
-  `has_ornament` and a placement list. They never enumerate components and never need to.
+  `has_ornament` and its sides. They never enumerate components and never need to.
 - Run-time consumers (scheduler, notebeam, scoring, MIDI) see the expanded components.
 
 Nothing upstream of stage 6 may iterate ornament components, because the component count is not
@@ -182,7 +189,7 @@ Notes:
 |---|---|---|---|
 | **Parser rules** | L0, L1, L2 from ABC source | global | code |
 | **Rhythm rules** | `note_pointing`: transforms L2 durations (unit space)<br>`beat_pulse`: per-beat weights applied to L1 during ms projection | tune type + meter → tune → player | `datafiles/config/rhythm_rules.json` |
-| **Embellishment library** | expands attachments in L2 into events | pattern + host note + **voice** + **placement** + variant | `datafiles/embellishments.json` |
+| **Embellishment library** | expands attachments in L2 into events | pattern + host note + **voice** + variant; each record declares **`anchor`** | `datafiles/embellishments.json` |
 | **Timing rules** | projects the grid onto ms | player → tune → set segment | player prefs + tune meta |
 
 Constraints:
@@ -190,12 +197,10 @@ Constraints:
 1. **Rules never rewrite the source.** Rhythm rules do not modify parsing — they transform the
    Events layer after it exists. The ABC remains a faithful, renderable score at all times.
 2. **The embellishment library is keyed by voice.** A drum flam and a pipe doubling are different
-   rulebooks sharing one mechanism. Lookup key is
-   `pattern + host_note + voice + placement + variant`.
-3. **Placement and anchor are declared, not inferred.** The library record says whether an ornament
-   leads or trails its host note, and which component lands on the beat (§2.1.1, §2.1.2). ABC
-   cannot express either. The parser binds an attachment to its host using the declared placement
-   plus adjacency in the ABC — never by blindly scanning forward for the next note.
+   rulebooks sharing one mechanism. Lookup key is `pattern + host_note + voice + variant`.
+3. **`anchor` is declared, not inferred.** One field per library record (§2.1.2) fixes both which
+   note is the host and what lands on the beat. ABC can express neither. The parser must never
+   bind an ornament by blindly scanning forward for the next note.
 4. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
    to the run's provenance (§8), so a stored score can be interpreted later.
 
@@ -463,6 +468,7 @@ The questions raised on 2026-08-14 are settled as follows and folded into the se
   a game instance has one primary player, and keeping these at run time lets a setting change be
   heard immediately without recompiling.
 - **Notational gaps in ABC** (§2.1.2): ABC cannot express which ornament component lands on the
-  beat, nor that an ornament trails its host note. Both are carried by the embellishment library
-  instead. If a tune ever needs two different anchors for the same pattern, that is what the
-  per-event `alt_anchor` override is for; if it becomes common, the ABC will need an extension.
+  beat, nor that an ornament decorates the preceding note rather than the following one. Both are
+  carried by the library's `anchor` field. If a tune ever needs two different anchors for the same
+  pattern, that is what the per-event `alt_anchor` override is for; if it becomes common, the ABC
+  will need an extension.
