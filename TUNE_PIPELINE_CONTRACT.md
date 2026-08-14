@@ -434,7 +434,9 @@ Consequences, all binding:
 1. Milliseconds are never a coordinate. No layer is keyed by time.
 2. UIDs derive from musical position only; never from iteration or row order.
 3. The ABC source is read-only. Rules produce layers; they never rewrite the source.
-4. `tune_compile` is pure: same ABC + same tune_config ⇒ byte-identical compiled output.
+4. `tune_compile` is pure: same ABC + same tune_config ⇒ identical layers and identical provenance
+   hashes. `provenance.compiled_at` records *when*, not *what*, and is excluded from this guarantee
+   and from all cache-identity comparisons.
 5. `<Tune>.compiled.json` is a cache. Deleting it is always safe.
 6. Every planned event maps to exactly one grid reference, or reports an explicit degraded status.
 7. Ownership windows are half-open `[start, end)`.

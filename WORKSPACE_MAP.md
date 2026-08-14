@@ -6,6 +6,26 @@
 
 ## Script Registry (Scoring Addendum)
 
+### Tune Pipeline Foundation (2026-08-14)
+
+Contract: **`TUNE_PIPELINE_CONTRACT.md`** — read it before touching any of these.
+All stages below are no-op stubs; they define the ordering contract, not behaviour yet.
+
+| Script | Function | Purpose | Reads | Writes | Callers |
+|---|---|---|---|---|---|
+| `scr_tune_uid.gml` | `tune_uid_measure`, `tune_uid_beat`, `tune_uid_event`, `tune_uid_component`, `tune_uid_run_ref` | Build grid references from musical position (contract §2.1). Never derive a UID from iteration or row order. | function params | none | pipeline stages, validator |
+| `scr_tune_uid.gml` | `tune_uid_parse_event`, `tune_uid_parse_measure`, `tune_uid_strip_run_ref` | Decompose grid references back into position fields. | function params | none | `tune_compiled_validate_events` |
+| `scr_tune_uid.gml` | `tune_uid_side_from_anchor` | Derive ornament side (`lead`/`trail`) from the single `anchor` field (§2.1.2). Side is never stored separately. | function params | none | `tune_uid_component` |
+| `scr_tune_uid.gml` | `tune_uid_ordinal_tracker`, `tune_uid_next_ordinal`, `tune_uid_event_position_key` | Deterministic ordinals so simultaneous events (chords, unisons) get distinct UIDs. | tracker struct | tracker struct | `build_events` stage (future) |
+| `scr_tune_diagnostics.gml` | `tune_diagnostics_create`, `tune_diagnostics_add`, `tune_diagnostics_merge`, `tune_diagnostics_filter` | Diagnostics as data (§9). No modal failure paths anywhere in the pipeline. | function params | collector struct | all compile stages |
+| `scr_tune_diagnostics.gml` | `tune_diagnostics_has_errors`, `tune_diagnostics_format_item`, `tune_diagnostics_log` | Query and render diagnostics; logs to debug output until a diagnostics panel exists. | collector struct | debug output only | `tune_compile` |
+| `scr_tune_provenance.gml` | `tune_provenance_create`, `tune_provenance_matches` | Stamp and verify artifact identity (§8) so caches invalidate safely. `compiled_at` is excluded from comparison. | ABC text, tune config | none | `tune_compile_stage_stamp_provenance`, cache load (future) |
+| `scr_tune_provenance.gml` | `tune_provenance_canonical`, `tune_provenance_sort_names`, `tune_provenance_string_gt`, `tune_provenance_hash` | Deterministic struct serialisation for hashing. GameMaker does not guarantee member order, so `json_stringify` is unsafe here. | any value | none | `tune_provenance_create` |
+| `scr_tune_compile.gml` | `tune_compiled_create_empty`, `tune_compile_context` | Compiled-tune envelope (layers L0/L1/L2/L4) and the mutable stage context. | function params | none | `tune_compile` |
+| `scr_tune_compile.gml` | `tune_compile_stages`, `tune_compile` | Ordered compile stage list and runner (§10). Pure and cacheable; never runs during playback (invariant 13). | ABC text, tune config | none | not yet wired; will be called from tune load |
+| `scr_tune_compile.gml` | `run_build_stages` + `run_build_stage_*` | Ordered run-build stage list. Rhythm rules act in unit space before ms; timing map after ms; embellishments last. | run context | none | not yet wired; will be called on Play |
+| `scr_tune_compile.gml` | `tune_compiled_validate` (+ `_measures`, `_events`, `_annotations`) | Acceptance gate for every later phase: UID uniqueness, pickup complement pairing, no stored ornament components, annotation targets resolve. | compiled tune | none | `tune_compile`, phase acceptance tests |
+
 ### Structure-Time Unification Addendum (2026-07-30)
 
 | Script | Function | Purpose | Reads | Writes | Callers |
