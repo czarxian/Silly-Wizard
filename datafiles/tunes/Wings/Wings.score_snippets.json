@@ -1,0 +1,113 @@
+{
+      "tune": "Wings",
+      "header": "X:1\nT:Wings\nM:4/4\nL:1/8\nR:March\nC:Trad.\nQ:90\nK:HP",
+      "beats_per_measure": 4,
+      "units_per_measure": 8,
+      "has_pickup": true,
+      "unit_note_fraction": 0.125,
+      "playback_to_image": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      "snippets": [
+        {
+          "measure_index": 0,
+          "body": "e",
+          "duration_units": 1,
+          "is_pickup": true
+        },
+        {
+          "measure_index": 1,
+          "body": "{g}A2{GdGe}A3/2B/2{GdG}c3e",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 2,
+          "body": "{g}f3/2e/2{g}fa{ef}e2{gcd}ce",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 3,
+          "body": "{g}f3/2g/2af{g}e/2c3/2{gBd}B{G}A",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 4,
+          "body": "{g}B3/2c/2{GdGc}dc{g}Be{GdGc}dB",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 5,
+          "body": "{g}A2{GdGe}A3/2B/2{GdG}c3e",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 6,
+          "body": "{g}f3/2e/2{g}fa{ef}e2{gcd}ce",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 7,
+          "body": "{g}f3/2g/2af{g}e/2c3/2{g}B3/2c/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 8,
+          "body": "{g}A4{GAG}A3e",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 9,
+          "body": "{ag}a2{g}a2{GdG}ag{fg}fe",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 10,
+          "body": "{g}f3/2e/2{g}fa{fg}fe{gcd}ce",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 11,
+          "body": "{g}f3/2g/2af{g}e/2c3/2{gBd}B{G}A",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 12,
+          "body": "{g}B3/2c/2{GdGc}dc{g}Be{GdGc}dB",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 13,
+          "body": "{g}A2{GdGe}A3/2B/2{GdG}c3e",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 14,
+          "body": "{g}f3/2e/2{g}fa{ef}e2{gcd}ce",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 15,
+          "body": "{g}f3/2g/2af{g}e/2c3/2{g}B3/2c/2",
+          "duration_units": 8,
+          "is_pickup": false
+        },
+        {
+          "measure_index": 16,
+          "body": "{g}A4{GAG}A3",
+          "duration_units": 7,
+          "is_pickup": false
+        }
+      ]
+    }
