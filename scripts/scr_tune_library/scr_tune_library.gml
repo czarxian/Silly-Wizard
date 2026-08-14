@@ -262,7 +262,9 @@ function scr_tune_library_root_has_json_content(_root)
             if (lower != "tune_library.json"
                 && string_pos(".score_snippets.json", lower) <= 0
                 && string_pos(".score_groups.json", lower) <= 0
-                && string_pos(".score_part", lower) <= 0) {
+                && string_pos(".score_part", lower) <= 0
+                && string_pos(".compiled.json", lower) <= 0
+                && string_pos(".meta.json", lower) <= 0) {
                 file_find_close();
                 return true;
             }
@@ -295,7 +297,9 @@ function scr_tune_library_root_has_json_content(_root)
                 if (sl != "tune_library.json"
                     && string_pos(".score_snippets.json", sl) <= 0
                     && string_pos(".score_groups.json", sl) <= 0
-                    && string_pos(".score_part", sl) <= 0) {
+                    && string_pos(".score_part", sl) <= 0
+                    && string_pos(".compiled.json", sl) <= 0
+                    && string_pos(".meta.json", sl) <= 0) {
                     file_find_close();
                     return true;
                 }
@@ -3166,12 +3170,16 @@ function scr_tune_scan_dir(_folder)
                     var is_score_snippets = string_pos(".score_snippets.json", entry_lower) > 0;
                     var is_score_groups = string_pos(".score_groups.json", entry_lower) > 0;
                     var is_score_part = string_pos(".score_part", entry_lower) > 0;
+                    // Pipeline artifacts live beside the tune JSON but are not tunes.
+                    var is_pipeline_artifact = (string_pos(".compiled.json", entry_lower) > 0)
+                        || (string_pos(".meta.json", entry_lower) > 0);
                     if (ext == ".json"
                         && entry != "tune_library.json"
                         && entry != "score_images.json"
                         && !is_score_snippets
                         && !is_score_groups
-                        && !is_score_part) {
+                        && !is_score_part
+                        && !is_pipeline_artifact) {
                         show_debug_message("  found tune: " + fp);
                         array_push(found, fp);
                     }
