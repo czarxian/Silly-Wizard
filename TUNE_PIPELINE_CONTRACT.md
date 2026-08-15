@@ -204,7 +204,7 @@ Notes:
 | Rule set | Produces / transforms | Scoped by | Storage |
 |---|---|---|---|
 | **Parser rules** | L0, L1, L2 from ABC source | global | code |
-| **Rhythm rules** | `note_pointing`: transforms L2 durations (unit space)<br>`beat_pulse`: per-beat weights applied to L1 during ms projection | tune type + meter → tune → player | `datafiles/config/rhythm_rules.json` |
+| **Rhythm rules** | Composes independent pointing, pulse and grouping profiles. Pointing transforms explicit L2 broken pairs in unit space; pulse applies during ms projection. | defaults → tune → player | `datafiles/config/rhythm_rules.json` |
 | **Embellishment library** | expands attachments in L2 into events | pattern + host note + **voice** + variant; each record declares **`anchor`** | `datafiles/embellishments.json` |
 | **Timing rules** | projects the grid onto ms | player → tune → set segment | player prefs + tune meta |
 
@@ -220,26 +220,48 @@ Constraints:
 4. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
    to the run's provenance (§8), so a stored score can be interpreted later.
 
-### 4.1 Pulse profiles
+### 4.1 Rhythm profile composition
 
-Pulse is represented as **per-beat weight multipliers**, selected by a **named profile keyed on
-tune type + time signature** — not hand-authored per tune. Example, a 4/4 march pulsing 1 and 3:
+Rhythm behavior is composed from reusable catalogs rather than one row for every combination:
 
 ```
-{ profile_id: "march_4_4_pulse_1_3", meter: "4/4", weights: [1.05, 0.95, 1.05, 0.95] }
+performance style = pointing profile + pulse profile + grouping profile
+```
+
+- **Pointing** is meter-independent and applies only to explicit adjacent ABC broken-rhythm pairs.
+  Compiled L2 preserves `broken_pair_uid`, `broken_role` (`long`/`short`) and
+  `broken_pair_total_units`; transformations must conserve the pair total.
+- **Pulse** is meter-specific. A profile cannot resolve against a different normalized meter.
+- **Grouping** records compound interpretation (for example `[3,3]` in `6/8`) without changing
+  the underlying eighth-note L1 grid.
+
+The initial pointing profiles are `written` (preserve ABC durations) and `pointed_default`
+(`1.67/0.33`). Unknown pointing falls back to `written`.
+
+### 4.2 Pulse profiles
+
+Pulse is represented as **meter-specific slot weight multipliers**. `subdivision: 1` means one
+slot per notated beat; higher subdivisions allow offbeat pulse. Example, a 4/4 pulse on 1 and 3:
+
+```
+{ pulse_id: "march_4_4_pulse_1_3", meter: "4/4", subdivision: 1, weights: [1.05, 0.95, 1.05, 0.95] }
 ```
 
 Several profiles may exist for the same meter (`march_4_4_pulse_1`, `march_4_4_pulse_1_3`,
 `pointed_reel_2_2`, …); the tune type selects one and the player may override it.
 
-**Weights must normalise to the beat count** (`1.05+0.95+1.05+0.95 = 4.0`). Pulse redistributes
+**Slot count must equal meter numerator times subdivision. Weights normalize to slot count.**
+Pulse redistributes
 time *within* a measure; it never changes measure duration. Without this, pulsing would drift
 tempo and break loops, set timing and metronome alignment.
+
+Projection normalizes each actual L0 measure span independently, so full measures, pickup heads
+and pickup complements retain their exact boundaries.
 
 Pulse therefore applies during **ms projection**, not in unit space — it moves beats in time while
 leaving the unit grid untouched (§10, `run_build` stage 4).
 
-### 4.2 Agreed initial simplifications
+### 4.3 Agreed initial simplifications
 
 These reduce scope without constraining the schema:
 
@@ -326,7 +348,8 @@ tune's identity or orphan its stored scores.
 
 The manifest mixes two kinds of field, with different authority:
 
-- **Authored** — `tune_uid`, `authored`, `annotations`, `tags`. Source of truth; preserved across
+- **Authored** — `tune_uid`, `authored`, `annotations`, `tags`. `authored` contains independent
+  `pointing_id`, `pulse_id`, `grouping_id`, and `embellishment_variant_set`. Source of truth; preserved across
   rebuilds.
 - **Derived** — `title`, `composer`, `rhythm_type`, `meter`, `tempo_default`, `source`,
   `artifacts`. Rebuildable from the ABC and a folder listing; never trusted over the ABC.

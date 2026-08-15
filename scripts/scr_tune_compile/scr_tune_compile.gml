@@ -217,6 +217,7 @@ function tune_compile_stage_build_events(_ctx) {
 		var _list = [];
 		var _tracker = tune_uid_ordinal_tracker();
 		var _pending = [];
+		var _pending_broken_pair = undefined;
 
 		for (var _i = 0; _i < array_length(_events); _i++) {
 			var _e = _events[_i];
@@ -234,8 +235,9 @@ function tune_compile_stage_build_events(_ctx) {
 			var _pos_key = tune_uid_event_position_key(_name, _measure_uid, _e.beat, _units_into_beat);
 			var _ordinal = tune_uid_next_ordinal(_tracker, _pos_key);
 
-			array_push(_list, {
-				event_uid: tune_uid_event(_name, _measure_uid, _e.beat, _units_into_beat, _ordinal),
+			var _event_uid = tune_uid_event(_name, _measure_uid, _e.beat, _units_into_beat, _ordinal);
+			var _event_rec = {
+				event_uid: _event_uid,
 				measure_uid: _measure_uid,
 				beat_index: _e.beat,
 				units_from_beat_start: _units_into_beat,
@@ -245,7 +247,31 @@ function tune_compile_stage_build_events(_ctx) {
 				total_units: _e.total_units,
 				has_ornament: (array_length(_pending) > 0),
 				attachments: _pending
-			});
+			};
+
+			if (is_struct(_pending_broken_pair)) {
+				_event_rec[$ "broken_pair_uid"] = _pending_broken_pair[$ "broken_pair_uid"];
+				_event_rec[$ "broken_role"] = _pending_broken_pair[$ "second_role"];
+				_event_rec[$ "broken_pair_total_units"] = _pending_broken_pair[$ "total_units"];
+				_pending_broken_pair = undefined;
+			}
+
+			var _broken_dir = string(_e.broken_dir ?? "");
+			if (_broken_dir != "" && (_i + 1) < array_length(_events) && _events[_i + 1].type == "note") {
+				var _first_role = (_broken_dir == "dotcut") ? "long" : "short";
+				var _second_role = (_broken_dir == "dotcut") ? "short" : "long";
+				var _pair_total = real(_e.written) + real(_events[_i + 1].written);
+				_event_rec[$ "broken_pair_uid"] = _event_uid;
+				_event_rec[$ "broken_role"] = _first_role;
+				_event_rec[$ "broken_pair_total_units"] = _pair_total;
+				_pending_broken_pair = {
+					broken_pair_uid: _event_uid,
+					second_role: _second_role,
+					total_units: _pair_total
+				};
+			}
+
+			array_push(_list, _event_rec);
 			_pending = [];
 		}
 
@@ -324,33 +350,404 @@ function tune_compile(_abc_text, _tune_config, _tune_uid = "") {
 	};
 }
 
+/// @function tune_compiled_voice_map(_compiled, _voice)
+/// @description Return a view of one unexpanded voice from compiled L2 data.
+/// @param {struct} _compiled  Compiled tune envelope
+/// @param {string} _voice  Voice name to select
+/// @returns {struct}  {voice, events, source} view over compiled events
+function tune_compiled_voice_map(_compiled, _voice) {
+	if (!is_struct(_compiled)) return { voice: "", events: [], source: "compiled.events", voice_kind: "unknown", applies_bagpipe_rules: false };
+	var _events = _compiled[$ "events"];
+	if (!is_struct(_events)) return { voice: "", events: [], source: "compiled.events", voice_kind: "unknown", applies_bagpipe_rules: false };
+
+	var _selected = string(_voice);
+	if (!variable_struct_exists(_events, _selected)) {
+		var _voices = variable_struct_get_names(_events);
+		_selected = (array_length(_voices) > 0) ? string(_voices[0]) : "";
+	}
+	var _list = (_selected != "") ? variable_struct_get(_events, _selected) : [];
+	if (!is_array(_list)) _list = [];
+	var _is_bagpipe = tune_voice_is_bagpipe(_selected);
+	return {
+		voice: _selected,
+		events: _list,
+		source: "compiled.events",
+		voice_kind: _is_bagpipe ? "bagpipe" : "backing",
+		applies_bagpipe_rules: _is_bagpipe
+	};
+}
+
+/// @function tune_voice_is_bagpipe(_voice)
+/// @description Identify voices that receive bagpipe rhythm and embellishment rules.
+/// @param {string} _voice  Compiled voice name
+/// @returns {bool} True for bagpipe voices, false for backing voices
+function tune_voice_is_bagpipe(_voice) {
+	var _name = string_lower(string(_voice));
+	return string_pos("pipes_", _name) == 1
+		|| _name == "melody"
+		|| _name == "harmony1"
+		|| _name == "harmony2"
+		|| _name == "harmony3";
+}
+
+/// @function tune_voice_map_apply_rhythm(_voice_map, _pointing_profile)
+/// @description Create an independent unit-space working view for one voice.
+///              The identity rule preserves compiled L2 until rhythm rules are configured.
+/// @param {struct} _voice_map  Compiled voice-map view
+/// @param {struct} _pointing_profile  Resolved pointing profile
+/// @returns {struct}  Per-run voice map with copied events
+function tune_voice_map_apply_rhythm(_voice_map, _pointing_profile) {
+	var _source = is_struct(_voice_map) ? _voice_map[$ "events"] : [];
+	var _working = [];
+	for (var _i = 0; _i < array_length(_source); _i++) {
+		var _source_event = _source[_i];
+		var _event_copy = {};
+		if (is_struct(_source_event)) {
+			var _fields = variable_struct_get_names(_source_event);
+			for (var _f = 0; _f < array_length(_fields); _f++) {
+				var _field = _fields[_f];
+				variable_struct_set(_event_copy, _field, variable_struct_get(_source_event, _field));
+			}
+		}
+		array_push(_working, _event_copy);
+	}
+
+	var _result = {};
+	if (is_struct(_voice_map)) {
+		var _map_fields = variable_struct_get_names(_voice_map);
+		for (var _m = 0; _m < array_length(_map_fields); _m++) {
+			var _map_field = _map_fields[_m];
+			variable_struct_set(_result, _map_field, variable_struct_get(_voice_map, _map_field));
+		}
+	}
+	variable_struct_set(_result, "events", _working);
+	var _pointing_id = is_struct(_pointing_profile) ? string(_pointing_profile[$ "pointing_id"] ?? "written") : "written";
+	variable_struct_set(_result, "pointing_id", _pointing_id);
+	variable_struct_set(_result, "source_events", _source);
+
+	if (bool(_result[$ "applies_bagpipe_rules"] ?? false)
+		&& is_struct(_pointing_profile)
+		&& string(_pointing_profile[$ "mode"] ?? "written") == "ratio") {
+		var _long_share = max(0, real(_pointing_profile[$ "long_share"] ?? 1.67));
+		var _short_share = max(0, real(_pointing_profile[$ "short_share"] ?? 0.33));
+		var _share_total = _long_share + _short_share;
+		if (_share_total > 0) {
+			for (var _p = 0; _p + 1 < array_length(_working); _p++) {
+				var _first = _working[_p];
+				var _second = _working[_p + 1];
+				var _pair_uid = string(_first[$ "broken_pair_uid"] ?? "");
+				if (_pair_uid == "" || string(_second[$ "broken_pair_uid"] ?? "") != _pair_uid) continue;
+
+				var _pair_units = real(_first[$ "broken_pair_total_units"] ?? 0);
+				if (_pair_units <= 0) continue;
+				var _long_units = _pair_units * _long_share / _share_total;
+				var _short_units = _pair_units - _long_units;
+				var _first_units = (string(_first[$ "broken_role"] ?? "") == "long") ? _long_units : _short_units;
+				var _second_units = _pair_units - _first_units;
+				_first[$ "written_units"] = _first_units;
+				_second[$ "written_units"] = _second_units;
+				_second[$ "total_units"] = real(_first[$ "total_units"]) + _first_units;
+				_p += 1;
+			}
+		}
+	}
+	return _result;
+}
+
+/// @function tune_rhythm_registry_load()
+/// @description Load the packaged rhythm profile registry, with safe built-in fallbacks.
+/// @returns {struct} Rhythm profile registry
+function tune_rhythm_registry_load() {
+	var _fallback = {
+		pointing_profiles: [
+			{ pointing_id: "written", mode: "written" },
+			{ pointing_id: "pointed_default", mode: "ratio", long_share: 1.67, short_share: 0.33 }
+		],
+		pulse_profiles: [],
+		grouping_profiles: [],
+		defaults: { pointing_id: "written", pulse_by_meter: {} }
+	};
+	var _paths = [
+		scr_data_paths_get_content_root() + "config/rhythm_rules.json",
+		working_directory + "datafiles/config/rhythm_rules.json",
+		"datafiles/config/rhythm_rules.json"
+	];
+	for (var _i = 0; _i < array_length(_paths); _i++) {
+		if (!file_exists(_paths[_i])) continue;
+		var _loaded = scr_tune_parse_json_file(_paths[_i]);
+		if (is_struct(_loaded)) return _loaded;
+	}
+	return _fallback;
+}
+
+/// @function tune_rhythm_profile_find(_profiles, _id, _id_field)
+/// @description Find a named profile in a registry array.
+/// @param {array} _profiles  Profile records
+/// @param {string} _id  Requested identifier
+/// @param {string} _id_field  Identifier field name
+/// @returns {struct|undefined} Matching profile
+function tune_rhythm_profile_find(_profiles, _id, _id_field) {
+	for (var _i = 0; _i < array_length(_profiles); _i++) {
+		var _profile = _profiles[_i];
+		if (is_struct(_profile) && string(_profile[$ _id_field] ?? "") == string(_id)) return _profile;
+	}
+	return undefined;
+}
+
+/// @function tune_pulse_normalize(_profile, _meter)
+/// @description Validate pulse meter/slot count and normalize weights to preserve measure length.
+/// @param {struct} _profile  Pulse profile
+/// @param {string} _meter  Normalized tune meter
+/// @returns {struct|undefined} Copied profile with normalized_weights, or undefined when incompatible
+function tune_pulse_normalize(_profile, _meter) {
+	if (!is_struct(_profile)) return undefined;
+	var _meter_norm = timing_normalize_time_sig(string(_meter));
+	if (timing_normalize_time_sig(string(_profile[$ "meter"] ?? "")) != _meter_norm) return undefined;
+	var _parts = string_split(_meter_norm, "/");
+	if (array_length(_parts) != 2) return undefined;
+	var _beats = floor(real(_parts[0]));
+	var _subdivision = max(1, floor(real(_profile[$ "subdivision"] ?? 1)));
+	var _weights = _profile[$ "weights"];
+	var _slot_count = _beats * _subdivision;
+	if (!is_array(_weights) || array_length(_weights) != _slot_count) return undefined;
+
+	var _sum = 0;
+	for (var _i = 0; _i < array_length(_weights); _i++) _sum += max(0, real(_weights[_i]));
+	if (_sum <= 0) return undefined;
+	var _normalized = [];
+	for (var _i = 0; _i < array_length(_weights); _i++) {
+		array_push(_normalized, max(0, real(_weights[_i])) * _slot_count / _sum);
+	}
+
+	var _copy = {};
+	var _fields = variable_struct_get_names(_profile);
+	for (var _f = 0; _f < array_length(_fields); _f++) {
+		var _field = _fields[_f];
+		variable_struct_set(_copy, _field, variable_struct_get(_profile, _field));
+	}
+	_copy[$ "normalized_weights"] = _normalized;
+	_copy[$ "subdivision"] = _subdivision;
+	return _copy;
+}
+
+/// @function tune_rhythm_resolve(_registry, _meter, _config)
+/// @description Resolve pointing and meter-compatible pulse profiles with safe defaults.
+/// @param {struct} _registry  Rhythm registry
+/// @param {string} _meter  Tune meter
+/// @param {struct} _config  Run overrides
+/// @returns {struct} {pointing, pulse, pointing_id, pulse_id}
+function tune_rhythm_resolve(_registry, _meter, _config) {
+	var _meter_norm = timing_normalize_time_sig(string(_meter));
+	var _defaults = _registry[$ "defaults"];
+	var _pointing_id = string(_config[$ "pointing_id"] ?? _defaults[$ "pointing_id"] ?? "written");
+	var _pointing = tune_rhythm_profile_find(_registry[$ "pointing_profiles"], _pointing_id, "pointing_id");
+	if (!is_struct(_pointing)) {
+		_pointing_id = "written";
+		_pointing = tune_rhythm_profile_find(_registry[$ "pointing_profiles"], _pointing_id, "pointing_id");
+	}
+
+	var _pulse_id = string(_config[$ "pulse_id"] ?? "");
+	var _pulse_defaults = _defaults[$ "pulse_by_meter"];
+	if (_pulse_id == "" && is_struct(_pulse_defaults) && variable_struct_exists(_pulse_defaults, _meter_norm)) {
+		_pulse_id = string(variable_struct_get(_pulse_defaults, _meter_norm));
+	}
+	var _pulse = tune_pulse_normalize(
+		tune_rhythm_profile_find(_registry[$ "pulse_profiles"], _pulse_id, "pulse_id"),
+		_meter_norm
+	);
+	if (!is_struct(_pulse)) _pulse_id = "";
+	return { pointing: _pointing, pulse: _pulse, pointing_id: _pointing_id, pulse_id: _pulse_id };
+}
+
+/// @function run_build_warp_units(_compiled, _pulse, _absolute_units)
+/// @description Apply a normalized pulse profile within one measure while preserving its boundaries.
+/// @param {struct} _compiled  Compiled tune
+/// @param {struct|undefined} _pulse  Normalized pulse profile
+/// @param {real} _absolute_units  Absolute tune-unit position
+/// @returns {real} Warped absolute tune-unit position
+function run_build_warp_units(_compiled, _pulse, _absolute_units) {
+	if (!is_struct(_pulse)) return real(_absolute_units);
+	var _structure = _compiled[$ "structure"];
+	var _measures = is_struct(_structure) ? _structure[$ "measures"] : [];
+	var _measure = undefined;
+	var _units = real(_absolute_units);
+	for (var _i = 0; _i < array_length(_measures); _i++) {
+		var _candidate = _measures[_i];
+		if (_units >= real(_candidate[$ "start_units"]) - 0.0001
+			&& _units <= real(_candidate[$ "end_units"]) + 0.0001) {
+			_measure = _candidate;
+			break;
+		}
+	}
+	if (!is_struct(_measure)) return _units;
+
+	var _start = real(_measure[$ "start_units"]);
+	var _length = real(_measure[$ "end_units"]) - _start;
+	if (_length <= 0) return _units;
+	var _x = clamp(_units - _start, 0, _length);
+	var _grid = _compiled[$ "beat_grid"];
+	var _units_per_beat = real(_grid[$ "units_per_beat"] ?? 0);
+	var _subdivision = max(1, real(_pulse[$ "subdivision"] ?? 1));
+	var _slot_units = _units_per_beat / _subdivision;
+	var _weights = _pulse[$ "normalized_weights"];
+	if (_slot_units <= 0 || !is_array(_weights) || array_length(_weights) == 0) return _units;
+
+	var _weighted_total = 0;
+	var _weighted_x = 0;
+	var _position = 0;
+	var _slot = 0;
+	while (_position < _length - 0.0001) {
+		var _segment = min(_slot_units, _length - _position);
+		var _weight = real(_weights[_slot mod array_length(_weights)]);
+		_weighted_total += _segment * _weight;
+		if (_x > _position) _weighted_x += min(_segment, _x - _position) * _weight;
+		_position += _segment;
+		_slot += 1;
+	}
+	if (_weighted_total <= 0) return _units;
+	return _start + _weighted_x * _length / _weighted_total;
+}
+
+/// @function tune_compiled_melody_map(_compiled)
+/// @description Return the primary melody voice view over unexpanded compiled L2 events.
+/// @param {struct} _compiled  Compiled tune envelope
+/// @returns {struct}  {voice, events, source} view over compiled events
+function tune_compiled_melody_map(_compiled) {
+	return tune_compiled_voice_map(_compiled, "pipes_melody");
+}
+
 // ---------------------------------------------------------------------------
 // run_build stages (§10) — per play, never stored
 // ---------------------------------------------------------------------------
 
 /// @function run_build_stage_resolve_config(_ctx)
-/// @description Stage 1: resolve the rule chain defaults -> tune -> player -> set segment. Not yet implemented.
+/// @description Stage 1: resolve BPM, unit duration and MIDI base settings for a compiled tune.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_resolve_config(_ctx) { }
+function run_build_stage_resolve_config(_ctx) {
+	var _compiled = _ctx[$ "compiled"];
+	var _config = _ctx[$ "config"];
+	var _bpm = real(_config[$ "bpm"] ?? _compiled[$ "tempo_default"] ?? 120);
+	if (_bpm <= 0) _bpm = 120;
+	var _meter = string(_compiled[$ "meter"] ?? "4/4");
+	var _quarter_bpm = tune_get_effective_quarter_bpm(_bpm, _meter);
+	var _unit_multiplier = tune_note_fraction_to_quarter_multiplier(_compiled[$ "unit_note_length"] ?? "1/8");
+	if (_unit_multiplier <= 0) _unit_multiplier = 0.5;
+	var _resolved = {
+		bpm: _bpm,
+		meter: _meter,
+		unit_ms: (60000 / _quarter_bpm) * _unit_multiplier,
+		base_midi: real(_config[$ "base_midi"] ?? 55),
+		default_channel: real(_config[$ "default_channel"] ?? 2)
+	};
+	var _registry = tune_rhythm_registry_load();
+	var _rhythm = tune_rhythm_resolve(_registry, _meter, _config);
+	_resolved[$ "rhythm"] = _rhythm;
+	_ctx[$ "resolved"] = _resolved;
+}
 
 /// @function run_build_stage_apply_rhythm_rules(_ctx)
-/// @description Stage 2: apply note pointing in unit space, before any ms exists. Not yet implemented.
+/// @description Stage 2: apply unit-space rhythm rules. The initial rule is identity.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_apply_rhythm_rules(_ctx) { }
+function run_build_stage_apply_rhythm_rules(_ctx) {
+	var _compiled = _ctx[$ "compiled"];
+	_ctx[$ "melody_map"] = tune_compiled_melody_map(_compiled);
+	var _rhythm = _ctx[$ "resolved"][$ "rhythm"];
+	var _pointing = _rhythm[$ "pointing"];
+	var _voice_maps = {};
+	var _voice_names = variable_struct_get_names(_compiled[$ "events"]);
+	for (var _v = 0; _v < array_length(_voice_names); _v++) {
+		var _voice_name = _voice_names[_v];
+		var _compiled_map = tune_compiled_voice_map(_compiled, _voice_name);
+		variable_struct_set(_voice_maps, _voice_name, tune_voice_map_apply_rhythm(_compiled_map, _pointing));
+	}
+	_ctx[$ "voice_maps"] = _voice_maps;
+	var _working_events = {};
+	for (var _v = 0; _v < array_length(_voice_names); _v++) {
+		var _name = _voice_names[_v];
+		var _map = variable_struct_get(_voice_maps, _name);
+		variable_struct_set(_working_events, _name, _map[$ "events"]);
+	}
+	_ctx[$ "unit_events"] = _working_events;
+	_ctx[$ "resolved_pointing_id"] = _rhythm[$ "pointing_id"];
+	_ctx[$ "resolved_pulse_id"] = _rhythm[$ "pulse_id"];
+}
 
 /// @function run_build_stage_compose_performance(_ctx)
-/// @description Stage 3: concatenate set segments and expand cuts, repeats and loops. Not yet implemented.
+/// @description Stage 3: flatten the compiled voice streams into one performance input.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_compose_performance(_ctx) { }
+function run_build_stage_compose_performance(_ctx) {
+	var _voices = _ctx[$ "unit_events"];
+	var _flat = [];
+	var _names = variable_struct_get_names(_voices);
+	for (var _v = 0; _v < array_length(_names); _v++) {
+		var _voice = _names[_v];
+		var _list = variable_struct_get(_voices, _voice);
+		for (var _i = 0; _i < array_length(_list); _i++) {
+			array_push(_flat, { voice: _voice, event: _list[_i] });
+		}
+	}
+	_ctx[$ "composed"] = _flat;
+}
 
 /// @function run_build_stage_project_to_ms(_ctx)
-/// @description Stage 4: project the unit grid onto ms and apply beat pulse weights. Not yet implemented.
+/// @description Stage 4: project unit-space events onto milliseconds and emit scheduler events.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_project_to_ms(_ctx) { }
+function run_build_stage_project_to_ms(_ctx) {
+	var _resolved = _ctx[$ "resolved"];
+	var _compiled = _ctx[$ "compiled"];
+	var _pulse = _resolved[$ "rhythm"][$ "pulse"];
+	var _out = [];
+	var _composed = _ctx[$ "composed"];
+	for (var _i = 0; _i < array_length(_composed); _i++) {
+		var _row = _composed[_i];
+		var _voice = string(_row[$ "voice"]);
+		var _event = _row[$ "event"];
+		var _start_units = real(_event[$ "total_units"]);
+		var _end_units = _start_units + real(_event[$ "written_units"]);
+		var _start_ms = run_build_warp_units(_compiled, _pulse, _start_units) * _resolved[$ "unit_ms"];
+		var _end_ms = run_build_warp_units(_compiled, _pulse, _end_units) * _resolved[$ "unit_ms"];
+		var _duration_ms = max(_end_ms - _start_ms, 1);
+		var _channel = run_build_voice_channel(_voice, _resolved[$ "default_channel"]);
+		var _parsed = tune_uid_parse_event(_event[$ "event_uid"]);
+		var _measure = is_struct(_parsed) ? real(_parsed[$ "expanded_index"]) : 0;
+		var _beat = is_struct(_parsed) ? real(_parsed[$ "beat_index"]) : 0;
+		var _division = is_struct(_parsed) ? real(_parsed[$ "units_from_beat_start"]) : 0;
+		var _note = tune_note_letter_to_midi(_event[$ "letter"], _resolved[$ "base_midi"]);
+		var _event_uid = string(_event[$ "event_uid"]);
+		var _event_id = _i + 1;
+		array_push(_out, {
+			time: _start_ms, type: "note_on", note: _note, velocity: 80,
+			channel: _channel, part: _channel - 1, measure: _measure, beat: _beat,
+			beat_fraction: _division, is_embellishment: false, event_id: _event_id,
+			event_uid: _event_uid
+		});
+		array_push(_out, {
+			time: _start_ms + _duration_ms, type: "note_off", note: _note, velocity: 0,
+			channel: _channel, part: _channel - 1, measure: _measure, beat: _beat,
+			beat_fraction: _division, is_embellishment: false, event_id: _event_id,
+			event_uid: _event_uid
+		});
+	}
+	_ctx[$ "projected"] = _out;
+}
+
+/// @function run_build_voice_channel(_voice, _default_channel)
+/// @description Map a compiled voice name to its playback MIDI channel.
+/// @param {string} _voice  Compiled voice name
+/// @param {real} _default_channel  Fallback MIDI channel
+/// @returns {real} MIDI channel
+function run_build_voice_channel(_voice, _default_channel) {
+	var _name = string_lower(string(_voice));
+	if (_name == "pipes_melody") return 2;
+	if (_name == "pipes_harmony1") return 3;
+	if (_name == "pipes_harmony2") return 4;
+	if (_name == "pipes_harmony3") return 5;
+	return _default_channel;
+}
 
 /// @function run_build_stage_apply_timing_map(_ctx)
 /// @description Stage 5: apply the expressive timing map. Deferred; intentionally a no-op.
@@ -370,6 +767,33 @@ function run_build_stage_resolve_embellishments(_ctx) { }
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
 function run_build_stage_emit_run_events(_ctx) { }
+
+/// @function run_build(_compiled, _run_config)
+/// @description Build the first playable run projection from a compiled tune. Rhythm maps and
+///              ornament expansion remain identity/deferred until their dedicated stages land.
+/// @param {struct} _compiled  Compiled tune envelope
+/// @param {struct} [_run_config]  Player/run overrides such as bpm and base_midi
+/// @returns {array} Scheduler-compatible note events
+function run_build(_compiled, _run_config = {}) {
+	var _ctx = {
+		compiled: _compiled,
+		config: is_struct(_run_config) ? _run_config : {},
+		resolved: undefined,
+		unit_events: {},
+		voice_maps: {},
+		composed: [],
+		projected: []
+	};
+	var _stages = run_build_stages();
+	for (var _i = 0; _i < array_length(_stages); _i++) {
+		_stages[_i][$ "fn"](_ctx);
+	}
+	show_debug_message("[RHYTHM] pointing=" + string(_ctx[$ "resolved_pointing_id"] ?? "written")
+		+ " pulse=" + string(_ctx[$ "resolved_pulse_id"] ?? "none")
+		+ " meter=" + string(_ctx[$ "resolved"][$ "meter"] ?? "")
+		+ " events=" + string(array_length(_ctx[$ "projected"])));
+	return _ctx[$ "projected"];
+}
 
 /// @function run_build_stages()
 /// @description The ordered run-build stage list. Order is contractual — see §10.

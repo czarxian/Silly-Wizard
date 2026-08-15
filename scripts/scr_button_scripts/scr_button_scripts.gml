@@ -1888,9 +1888,8 @@
 				show_debug_message("Single-tune playback events rebuilt via unified settings resolver.");
 			}
 			// Build playback context so viz/scoring know the active tune
-			var _ctx_tune_filename = string(scr_button_struct_get(tune_data, "filename", ""));
-			var _ctx_tune_struct = (_ctx_tune_filename != "") ? scr_tune_load_to_struct(_ctx_tune_filename) : undefined;
-			if (!is_undefined(_ctx_tune_struct)) {
+			var _ctx_tune_struct = { tune_data: tune_data };
+			if (is_struct(tune_data)) {
 				scr_playback_context_build_for_tune(_ctx_tune_struct);
 				var _active_after_ctx = scr_button_get_active_settings_segment(true);
 				if (is_struct(_active_after_ctx)) {
@@ -3383,7 +3382,10 @@
 	/// @objects obj_tune (reads tune_data after scr_tune_load_json)
 	/// @callers scr_tune_OK, scr_tune_reset_to_defaults
 	function scr_button_try_load_tune_candidate(_tryfile, _entry, _button_label, _force_tune_defaults = false) {
-		if (!scr_tune_load_json(_tryfile)) return false;
+		var _loaded = (is_struct(_entry) && scr_button_struct_get(_entry, "manifest_backed", false))
+			? scr_tune_load_compiled_json(_tryfile)
+			: scr_tune_load_json(_tryfile);
+		if (!_loaded) return false;
 
 		var item = create_set_item(_tryfile);
 		var loaded_tune_data = scr_button_tune_data_get(global.tune);
@@ -3618,7 +3620,19 @@
 			+ " count_in=" + string(scr_button_struct_get(effective, "count_in_measures", 0))
 			+ " mode=" + (_single_is_set_mode ? "set" : "single_virtual_set"));
 
-		var tune_events = scr_preprocess_tune(tune_data, overrides);
+		var _authored = scr_button_struct_get(tune_data, "authored", {});
+		var tune_events = variable_struct_exists(tune_data, "compiled")
+			&& is_struct(scr_button_struct_get(tune_data, "compiled", undefined))
+			? run_build(scr_button_struct_get(tune_data, "compiled", {}), {
+				bpm: bpm_override,
+				base_midi: 55,
+				default_channel: 2,
+				pointing_id: string(scr_button_struct_get(_authored, "pointing_id", "written")),
+				pulse_id: string(scr_button_struct_get(_authored, "pulse_id",
+					scr_button_struct_get(_authored, "pulse_profile_id", ""))),
+				grouping_id: string(scr_button_struct_get(_authored, "grouping_id", ""))
+			})
+			: scr_preprocess_tune(tune_data, overrides);
 		if (!is_array(tune_events) || array_length(tune_events) <= 0) {
 			global.playback_events = [];
 			show_debug_message("ERROR: Playback preparation produced no tune events.");

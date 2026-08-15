@@ -131,8 +131,14 @@ function tune_manifest_build(_dir, _folder_name, _compiled = undefined) {
 
 	var _authored = is_struct(_existing) ? _existing[$ "authored"] : undefined;
 	if (!is_struct(_authored)) {
-		_authored = { rhythm_rule_id: "", embellishment_variant_set: "", pulse_profile_id: "" };
+		_authored = {};
 	}
+	if (!variable_struct_exists(_authored, "pointing_id")) _authored[$ "pointing_id"] = "written";
+	if (!variable_struct_exists(_authored, "pulse_id")) {
+		_authored[$ "pulse_id"] = string(_authored[$ "pulse_profile_id"] ?? "");
+	}
+	if (!variable_struct_exists(_authored, "grouping_id")) _authored[$ "grouping_id"] = "";
+	if (!variable_struct_exists(_authored, "embellishment_variant_set")) _authored[$ "embellishment_variant_set"] = "";
 
 	var _annotations = is_struct(_existing) ? _existing[$ "annotations"] : undefined;
 	if (!is_array(_annotations)) _annotations = [];

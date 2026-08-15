@@ -106,6 +106,72 @@ function tune_author_log_summary(_compiled) {
 	if (array_length(_measures) > 4) show_debug_message("[TUNE]   …");
 }
 
+/// @function tune_author_log_compiled_detail(_compiled)
+/// @description Dump the loaded tune's L0 measures, L1 beats and unexpanded L2 voice events.
+/// @param {struct} _compiled  Compiled tune envelope
+/// @returns {undefined}
+/// @reads compiled tune layers
+/// @writes debug output only
+/// @objects none
+/// @callers manual (dev key V)
+function tune_author_log_compiled_detail(_compiled) {
+	if (!is_struct(_compiled)) {
+		show_debug_message("[TUNE-DETAIL] no compiled tune loaded");
+		return;
+	}
+
+	var _structure = _compiled[$ "structure"];
+	var _measures = is_struct(_structure) ? _structure[$ "measures"] : [];
+	var _grid = _compiled[$ "beat_grid"];
+	var _beats = is_struct(_grid) ? _grid[$ "beats"] : [];
+	var _events = _compiled[$ "events"];
+
+	show_debug_message("[TUNE-DETAIL] " + string(_compiled[$ "title"] ?? "")
+		+ " uid=" + string(_compiled[$ "tune_uid"] ?? "")
+		+ " measures=" + string(array_length(_measures))
+		+ " beats=" + string(array_length(_beats)));
+	show_debug_message("[TUNE-DETAIL] L0 STRUCTURE");
+	for (var _m = 0; _m < array_length(_measures); _m++) {
+		var _measure = _measures[_m];
+		show_debug_message("[TUNE-DETAIL] M " + string(_measure[$ "measure_uid"])
+			+ " start=" + string(_measure[$ "start_units"])
+			+ " end=" + string(_measure[$ "end_units"])
+			+ " beats=" + string(_measure[$ "actual_beats"]) + "/" + string(_measure[$ "expected_beats"])
+			+ " role=" + string(_measure[$ "pickup_role"])
+			+ " complement=" + string(_measure[$ "complement_uid"]));
+	}
+
+	show_debug_message("[TUNE-DETAIL] L1 BEAT GRID");
+	for (var _b = 0; _b < array_length(_beats); _b++) {
+		var _beat = _beats[_b];
+		show_debug_message("[TUNE-DETAIL] B " + string(_beat[$ "beat_uid"])
+			+ " units=" + string(_beat[$ "units_from_start"])
+			+ " weight=" + string(_beat[$ "weight"]));
+	}
+
+	show_debug_message("[TUNE-DETAIL] L2 VOICE EVENTS");
+	if (!is_struct(_events)) return;
+	var _voices = variable_struct_get_names(_events);
+	for (var _v = 0; _v < array_length(_voices); _v++) {
+		var _voice = _voices[_v];
+		var _list = variable_struct_get(_events, _voice);
+		show_debug_message("[TUNE-DETAIL] VOICE " + _voice + " events=" + string(array_length(_list)));
+		for (var _e = 0; _e < array_length(_list); _e++) {
+			var _event = _list[_e];
+			show_debug_message("[TUNE-DETAIL] E " + string(_event[$ "event_uid"])
+				+ " letter=" + string(_event[$ "letter"])
+				+ " units=" + string(_event[$ "total_units"])
+				+ " duration=" + string(_event[$ "written_units"])
+				+ " ornament=" + string(_event[$ "has_ornament"])
+				+ (variable_struct_exists(_event, "broken_pair_uid")
+					? " broken=" + string(_event[$ "broken_pair_uid"])
+						+ "/" + string(_event[$ "broken_role"])
+						+ " total=" + string(_event[$ "broken_pair_total_units"])
+					: ""));
+		}
+	}
+}
+
 /// @function tune_author_create_from_abc(_abc_text, _title_override)
 /// @description Create a tune from ABC: make the folder, write the source, compile, write the
 ///              compiled cache and the tune manifest, and report. Does not touch tune_library.json.

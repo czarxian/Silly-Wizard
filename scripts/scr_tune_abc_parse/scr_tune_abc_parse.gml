@@ -309,6 +309,12 @@ function abc_tokenize(_body, _diag = undefined) {
 			continue;
 		}
 
+		// Natural signs affect pitch spelling, but the current note model stores letter names.
+		if (_ch == "=" && (_i < _n) && abc_is_letter(string_char_at(_s, _i + 1))) {
+			_i++;
+			continue;
+		}
+
 		// Note: letter plus octave markers, accidentals, duration, tie and broken-rhythm marks
 		if (abc_is_letter(_ch)) {
 			var _k = _i + 1;
@@ -726,6 +732,58 @@ function abc_build_flat_events(_tokens, _consts, _voice = "pipes_melody", _diag 
 	return _events;
 }
 
+/// @function abc_infer_broken_rhythms(_events)
+/// @description Mark unlabelled 1.5/0.5 and 0.5/1.5 note pairs, skipping ornaments but not bars.
+/// @param {array} _events  Flat events for one voice
+/// @returns {array} Same event array with inferred broken_dir on the first note of each pair
+function abc_infer_broken_rhythms(_events) {
+	var _epsilon = 0.0001;
+	var _i = 0;
+	while (_i < array_length(_events) - 1) {
+		var _first = _events[_i];
+		if (!is_struct(_first)
+			|| string(_first[$ "type"] ?? "") != "note"
+			|| string(_first[$ "letter"] ?? "") == ""
+			|| string(_first[$ "broken_dir"] ?? "") != "") {
+			_i += 1;
+			continue;
+		}
+
+		var _next_index = -1;
+		for (var _j = _i + 1; _j < array_length(_events); _j++) {
+			var _candidate = _events[_j];
+			if (!is_struct(_candidate)) continue;
+			if (string(_candidate[$ "type"] ?? "") == "structure"
+				&& string(_candidate[$ "structure"] ?? "") == "bar") break;
+			if (string(_candidate[$ "type"] ?? "") == "note"
+				&& string(_candidate[$ "letter"] ?? "") != "") {
+				_next_index = _j;
+				break;
+			}
+		}
+		if (_next_index < 0) {
+			_i += 1;
+			continue;
+		}
+
+		var _second = _events[_next_index];
+		var _dur1 = real(_first[$ "written"] ?? 0);
+		var _dur2 = real(_second[$ "written"] ?? 0);
+		if (abs(_dur1 - 1.5) < _epsilon && abs(_dur2 - 0.5) < _epsilon) {
+			_first[$ "broken_dir"] = "dotcut";
+			_i = _next_index + 1;
+			continue;
+		}
+		if (abs(_dur1 - 0.5) < _epsilon && abs(_dur2 - 1.5) < _epsilon) {
+			_first[$ "broken_dir"] = "cutdot";
+			_i = _next_index + 1;
+			continue;
+		}
+		_i += 1;
+	}
+	return _events;
+}
+
 /// @function abc_build_bar_phase_map(_events, _consts)
 /// @description Locate downbeat anchors from bar events so pickups (initial and internal)
 ///              can be measured. Mirrors the legacy BuildBarPhaseMap.
@@ -889,6 +947,7 @@ function abc_parse_to_flat_events(_abc_text, _voice = "pipes_melody", _diag = un
 	var _tokens = abc_tokenize(_body, _diag);
 	var _expanded = abc_expand_repeats(_tokens);
 	var _events = abc_build_flat_events(_expanded, _consts, _voice, _diag);
+	abc_infer_broken_rhythms(_events);
 	var _phase = abc_build_bar_phase_map(_events, _consts);
 
 	abc_annotate_positions(_events, _phase, _consts);

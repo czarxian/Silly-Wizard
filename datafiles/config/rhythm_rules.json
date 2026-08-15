@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pointing_profiles": [
+    {
+      "pointing_id": "written",
+      "mode": "written",
+      "description": "Preserve explicit ABC broken-rhythm durations"
+    },
+    {
+      "pointing_id": "pointed_default",
+      "mode": "ratio",
+      "long_share": 1.67,
+      "short_share": 0.33,
+      "description": "Apply 1.67/0.33 pointing only to explicit broken-rhythm pairs"
+    }
+  ],
+  "pulse_profiles": [
+    { "pulse_id": "straight_2_4", "meter": "2/4", "subdivision": 1, "weights": [1, 1] },
+    { "pulse_id": "straight_2_2", "meter": "2/2", "subdivision": 1, "weights": [1, 1] },
+    { "pulse_id": "straight_3_4", "meter": "3/4", "subdivision": 1, "weights": [1, 1, 1] },
+    { "pulse_id": "straight_4_4", "meter": "4/4", "subdivision": 1, "weights": [1, 1, 1, 1] },
+    { "pulse_id": "straight_5_4", "meter": "5/4", "subdivision": 1, "weights": [1, 1, 1, 1, 1] },
+    { "pulse_id": "straight_6_8", "meter": "6/8", "subdivision": 1, "weights": [1, 1, 1, 1, 1, 1] },
+    { "pulse_id": "straight_7_4", "meter": "7/4", "subdivision": 1, "weights": [1, 1, 1, 1, 1, 1, 1] },
+    { "pulse_id": "straight_9_8", "meter": "9/8", "subdivision": 1, "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1] },
+    { "pulse_id": "straight_12_8", "meter": "12/8", "subdivision": 1, "weights": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
+    {
+      "pulse_id": "hornpipe_subtle_4_4",
+      "meter": "4/4",
+      "subdivision": 1,
+      "weights": [1.05, 0.95, 1.02, 0.98],
+      "description": "Subtle four-beat hornpipe pulse"
+    }
+  ],
+  "grouping_profiles": [
+    { "grouping_id": "simple_2", "meter": "2/4", "groups": [1, 1] },
+    { "grouping_id": "simple_2_2", "meter": "2/2", "groups": [1, 1] },
+    { "grouping_id": "compound_6", "meter": "6/8", "groups": [3, 3] },
+    { "grouping_id": "compound_9", "meter": "9/8", "groups": [3, 3, 3] },
+    { "grouping_id": "compound_12", "meter": "12/8", "groups": [3, 3, 3, 3] }
+  ],
+  "defaults": {
+    "pointing_id": "written",
+    "pointed_pointing_id": "pointed_default",
+    "pulse_by_meter": {
+      "2/4": "straight_2_4",
+      "2/2": "straight_2_2",
+      "3/4": "straight_3_4",
+      "4/4": "straight_4_4",
+      "5/4": "straight_5_4",
+      "6/8": "straight_6_8",
+      "7/4": "straight_7_4",
+      "9/8": "straight_9_8",
+      "12/8": "straight_12_8"
+    }
+  }
+}

@@ -220,3 +220,13 @@ if (keyboard_check_pressed(ord("N"))) {
 if (keyboard_check_pressed(ord("I"))) {
 	tune_manifest_backfill_all();
 }
+
+// ── DEV: V = dump loaded compiled L0/L1/L2 maps ─────────────────────────────
+if (keyboard_check_pressed(ord("V"))) {
+	var _detail_tune = variable_global_exists("tune") ? global.tune : noone;
+	var _detail_data = (instance_exists(_detail_tune) && variable_instance_exists(_detail_tune, "tune_data"))
+		? variable_instance_get(_detail_tune, "tune_data") : undefined;
+	var _detail_compiled = is_struct(_detail_data) && variable_struct_exists(_detail_data, "compiled")
+		? variable_struct_get(_detail_data, "compiled") : undefined;
+	tune_author_log_compiled_detail(_detail_compiled);
+}

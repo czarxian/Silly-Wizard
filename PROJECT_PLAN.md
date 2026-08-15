@@ -32,6 +32,8 @@ Tunes originate from ABC notation, are edited in Excel, and exported as JSON con
 • 	All parts (pipes, drums, metronome, transitions) merge into a unified event stream
 This ensures deterministic, real‑time playback with no per‑frame computation overhead.
 
+**Tune management UI — pending:** expose manifest-backed tune defaults and editable performance profiles. Users need to accept defaults, select existing pointing/pulse/grouping profiles, duplicate and modify a profile, and assign it while adding a tune or changing how a tune is played.
+
 ## Post-Play Runtime Reporting Implementation
 
 Code-complete, pending live GameMaker validation:

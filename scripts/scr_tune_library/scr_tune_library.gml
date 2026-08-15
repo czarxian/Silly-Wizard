@@ -3156,45 +3156,19 @@ function scr_tune_scan_dir(_folder)
     // Ensure folder path ends with '/'
     if (string_copy(_folder, string_length(_folder), 1) != "/") _folder += "/";
 
-    var search = _folder + "*";
-
-    // Pass 1: files only (attribute 0)
-    var entry = file_find_first(search, 0);
-    if (entry != "") {
-        while (entry != "") {
-            if (string_copy(entry, 1, 1) != ".") {
-                var fp = _folder + entry;
-                if (!directory_exists(fp)) {
-                    var entry_lower = string_lower(entry);
-                    var ext = string_lower(string_copy(entry, string_length(entry) - 4, 5));
-                    var is_score_snippets = string_pos(".score_snippets.json", entry_lower) > 0;
-                    var is_score_groups = string_pos(".score_groups.json", entry_lower) > 0;
-                    var is_score_part = string_pos(".score_part", entry_lower) > 0;
-                    // Pipeline artifacts live beside the tune JSON but are not tunes.
-                    var is_pipeline_artifact = (string_pos(".compiled.json", entry_lower) > 0)
-                        || (string_pos(".meta.json", entry_lower) > 0);
-                    if (ext == ".json"
-                        && entry != "tune_library.json"
-                        && entry != "score_images.json"
-                        && !is_score_snippets
-                        && !is_score_groups
-                        && !is_score_part
-                        && !is_pipeline_artifact) {
-                        show_debug_message("  found tune: " + fp);
-                        array_push(found, fp);
-                    }
-                }
-            }
-            entry = file_find_next();
-        }
-        file_find_close();
+    // A manifest-bearing folder is one tune; do not scan its artifacts as separate tunes.
+    if (tune_manifest_exists(_folder)) {
+        array_push(found, _folder + TUNE_MANIFEST_FILENAME);
+        return found;
     }
 
-    // Pass 2: directories only (fa_directory)
+    var search = _folder + "*";
+
+    // Enumerate folders only. A tune is admitted above only when its manifest exists.
     // Collect all subdir paths BEFORE recursing — file_find_* uses a single global handle
     // and recursion would clobber it, causing the loop to stop after the first entry.
     var subdirs = array_create(0);
-    entry = file_find_first(search, fa_directory);
+    var entry = file_find_first(search, fa_directory);
     if (entry != "") {
         while (entry != "") {
             if (string_copy(entry, 1, 1) != ".") {
@@ -3228,6 +3202,59 @@ function scr_build_tune_library(_root_folder)
 	show_debug_message(string(files));
     for (var i = 0; i < array_length(files); i++) {
         var fp = files[i];
+
+        var fp_lower = string_lower(string(fp));
+        if (string_pos(TUNE_MANIFEST_FILENAME, fp_lower) > 0) {
+            var manifest_dir = string_replace(fp, TUNE_MANIFEST_FILENAME, "");
+            var manifest = tune_manifest_read(manifest_dir);
+            if (!is_struct(manifest)) {
+                show_debug_message("WARNING: Could not read tune manifest: " + string(fp));
+                continue;
+            }
+
+            var manifest_artifacts = variable_struct_exists(manifest, "artifacts")
+                ? variable_struct_get(manifest, "artifacts") : undefined;
+            var compiled_name = is_struct(manifest_artifacts)
+                ? string(scr_tune_struct_get(manifest_artifacts, "compiled", "")) : "";
+            if (compiled_name == "") {
+                show_debug_message("WARNING: Tune manifest has no compiled artifact: " + string(fp));
+                continue;
+            }
+
+            var compiled_path = manifest_dir + compiled_name;
+            var compiled = scr_tune_parse_json_file(compiled_path);
+            if (!is_struct(compiled)) {
+                show_debug_message("WARNING: Could not read compiled tune: " + compiled_path);
+                continue;
+            }
+
+            var manifest_entry = {};
+            variable_struct_set(manifest_entry, "filename", string_replace(compiled_path, _root_folder, ""));
+            variable_struct_set(manifest_entry, "id", string(scr_tune_struct_get(manifest, "tune_uid", "")));
+            variable_struct_set(manifest_entry, "title", scr_tune_struct_get(manifest, "title", ""));
+            variable_struct_set(manifest_entry, "composer", scr_tune_struct_get(manifest, "composer", ""));
+            variable_struct_set(manifest_entry, "rhythm", scr_tune_struct_get(manifest, "rhythm_type", ""));
+            variable_struct_set(manifest_entry, "tempo_default", scr_tune_struct_get(manifest, "tempo_default", "120"));
+            variable_struct_set(manifest_entry, "meter", scr_tune_struct_get(manifest, "meter", "4/4"));
+            variable_struct_set(manifest_entry, "manifest_backed", true);
+
+            var manifest_channels = [];
+            var compiled_events = scr_tune_struct_get(compiled, "events", undefined);
+            if (is_struct(compiled_events)) {
+                var compiled_voices = variable_struct_get_names(compiled_events);
+                for (var cv = 0; cv < array_length(compiled_voices); cv++) {
+                    var channel = scr_tune_picker_voice_to_part_channel(compiled_voices[cv]);
+                    if (channel >= 2 && channel <= 5) array_push(manifest_channels, channel);
+                }
+            }
+            if (array_length(manifest_channels) <= 0) manifest_channels = [2];
+            array_sort(manifest_channels, function(a, b) { return real(a) - real(b); });
+            variable_struct_set(manifest_entry, "player_part_channels", manifest_channels);
+            variable_struct_set(manifest_entry, "player_part_count", array_length(manifest_channels));
+
+            array_push(tunes, manifest_entry);
+            continue;
+        }
 
         var f = file_text_open_read(fp);
         if (f < 0) {

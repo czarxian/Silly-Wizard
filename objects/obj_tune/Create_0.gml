@@ -13,6 +13,7 @@
 	// Store all data in a struct for better persistence across room transitions
 	tune_data = {
 		tune_metadata: {},
+		compiled: undefined,
 		events: [],
 		performance: {},
 		event_count: 0,

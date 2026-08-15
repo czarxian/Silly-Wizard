@@ -42,6 +42,54 @@ function scr_tune_load_json(_filename) {
     return true;
 }
 
+/// @function scr_tune_load_compiled_json(_filename)
+/// @description Load and validate a compiled pipeline artifact into obj_tune without treating it as legacy event JSON.
+/// @param {string} _filename  Path to a compiled tune artifact
+/// @returns {bool}  true when the compiled tune is loaded, false on read or validation failure
+/// @reads   compiled tune artifact
+/// @writes  global.tune.tune_data.compiled, global.tune.tune_data.filename, global.tune.tune_data.is_loaded
+/// @objects global.tune (write)
+/// @callers scr_button_try_load_tune_candidate
+function scr_tune_load_compiled_json(_filename) {
+    show_debug_message("=== Loading compiled tune: " + string(_filename) + " ===");
+
+    var _compiled = scr_tune_parse_json_file(_filename);
+    if (!is_struct(_compiled)) return false;
+
+    var _validation = tune_compiled_validate(_compiled);
+    if (tune_diagnostics_has_errors(_validation)) {
+        tune_diagnostics_log(_validation, "[COMPILED]");
+        return false;
+    }
+
+    if (!instance_exists(global.tune)) {
+        show_debug_message("ERROR: obj_tune instance does not exist!");
+        return false;
+    }
+
+    var _tune_data = variable_instance_get(global.tune, "tune_data");
+    var _manifest_dir = scr_tune_library_get_parent_dir(_filename);
+    var _manifest = tune_manifest_read(_manifest_dir);
+    var _authored = is_struct(_manifest) ? _manifest[$ "authored"] : undefined;
+    if (!is_struct(_authored)) _authored = {};
+    variable_struct_set(_tune_data, "compiled", _compiled);
+    variable_struct_set(_tune_data, "authored", _authored);
+    variable_struct_set(_tune_data, "tune_metadata", {
+        title: string(_compiled[$ "title"] ?? ""),
+        composer: string(_compiled[$ "composer"] ?? ""),
+        rhythm: string(_compiled[$ "rhythm_type"] ?? ""),
+        meter: string(_compiled[$ "meter"] ?? ""),
+        tempo_default: real(_compiled[$ "tempo_default"] ?? 120)
+    });
+    variable_struct_set(_tune_data, "events", []);
+    variable_struct_set(_tune_data, "event_count", 0);
+    variable_struct_set(_tune_data, "filename", _filename);
+    variable_struct_set(_tune_data, "is_loaded", true);
+
+    show_debug_message("Compiled tune loaded: " + string(_compiled[$ "title"] ?? ""));
+    return true;
+}
+
 /// @function scr_tune_parse_json_file(_filename)
 /// @description Read a JSON file from disk and return the parsed struct.
 /// @param {string} _filename  Path to JSON file
