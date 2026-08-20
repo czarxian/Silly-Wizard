@@ -638,7 +638,8 @@ function run_build_stage_resolve_config(_ctx) {
 		meter: _meter,
 		unit_ms: (60000 / _quarter_bpm) * _unit_multiplier,
 		base_midi: real(_config[$ "base_midi"] ?? 55),
-		default_channel: real(_config[$ "default_channel"] ?? 2)
+		default_channel: real(_config[$ "default_channel"] ?? 2),
+		gracenote_override_ms: real(_config[$ "gracenote_override_ms"] ?? 0)
 	};
 	var _registry = tune_rhythm_registry_load();
 	var _rhythm = tune_rhythm_resolve(_registry, _meter, _config);
@@ -723,13 +724,13 @@ function run_build_stage_project_to_ms(_ctx) {
 			time: _start_ms, type: "note_on", note: _note, velocity: 80,
 			channel: _channel, part: _channel - 1, measure: _measure, beat: _beat,
 			beat_fraction: _division, is_embellishment: false, event_id: _event_id,
-			event_uid: _event_uid
+			event_uid: _event_uid, voice: _voice, attachments: _event[$ "attachments"]
 		});
 		array_push(_out, {
 			time: _start_ms + _duration_ms, type: "note_off", note: _note, velocity: 0,
 			channel: _channel, part: _channel - 1, measure: _measure, beat: _beat,
 			beat_fraction: _division, is_embellishment: false, event_id: _event_id,
-			event_uid: _event_uid
+			event_uid: _event_uid, voice: _voice
 		});
 	}
 	_ctx[$ "projected"] = _out;
@@ -746,6 +747,7 @@ function run_build_voice_channel(_voice, _default_channel) {
 	if (_name == "pipes_harmony1") return 3;
 	if (_name == "pipes_harmony2") return 4;
 	if (_name == "pipes_harmony3") return 5;
+	if (_name == "snare" || _name == "drums") return 9;
 	return _default_channel;
 }
 
@@ -757,16 +759,130 @@ function run_build_stage_apply_timing_map(_ctx) { }
 
 /// @function run_build_stage_resolve_embellishments(_ctx)
 /// @description Stage 6: expand attachments against final host ms and declared anchor.
-///              Ornament components do not exist before this stage. Not yet implemented.
+///              Numeric anchors and lead placement are supported; trail awaits a test tune.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_resolve_embellishments(_ctx) { }
+function run_build_stage_resolve_embellishments(_ctx) {
+	var _events = _ctx[$ "projected"];
+	var _resolved = _ctx[$ "resolved"];
+	var _extra = [];
+	var _previous_off_by_voice = {};
+	var _component_serial = array_length(_events) + 1;
+	var _expanded_count = 0;
+	var _missing_count = 0;
+	var _trail_count = 0;
+
+	for (var _i = 0; _i + 1 < array_length(_events); _i += 2) {
+		var _host_on = _events[_i];
+		var _host_off = _events[_i + 1];
+		if (string(_host_on[$ "type"] ?? "") != "note_on") continue;
+		var _voice = string(_host_on[$ "voice"] ?? "");
+		var _attachments = _host_on[$ "attachments"];
+		if (!is_array(_attachments) || array_length(_attachments) == 0 || !tune_voice_is_bagpipe(_voice)) {
+			variable_struct_set(_previous_off_by_voice, _voice, _host_off);
+			continue;
+		}
+
+		for (var _a = 0; _a < array_length(_attachments); _a++) {
+			var _attachment = _attachments[_a];
+			var _pattern = is_struct(_attachment) ? string(_attachment[$ "pattern"] ?? "") : "";
+			var _definition = find_embellishment(global.emb_library, _pattern, string(_ctx[$ "composed"][_i div 2][$ "event"][$ "letter"]), 0, "");
+			if (!is_struct(_definition)) {
+				_missing_count += 1;
+				show_debug_message("[EMB] ERROR missing definition pattern=" + _pattern
+					+ " target=" + string(_ctx[$ "composed"][_i div 2][$ "event"][$ "letter"])
+					+ " voice=" + _voice + " host=" + string(_host_on[$ "event_uid"]));
+				continue;
+			}
+
+			var _notes_text = string(_definition[$ "notes"] ?? "");
+			var _component_count = array_length(string_split(_notes_text, ","));
+			var _legacy_anchor = floor(real(_definition[$ "anchor_index"] ?? 1));
+			var _anchor = (_legacy_anchor > _component_count) ? TUNE_ANCHOR_LEAD : max(1, _legacy_anchor);
+			if (is_struct(_attachment) && variable_struct_exists(_attachment, "alt_anchor")) {
+				_anchor = _attachment[$ "alt_anchor"];
+			}
+			if (is_string(_anchor) && string_lower(string(_anchor)) == TUNE_ANCHOR_TRAIL) {
+				_trail_count += 1;
+				show_debug_message("[EMB] ERROR trail anchor deferred pattern=" + _pattern
+					+ " voice=" + _voice + " host=" + string(_host_on[$ "event_uid"]));
+				continue;
+			}
+
+			var _host_start = real(_host_on[$ "time"]);
+			var _host_end = real(_host_off[$ "time"]);
+			var _host_duration = max(1, _host_end - _host_start);
+			var _previous_off = variable_struct_exists(_previous_off_by_voice, _voice)
+				? variable_struct_get(_previous_off_by_voice, _voice) : undefined;
+			var _previous_duration = _resolved[$ "unit_ms"];
+			if (is_struct(_previous_off)) _previous_duration = max(1, _host_start - real(_previous_off[$ "time"]) + _resolved[$ "unit_ms"]);
+			var _components = embellishment_to_notes(_definition, _host_duration, _previous_duration,
+				_resolved[$ "bpm"], _resolved[$ "gracenote_override_ms"]);
+
+			var _anchor_index = is_string(_anchor) ? array_length(_components) : clamp(floor(real(_anchor)) - 1, 0, max(0, array_length(_components) - 1));
+			var _before_ms = 0;
+			var _after_ms = 0;
+			for (var _c = 0; _c < array_length(_components); _c++) {
+				if (_c < _anchor_index) _before_ms += real(_components[_c][$ "duration_ms"]);
+				else _after_ms += real(_components[_c][$ "duration_ms"]);
+			}
+			var _component_time = _host_start - _before_ms;
+			if (_before_ms > 0 && is_struct(_previous_off)) {
+				_previous_off[$ "time"] = min(real(_previous_off[$ "time"]), _component_time);
+			}
+			_host_on[$ "time"] = _host_start + _after_ms;
+
+			for (var _c = 0; _c < array_length(_components); _c++) {
+				var _component = _components[_c];
+				var _duration = max(1, real(_component[$ "duration_ms"]));
+				var _component_uid = tune_uid_component(string(_host_on[$ "event_uid"]), _anchor, _c + 1);
+				var _component_id = _component_serial;
+				_component_serial += 1;
+				var _component_note = tune_note_letter_to_midi(_component[$ "note"], _resolved[$ "base_midi"]);
+				array_push(_extra, {
+					time: _component_time, type: "note_on", note: _component_note, velocity: 70,
+					channel: _host_on[$ "channel"], part: _host_on[$ "part"], measure: _host_on[$ "measure"],
+					beat: _host_on[$ "beat"], beat_fraction: _host_on[$ "beat_fraction"],
+					is_embellishment: true, event_id: _component_id, event_uid: _component_uid,
+					host_event_uid: _host_on[$ "event_uid"], voice: _voice
+				});
+				array_push(_extra, {
+					time: _component_time + _duration, type: "note_off", note: _component_note, velocity: 0,
+					channel: _host_on[$ "channel"], part: _host_on[$ "part"], measure: _host_on[$ "measure"],
+					beat: _host_on[$ "beat"], beat_fraction: _host_on[$ "beat_fraction"],
+					is_embellishment: true, event_id: _component_id, event_uid: _component_uid,
+					host_event_uid: _host_on[$ "event_uid"], voice: _voice
+				});
+				_component_time += _duration;
+			}
+			_expanded_count += 1;
+		}
+		variable_struct_set(_previous_off_by_voice, _voice, _host_off);
+	}
+
+	if (_missing_count > 0 || _trail_count > 0) {
+		_ctx[$ "projected"] = [];
+	} else {
+		for (var _x = 0; _x < array_length(_extra); _x++) array_push(_events, _extra[_x]);
+		_ctx[$ "projected"] = _events;
+	}
+	show_debug_message("[EMB] expanded=" + string(_expanded_count)
+		+ " missing=" + string(_missing_count) + " trail_deferred=" + string(_trail_count));
+}
 
 /// @function run_build_stage_emit_run_events(_ctx)
 /// @description Stage 7: assign MIDI channels and emit the ordered run event list. Not yet implemented.
 /// @param {struct} _ctx  Run context
 /// @returns {undefined}
-function run_build_stage_emit_run_events(_ctx) { }
+function run_build_stage_emit_run_events(_ctx) {
+	array_sort(_ctx[$ "projected"], function(a, b) {
+		var _time_diff = real(a[$ "time"] ?? 0) - real(b[$ "time"] ?? 0);
+		if (_time_diff != 0) return _time_diff;
+		if (string(a[$ "type"] ?? "") == "note_off" && string(b[$ "type"] ?? "") != "note_off") return -1;
+		if (string(b[$ "type"] ?? "") == "note_off" && string(a[$ "type"] ?? "") != "note_off") return 1;
+		return real(a[$ "event_id"] ?? 0) - real(b[$ "event_id"] ?? 0);
+	});
+}
 
 /// @function run_build(_compiled, _run_config)
 /// @description Build the first playable run projection from a compiled tune. Rhythm maps and

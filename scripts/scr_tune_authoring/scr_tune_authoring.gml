@@ -172,6 +172,91 @@ function tune_author_log_compiled_detail(_compiled) {
 	}
 }
 
+/// @function tune_author_validate_dependencies(_compiled, _dir, _diag)
+/// @description Validate external rhythm and embellishment dependencies before writing tune artifacts.
+/// @param {struct} _compiled  Compiled tune envelope
+/// @param {string} _dir  Intended tune folder
+/// @param {struct} _diag  Compile diagnostics collector
+/// @returns {bool} True when no blocking dependency errors exist
+/// @reads global.emb_library, rhythm registry, existing tune manifest
+/// @writes diagnostics collector
+/// @objects none
+/// @callers tune_author_create_from_abc
+function tune_author_validate_dependencies(_compiled, _dir, _diag) {
+	var _events = _compiled[$ "events"];
+	var _missing = {};
+	if (is_struct(_events)) {
+		var _voices = variable_struct_get_names(_events);
+		for (var _v = 0; _v < array_length(_voices); _v++) {
+			var _voice = _voices[_v];
+			var _list = variable_struct_get(_events, _voice);
+			for (var _e = 0; _e < array_length(_list); _e++) {
+				var _event = _list[_e];
+				var _attachments = _event[$ "attachments"];
+				if (!is_array(_attachments)) continue;
+				for (var _a = 0; _a < array_length(_attachments); _a++) {
+					var _attachment = _attachments[_a];
+					var _pattern = is_struct(_attachment) ? string(_attachment[$ "pattern"] ?? "") : "";
+					var _target = string(_event[$ "letter"] ?? "");
+					if (is_struct(find_embellishment(global.emb_library, _pattern, _target, 0, ""))) continue;
+					var _key = _voice + "|" + _pattern + "|" + _target;
+					if (!variable_struct_exists(_missing, _key)) {
+						variable_struct_set(_missing, _key, {
+							voice: _voice, pattern: _pattern, target: _target,
+							count: 0, event_uid: string(_event[$ "event_uid"] ?? "")
+						});
+					}
+					var _row = variable_struct_get(_missing, _key);
+					_row[$ "count"] += 1;
+				}
+			}
+		}
+	}
+
+	var _missing_keys = variable_struct_get_names(_missing);
+	for (var _i = 0; _i < array_length(_missing_keys); _i++) {
+		var _row = variable_struct_get(_missing, _missing_keys[_i]);
+		tune_diagnostics_add(_diag, TUNE_DIAG_ERROR, "emb_definition_missing",
+			"No embellishment definition for pattern '" + string(_row[$ "pattern"])
+			+ "', target '" + string(_row[$ "target"])
+			+ "', voice '" + string(_row[$ "voice"])
+			+ "' (" + string(_row[$ "count"]) + " occurrence(s)).",
+			{ event_uid: _row[$ "event_uid"] });
+	}
+
+	var _registry = tune_rhythm_registry_load();
+	var _meter = string(_compiled[$ "meter"] ?? "");
+	var _meter_norm = timing_normalize_time_sig(_meter);
+	var _existing = tune_manifest_read(_dir);
+	var _authored = is_struct(_existing) ? _existing[$ "authored"] : undefined;
+	if (!is_struct(_authored)) _authored = {};
+
+	var _pointing_id = string(_authored[$ "pointing_id"] ?? "written");
+	if (!is_struct(tune_rhythm_profile_find(_registry[$ "pointing_profiles"], _pointing_id, "pointing_id"))) {
+		tune_diagnostics_add(_diag, TUNE_DIAG_ERROR, "pointing_profile_missing",
+			"Selected pointing profile '" + _pointing_id + "' is not defined.");
+	}
+
+	var _pulse_id = string(_authored[$ "pulse_id"] ?? _authored[$ "pulse_profile_id"] ?? "");
+	if (_pulse_id != "") {
+		var _pulse = tune_pulse_normalize(
+			tune_rhythm_profile_find(_registry[$ "pulse_profiles"], _pulse_id, "pulse_id"), _meter_norm);
+		if (!is_struct(_pulse)) {
+			tune_diagnostics_add(_diag, TUNE_DIAG_ERROR, "pulse_profile_incompatible",
+				"Selected pulse profile '" + _pulse_id + "' is missing or incompatible with meter " + _meter_norm + ".");
+		}
+	} else {
+		var _defaults = _registry[$ "defaults"];
+		var _pulse_defaults = is_struct(_defaults) ? _defaults[$ "pulse_by_meter"] : undefined;
+		if (!is_struct(_pulse_defaults) || !variable_struct_exists(_pulse_defaults, _meter_norm)) {
+			tune_diagnostics_add(_diag, TUNE_DIAG_WARNING, "meter_pulse_default_missing",
+				"No pulse default is defined for meter " + _meter_norm + "; playback will be straight.");
+		}
+	}
+
+	return !tune_diagnostics_has_errors(_diag);
+}
+
 /// @function tune_author_create_from_abc(_abc_text, _title_override)
 /// @description Create a tune from ABC: make the folder, write the source, compile, write the
 ///              compiled cache and the tune manifest, and report. Does not touch tune_library.json.
@@ -201,28 +286,32 @@ function tune_author_create_from_abc(_abc_text, _title_override = "") {
 		return _result;
 	}
 
-	var _root = scr_data_paths_get_category_root("tunes");
-	var _dir = _root + _folder + "/";
-	if (!directory_exists(_dir)) directory_create(_dir);
-	_result.folder = _dir;
-
-	tune_author_write_text(_dir + _folder + ".abc", _abc_text);
-
 	var _compile = tune_compile(_abc_text, {}, _folder);
 	var _compiled = _compile[$ "compiled"];
 	var _diag = _compile[$ "diagnostics"];
+	var _root = scr_data_paths_get_category_root("tunes");
+	var _dir = _root + _folder + "/";
 
 	_result.compiled = _compiled;
 	_result.diagnostics = _diag;
-	_result.ok = _compile[$ "ok"];
+	_result.folder = _dir;
+	_result.ok = _compile[$ "ok"] && tune_author_validate_dependencies(_compiled, _dir, _diag);
+
+	tune_author_log_summary(_compiled);
+	tune_diagnostics_log(_diag, "[TUNE] " + _folder);
+	if (!_result.ok) {
+		show_debug_message("[TUNE] REJECTED " + _folder + ": fix errors and press N again; no tune artifacts were written.");
+		return _result;
+	}
+
+	if (!directory_exists(_dir)) directory_create(_dir);
+	tune_author_write_text(_dir + _folder + ".abc", _abc_text);
 
 	tune_author_write_text(_dir + _folder + ".compiled.json", json_stringify(_compiled));
 	tune_manifest_write(_dir, tune_manifest_build(_dir, _folder, _compiled));
 
 	_result.index_entry = tune_author_index_entry(_compiled, _diag);
 
-	tune_author_log_summary(_compiled);
-	tune_diagnostics_log(_diag, "[TUNE] " + _folder);
 	show_debug_message("[TUNE] wrote " + _dir + " (ok=" + string(_result.ok) + ")");
 
 	return _result;

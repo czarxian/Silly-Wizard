@@ -35,6 +35,7 @@
     {"$GMIncludedFile":"","%Name":"tune_overrides.json","CopyToMask":-1,"filePath":"datafiles/config/players/player_1","name":"tune_overrides.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"rhythm_rules.json","CopyToMask":-1,"filePath":"datafiles/config","name":"rhythm_rules.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"runtime_paths.json","CopyToMask":-1,"filePath":"datafiles/config","name":"runtime_paths.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
+    {"$GMIncludedFile":"","%Name":"embellishment_additions.json","CopyToMask":-1,"filePath":"datafiles","name":"embellishment_additions.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"embellishments.json","CopyToMask":-1,"filePath":"datafiles","name":"embellishments.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"Runtime data folder.lnk","CopyToMask":-1,"filePath":"datafiles","name":"Runtime data folder.lnk","resourceType":"GMIncludedFile","resourceVersion":"2.0",},
     {"$GMIncludedFile":"","%Name":"runtime_paths.json","CopyToMask":-1,"filePath":"datafiles","name":"runtime_paths.json","resourceType":"GMIncludedFile","resourceVersion":"2.0",},

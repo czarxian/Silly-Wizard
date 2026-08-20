@@ -219,6 +219,8 @@ Constraints:
    bind an ornament by blindly scanning forward for the next note.
 4. **Rules are resolvable to a chain and the chain is recorded.** Every applied rule contributes
    to the run's provenance (§8), so a stored score can be interpreted later.
+5. **Unknown embellishments fail closed.** A missing pattern + target + voice definition blocks
+  run construction; partial playback without a written ornament is forbidden.
 
 ### 4.1 Rhythm profile composition
 

@@ -34,6 +34,19 @@ This ensures deterministic, real‑time playback with no per‑frame computation
 
 **Tune management UI — pending:** expose manifest-backed tune defaults and editable performance profiles. Users need to accept defaults, select existing pointing/pulse/grouping profiles, duplicate and modify a profile, and assign it while adding a tune or changing how a tune is played.
 
+### Tune Pipeline Checkpoint (2026-08-19)
+
+**Current working state:** manifest-backed tunes compile ABC into L0 structure, L1 beat grid, and per-voice L2 written events; load through the compiled-tune path; and play through `run_build` with BPM projection, meter-safe pulse profiles, written/default pointing, and common numeric/lead ornament expansion. The **V** developer inspector dumps L0/L1/L2 for review. Tune import (**N**) validates dependencies before writing artifacts.
+
+**Paused future feature — embellishment library replacement/UI:** runtime continues to use the established `datafiles/embellishments.json` catalog plus the small, validated `datafiles/embellishment_additions.json` patch catalog. `datafiles/source/Embellishment Library.csv` and its backup are reference material only and are not loaded at runtime. The broader canonical catalog, preceding-note context, variants, trailing/piobaireachd anchors, drum definitions, and user-facing library editor are deferred.
+
+**Next implementation steps:**
+1. Validate current compiled single-tune playback across melody and harmony voices, including count-in, pointing, pulse fallback, common ornaments, loops, and post-play review.
+2. Migrate set loading/preprocessing from legacy tune JSON assumptions to manifest-backed compiled tunes and `run_build`, preserving transition/cut behavior.
+3. Persist/rebuild the derived tune-library index from manifests and remove remaining legacy tune-loader fallbacks once set playback reaches parity.
+4. Add tune-management UI for authored `pointing_id`, `pulse_id`, `grouping_id`, and embellishment variant selection.
+5. Resume embellishment-library replacement only after its CSV schema is stable; validate pattern + target + preceding-note + voice + variant resolution and prove coverage parity before runtime cutover.
+
 ## Post-Play Runtime Reporting Implementation
 
 Code-complete, pending live GameMaker validation:
@@ -2334,10 +2347,21 @@ Ordered to reduce integration risk and unblock downstream features.
   - cycle interaction no longer crashes in stress testing.
 
 6) Embellishment system scale-up (bulk, data-driven)
-- Scope: move from one-by-one additions to grouped/data-driven embellishment definitions and expansion behavior.
+- Status: **paused/deferred as of 2026-08-19.** Common ornament expansion exists in `run_build`, but catalog replacement and editing UI are not active work. Runtime uses `datafiles/embellishments.json` plus targeted validated additions.
+- Scope when resumed: move from one-by-one additions to a canonical, grouped/data-driven catalog. Treat `datafiles/source/Embellishment Library.csv` as reference material only until pattern, target, preceding-note context, voice, variant/default, timing, and anchor fields validate cleanly.
 - Why sixth: best done after timing and metronome baselines are stabilized to avoid confounded debugging.
+- Restart checklist:
+  - finalize one-row schema and validation rules,
+  - resolve duplicate lookup keys through aliases or explicit variants/defaults,
+  - add preceding-note context for taps and similar movements,
+  - compare all current-tune attachments against both catalogs,
+  - generate canonical JSON without changing the reference CSV,
+  - switch runtime only after playback parity and import-gate coverage pass.
 - Done when:
+  - one authoritative, user-editable library format (JSON or CSV) and validation contract are chosen,
+  - all current definitions and every sufficiently defined new definition migrate without changing existing tune playback,
   - embellishment families can be added/adjusted through shared rules,
+  - an in-game library UI supports add, duplicate, revise, and delete operations,
   - preprocess expansion remains deterministic across supported tune types,
   - notebeam/analysis views stay aligned with expanded events.
 

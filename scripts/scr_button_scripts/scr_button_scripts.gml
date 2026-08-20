@@ -3627,6 +3627,7 @@
 				bpm: bpm_override,
 				base_midi: 55,
 				default_channel: 2,
+				gracenote_override_ms: real(scr_button_struct_get(effective, "gracenote_override_ms", 0)),
 				pointing_id: string(scr_button_struct_get(_authored, "pointing_id", "written")),
 				pulse_id: string(scr_button_struct_get(_authored, "pulse_id",
 					scr_button_struct_get(_authored, "pulse_profile_id", ""))),

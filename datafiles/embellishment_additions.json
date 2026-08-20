@@ -1,0 +1,12 @@
+[
+  {
+    "emb_id": 114,
+    "emb_name": "Pele on B",
+    "pattern": "gBeBG",
+    "target_note": "B",
+    "notes": "g,B,e,B,G",
+    "timing": "1,1,1,1,1",
+    "anchor_index": 1,
+    "category": "movement"
+  }
+]

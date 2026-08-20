@@ -27,6 +27,21 @@ function load_embellishment_library(filepath) {
         
         // Parse JSON - returns array of structs
         var emb_library = json_parse(json_string);
+
+        var additions_path = "embellishment_additions.json";
+        if (file_exists(additions_path)) {
+            var additions_buffer = buffer_load(additions_path);
+            var additions_string = buffer_read(additions_buffer, buffer_string);
+            buffer_delete(additions_buffer);
+            var additions = json_parse(additions_string);
+            if (is_array(additions)) {
+                for (var i = 0; i < array_length(additions); i++) {
+                    array_push(emb_library, additions[i]);
+                }
+                show_debug_message("  → Merged " + string(array_length(additions)) + " targeted embellishment addition(s)");
+            }
+        }
+
         show_debug_message("  → Parsed " + string(array_length(emb_library)) + " embellishments");
         
         return emb_library;
