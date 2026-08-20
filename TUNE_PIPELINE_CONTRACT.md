@@ -540,3 +540,7 @@ The questions raised on 2026-08-14 are settled as follows and folded into the se
   carried by the library's `anchor` field. If a tune ever needs two different anchors for the same
   pattern, that is what the per-event `alt_anchor` override is for; if it becomes common, the ABC
   will need an extension.
+
+
+  end.
+  
